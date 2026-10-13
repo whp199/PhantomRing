@@ -1,0 +1,104 @@
+fob_rewards_156.ct:addrStruct_aob 0 
+fob_rewards_156.ct:emblemunlock_aob 0 
+invisible_script_582.ct:nd_aob 0 
+metal_gear_solid_5_phantom_pain10004_344.ct:TODAOB 0 
+metal_gear_solid_5_phantom_pain10004_344.ct:nbs_aob1 0 
+metal_gear_solid_5_phantom_pain10004_344.ct:nra_aob1 0 
+metal_gear_solid_5_phantom_pain10004_344.ct:nua_aob1 1 .xtext:0x140ee9752
+metal_gear_solid_5_phantom_pain10004_344.ct:ns_aob1 1 .xtext:0x140feacbe
+metal_gear_solid_5_phantom_pain10004_344.ct:nr_aob1 1 .xtext:0x140feb08b
+metal_gear_solid_5_phantom_pain10004_344.ct:srk_aob1 2 .xtext:0x140541d38, .xtext:0x140f72c0e
+metal_gear_solid_5_phantom_pain10004_344.ct:nlh_aob1 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:MoneyReadAOB 1 .xtext:0x140f71da3
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:MoneyReadAOB2 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:num_aob1 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:nur_aob1 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:RewardAOB 1 .xtext:0x140f72044
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:SortaUnlockAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:InstaResearchAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:DeployAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:GunSmithAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:GunPartsAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:SMemberAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:FormerStaffAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:CassDelAOB 1 .xtext:0x14098a119
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TapeAOB 1 .xtext:0x140ef5eca
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TEmblemAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:SEmblemAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:WaitStaffAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:WeatherAOB 1 .xtext:0x1407beebf
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TimeScaleAOB 1 .xtext:0x140081718
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:st_aob1 >3 .xtext:0x1408bf160, .xtext:0x141d382db, .xtext:0x141d3864e
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:INJECT 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:Sleep 1 .xtext:0x141348fda
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:SprintAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:AnimalGrabAOB 1 .xtext:0x140f70b7b
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:SkullHitAOB 1 .xtext:0x14187b349
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:MBDevAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:srt_aob1 1 .xtext:0x1405429fc
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:srh_aob1 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:BPHorseAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:BPDogAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:BPQuietAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:dwnra_aob1 1 .xtext:0x14172aea9
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:dwnbs_aob1 1 .xtext:0x1417241dc
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:DWNoUseAmmoAOB1 1 .xtext:0x1417249b6
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:DWNoUseAmmoAOB2 1 .xtext:0x141724913
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:DWNoUseAmmoAOB3 1 .xtext:0x1417271fb
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:DWNoUseAmmoAOB4 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:BatteryAOB 1 .xtext:0x1411af671
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:DruggyAOB 1 .xtext:0x141284959
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:ns_aob2 1 .xtext:0x140fed532
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:_RapidFire 1 .xtext:0x14112003f
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:nd_aob 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:STEALTH 1 .xtext:0x1414e7de2
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:DemonStatAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:PlyPosAOB 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:WaypointAOB 1 .xtext:0x140936ce3
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TT77Cannon_Cooldown 1 .xtext:0x140bd658d
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TankCannonClipAmmo 1 .xtext:0x140bd6cf5
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TankMGAmmo 1 .xtext:0x140bd6974
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TankMG_NoOverheat 1 .xtext:0x140be1a29
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:Zhuk_RSZO_rockets 1 .xtext:0x140bdf138
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:Zhukrockets_cooldown 1 .xtext:0x140bdffc3
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:TankAmmoResetNOP 0 
+metal_gear_solid_v_the_phantom_pain_1.0.4.0__2015-10-07__fixed_resource___instant_fulton-resources_pickup_194.ct:Instant_Fulton_Pickup 0 
+mgsvtpp_113.ct:MoneyReadAOB  0 
+mgsvtpp_113.ct:RewardAOB     0 
+mgsvtpp_113.ct:GunSmithAOB   0 
+mgsvtpp_113.ct:SMemberAOB    0 
+mgsvtpp_113.ct:srh_aob1      1 .xtext:0x1411f8592
+mgsvtpp_115.ct:dwnua_aob1    2 .xtext:0x1417249b6, .xtext:0x141759580
+mgsvtpp_115.ct:dwnua_aob2    2 .xtext:0x141724913, .xdata:0x148529432
+mgsvtpp_115.ct:dwnua_aob3    1 .xtext:0x1417271f7
+mgsvtpp_115.ct:dwnua_aob4    1 .xtext:0x14172ae57
+mgsvtpp_115.ct:BPDogAOB      0 
+mgsvtpp_123.ct:SprintAOB     0 
+mgsvtpp_185.ct:InstaResearchAOB 0 
+mgsvtpp_185.ct:FormerStaffAOB 0 
+mgsvtpp_185.ct:srh_aob1      0 
+mgsvtpp_185.ct:NoSleep       1 .xtext:0x1411f8b1a
+mgsvtpp_185.ct:num_aob1      0 
+mgsvtpp_185.ct:nur_aob1      0 
+mgsvtpp_185.ct:SMemberAOB    1 .xtext:0x1416df248
+mgsvtpp_185.ct:GunPartsAOB   0 
+mgsvtpp_185.ct:GunSmithAOB   1 .xtext:0x14046e9eb
+mgsvtpp_185.ct:TODAOB        0 
+mgsvtpp_185.ct:upgradebase   1 .xtext:0x141635117
+mgsvtpp_185.ct:development   1 .xtext:0x140f6f80e
+mgsvtpp_185.ct:nlh_aob1      0 
+mgsvtpp_185.ct:nbs_aob1      1 .xtext:0x140ee9b00
+mgsvtpp_185.ct:BPDogAOB      0 
+mgsvtpp_185.ct:sleepyAOB     1 .xtext:0x1414aae96
+mgsvtpp_187.ct:STEALTH       1 .xtext:0x1414e7de5
+mgsvtpp_204.ct:SMemberAOB    0 
+mgsvtpp_204.ct:BPDogAOB      0 
+mgsvtpp_246.ct:SprintAOB     0 
+mgsvtpp_254.ct:FormerStaffAOB 0 
+mgsvtpp_254.ct:colours       1 .xtext:0x14095dce0
+mgsvtpp_254.ct:adadme        0 
+mgsvtpp_254.ct:st_aob1       1 .xtext:0x1408bf160
+mgsvtpp_254.ct:dataflow      0 
+mgsvtpp_254.ct:SprintAOB     >3 .xtext:0x1400c75d2, .xtext:0x1401b87b0, .xtext:0x1401b9551
+PlyPos_msvc                  1 .xtext:0x140ff556b
+PlyPos_short                 >3 .xtext:0x140747951, .xtext:0x140afab2f, .xtext:0x140ba8923

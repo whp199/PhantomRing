@@ -1,0 +1,2 @@
+host-side mnt_ns=mnt:[4026531832] pid=110965 ppid=44757
+-rwxr-xr-x 1 root root 2734352 Sep 30 20:34 /usr/bin/gamescope

@@ -1,0 +1,10 @@
+pid=97100 ppid=96961 mnt_ns=mnt:[4026533789]
+os-release: PRETTY_NAME="Steam Runtime 4"
+steam.pipe:
+prw------- 1 user user 0 Oct 11 21:56 ~/.steam/steam.pipe
+from-host bin:
+pressure-vessel-unruntime pressure-vessel-wrap pv-verify srt-logger steam-runtime-check-requirements steam-runtime-launch-client steam-runtime-launcher-interface-0 steam-runtime-launcher-service steam-runtime-launch-options steam-runtime-steam-remote steam-runtime-supervisor steam-runtime-system-info 
+which: steam=/usr/bin/steam xdg-open=/usr/bin/xdg-open steam-runtime-steam-remote=/usr/bin/steam-runtime-steam-remote steam-runtime-launch-client=/usr/bin/steam-runtime-launch-client
+xdg-open is: lrwxrwxrwx 1 user user 21 Oct 11 22:21 /usr/bin/xdg-open -> steam-runtime-urlopen
+env: SteamAppId=0 STEAM_COMPAT_DATA_PATH=<scratch>/ipc/proton/compatA WINEPREFIX=<scratch>/ipc/proton/compatA/pfx/ DBUS_SESSION_BUS_ADDRESS=unix:path=/run/pressure-vessel/bus
+env SRT/PV: PRESSURE_VESSEL_ARCHITECTURES=x86_64-linux-gnu:i386-linux-gnu PRESSURE_VESSEL_COPY_RUNTIME=1 PRESSURE_VESSEL_RUNTIME_BASE=<steam-library>/common/SteamLinuxRuntime_4 PRESSURE_VESSEL_RUNTIME=steamrt4_platform_4.0.20260805.254769 PRESSURE_VESSEL_VARIABLE_DIR=<scratch>/ipc/proton/pvvar 

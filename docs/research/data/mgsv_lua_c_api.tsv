@@ -1,0 +1,116 @@
+rva	va	symbol	confidence	evidence
+0x1a10ca0	0x141a10ca0	lua_atpanic	VERIFIED	luaL_newstate lua_atpanic(L, panic=0x1a18200); table slot 134
+0x1a10cc0	0x141a10cc0	lua_call	VERIFIED	luaB_dofile lua_call(L,0,-1); table slot 135
+0x1a10d10	0x141a10d10	lua_checkstack	VERIFIED	compares n against LUAI_MAXCSTACK 8000 (0x1f40), grows stack; table slot 136
+0x1a10db0	0x141a10db0	lua_concat	VERIFIED	luaB_error concat(L,2); table slot 137
+0x1a10e40	0x141a10e40	lua_cpcall	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 138
+0x1a10e80	0x141a10e80	lua_createtable	VERIFIED	base_open createtable(0,1); table slots 139,166(newtable)
+0x1a10ef0	0x141a10ef0	lua_dump	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 140
+0x1a10f40	0x141a10f40	lua_equal	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 141
+0x1a10fa0	0x141a10fa0	lua_error	VERIFIED	luaB_error tail-jmp; luaB_dofile; table slot 142
+0x1a10fb0	0x141a10fb0	lua_gc	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 143
+0x1a11160	0x141a11160	lua_getfenv	VERIFIED	switch on LUA_TFUNCTION/TUSERDATA/TTHREAD (6/7/8) pushing env; table slot 144
+0x1a111e0	0x141a111e0	lua_getfield	VERIFIED	luaI_openlib lua_getfield(L,-1,libname); table slots 145,146(getglobal),239(luaL_getmetatable)
+0x1a20be0	0x141a20be0	lua_getinfo	VERIFIED	luaL_where ('Sl')
+0x1a11250	0x141a11250	lua_getmetatable	INFERRED	table slot 147
+0x1a20d40	0x141a20d40	lua_getstack	VERIFIED	luaL_where
+0x1a112b0	0x141a112b0	lua_gettable	INFERRED	table slot 148
+0x1a112e0	0x141a112e0	lua_gettop	VERIFIED	luaB_pcall tail-jmp; table slot 149
+0x1a11390	0x141a11390	lua_insert	VERIFIED	luaB_pcall lua_insert(L,1); table slot 150
+0x1a113e0	0x141a113e0	lua_iscfunction	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 152
+0x1a11410	0x141a11410	lua_isnumber	INFERRED	table slot 158
+0x1a11440	0x141a11440	lua_isstring	VERIFIED	luaB_error; table slot 159
+0x1a11480	0x141a11480	lua_isuserdata	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 162
+0x1a114b0	0x141a114b0	lua_lessthan	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 163
+0x1a11500	0x141a11500	lua_load	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 164
+0x1a16500	0x141a16500	lua_newstate	VERIFIED	luaL_newstate lua_newstate(l_alloc=0x1a16bc0,NULL); table slot 165
+0x1a11550	0x141a11550	lua_newthread	INFERRED	table slot 167
+0x1a11590	0x141a11590	lua_newuserdata	INFERRED	table slot 168
+0x1a11600	0x141a11600	lua_next	INFERRED	table slot 169
+0x1a11640	0x141a11640	lua_objlen	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 170
+0x1a116c0	0x141a116c0	lua_pcall	VERIFIED	luaB_pcall(0x1a2e6c0): luaL_checkany; lua_pcall(L, gettop-1, -1, 0); also Lua-API table slot 171
+0x1a11750	0x141a11750	lua_pushboolean	VERIFIED	luaB_pcall; table slot 173
+0x1a11770	0x141a11770	lua_pushcclosure	VERIFIED	base_open auxopen pushcclosure(f,0/1); table slots 174,175
+0x1a11830	0x141a11830	lua_pushfstring	VERIFIED	luaL_where '%s:%d: '
+0x1a11880	0x141a11880	lua_pushinteger	INFERRED	table slot 177
+0x1a118a0	0x141a118a0	lua_pushlightuserdata	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 178
+0x1a118c0	0x141a118c0	lua_pushlstring	VERIFIED	base_open lua_pushliteral("Lua 5.1",7); table slot 179
+0x1a11930	0x141a11930	lua_pushnil	VERIFIED	load_aux in luaB_loadstring; table slot 180
+0x1a11950	0x141a11950	lua_pushnumber	INFERRED	table slot 181
+0x1a11970	0x141a11970	lua_pushstring	INFERRED	table slot 182
+0x1a119a0	0x141a119a0	lua_pushthread	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 183
+0x1a119d0	0x141a119d0	lua_pushvalue	VERIFIED	base_open pushvalue(GLOBALSINDEX); table slot 184
+0x1a11a00	0x141a11a00	lua_pushvfstring	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 185
+0x1a11a50	0x141a11a50	lua_rawequal	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 186
+0x1a11aa0	0x141a11aa0	lua_rawget	INFERRED	table slot 187
+0x1a11ae0	0x141a11ae0	lua_rawgeti	INFERRED	table slot 188
+0x1a11b20	0x141a11b20	lua_rawset	INFERRED	table slot 189
+0x1a11ba0	0x141a11ba0	lua_rawseti	INFERRED	table slot 190
+0x1a11c20	0x141a11c20	lua_remove	VERIFIED	luaI_openlib lua_remove(L,-2); table slot 191
+0x1a11c70	0x141a11c70	lua_replace	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 192
+0x1a13320	0x141a13320	lua_resume	VERIFIED	'cannot resume non-suspended coroutine'+'C stack overflow'; table slot 193
+0x1a11d40	0x141a11d40	lua_setallocf	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 194
+0x1a11d60	0x141a11d60	lua_setfenv	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 195
+0x1a11e00	0x141a11e00	lua_setfield	VERIFIED	base_open lua_setglobal(_G/_VERSION/newproxy) with -10002; table slots 196,197
+0x1a11e80	0x141a11e80	lua_setmetatable	VERIFIED	base_open; table slot 198
+0x1a11f40	0x141a11f40	lua_settable	INFERRED	table slot 199
+0x1a11f70	0x141a11f70	lua_settop	VERIFIED	luaB_error lua_settop(L,1); table slots 172(pop),200
+0x1a120c0	0x141a120c0	lua_toboolean	INFERRED	table slot 202
+0x1a120f0	0x141a120f0	lua_tocfunction	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 203
+0x1a12120	0x141a12120	lua_tointeger	INFERRED	table slot 204
+0x1a12150	0x141a12150	lua_tolstring	VERIFIED	luaL_checklstring body; table slots 205,208
+0x1a121f0	0x141a121f0	lua_tonumber	INFERRED	table slot 206
+0x1a12230	0x141a12230	lua_topointer	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 207
+0x1a122a0	0x141a122a0	lua_tothread	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 209
+0x1a122c0	0x141a122c0	lua_touserdata	INFERRED	table slot 210
+0x1a12300	0x141a12300	lua_type	VERIFIED	luaB_tostring switch; luaI_openlib istable; table slot 211
+0x1a12330	0x141a12330	lua_typename	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 212
+0x1a12350	0x141a12350	lua_xmove	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 213
+0x1a13460	0x141a13460	lua_yield	VERIFIED	'attempt to yield across metamethod/C-call boundary'; table slot 214
+0x1a16bf0	0x141a16bf0	luaL_addlstring	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 216
+0x1a16c90	0x141a16c90	luaL_addstring	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 218
+0x1a16cb0	0x141a16cb0	luaL_addvalue	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 219
+0x1a16d70	0x141a16d70	luaL_argerror	VERIFIED	'bad argument #%d (%s)' etc.; table slots 220,221
+0x1a16e60	0x141a16e60	luaL_buffinit	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 222
+0x1a16e80	0x141a16e80	luaL_callmeta	VERIFIED	luaB_tostring '__tostring'; table slot 223
+0x1a16f00	0x141a16f00	luaL_checkany	VERIFIED	luaB_pcall/tostring; table slot 224
+0x1a16f40	0x141a16f40	luaL_checkinteger	INFERRED	table slots 225-227 (checkint/checkinteger/checklong)
+0x1a16f90	0x141a16f90	luaL_checklstring	VERIFIED	luaB_loadstring; tag_error->'%s expected, got %s' in chained cold part; table slot 228
+0x1a17020	0x141a17020	luaL_checknumber	INFERRED	table slot 229
+0x1a17080	0x141a17080	luaL_checkoption	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 230
+0x1a17140	0x141a17140	luaL_checkstack	VERIFIED	'stack overflow (%s)'; table slot 231
+0x1a17180	0x141a17180	luaL_checktype	INFERRED	table slot 233
+0x1a171c0	0x141a171c0	luaL_checkudata	VERIFIED	'%s expected, got %s' xref; table slot 234
+0x1a17280	0x141a17280	luaL_error	VERIFIED	luaI_openlib name-conflict path
+0x1a172e0	0x141a172e0	luaL_findtable	VERIFIED	luaI_openlib(REGISTRYINDEX,'_LOADED')
+0x1a17410	0x141a17410	luaL_getmetafield	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 238
+0x1a17490	0x141a17490	luaL_gsub	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 240
+0x1a178e0	0x141a178e0	luaL_loadbuffer	VERIFIED	luaB_loadstring(0x1a2e2e0) calls it after checklstring/optlstring; table slot 241
+0x1a17910	0x141a17910	luaL_loadfile	VERIFIED	luaB_dofile(0x1a2e450); references '=stdin' and '@%s'
+0xa23b10	0x140a23b10	luaL_loadfile (Fox replacement in API table; stock luaL_loadfile is 0x1a17910)	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 242
+0x1a17b30	0x141a17b30	luaL_loadstring	INFERRED	alphabetical Lua-API table slot 243
+0x1a17b70	0x141a17b70	luaL_newmetatable	INFERRED	table slot 244
+0x1a17bf0	0x141a17bf0	luaL_newstate	VERIFIED	refs panic (PANIC: unprotected error...); table slot 245
+0x1a16980	0x141a16980	luaL_openlibs	VERIFIED	iterates lualibs[] at 0x24b4b40 ({"",luaopen_base},{"package",...},...)
+0x1a17db0	0x141a17db0	luaL_optinteger	VERIFIED	luaB_error luaL_optint(L,2,1); table slots 246,247
+0x1a17e20	0x141a17e20	luaL_optlstring	VERIFIED	luaB_loadstring/dofile; table slots 248,250
+0x1a17ea0	0x141a17ea0	luaL_optnumber	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 249
+0x1a17f10	0x141a17f10	luaL_prepbuffer	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 251
+0x1a17f70	0x141a17f70	luaL_pushresult	INFERRED	alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 252
+0x1a17fc0	0x141a17fc0	luaL_ref	INFERRED	table slot 253
+0x1a18080	0x141a18080	luaL_register	VERIFIED	'xor r9d,r9d; jmp luaI_openlib'; table slot 254
+0x1a18090	0x141a18090	luaL_typerror	VERIFIED	code xref to "%s expected, got %s" at 0x24b4c60 AND alphabetical Lua-API table slot (macro slots line up: newtable->createtable, pop->settop, pushcfunction->pushcclosure, setglobal->setfield, tostring->tolstring, checkint/checklong->checkinteger): slot 256
+0x1a180f0	0x141a180f0	luaL_unref	INFERRED	table slot 257
+0x1a18170	0x141a18170	luaL_where	VERIFIED	'%s:%d: '; table slot 258
+0x1a15690	0x141a15690	Fox LuaTable::SetCFunction-like binder(tbl,name,cfunc,nup..)	VERIFIED(pattern)	678 call sites with rdx=&name, r8=&cfunc (GameObject.*, Fox.*, Time.*)
+0x1a158e0	0x141a158e0	Fox get/create Lua table by name	INFERRED	called with rdx='GameObject' before binder calls
+0x6b8c0	0x14006b8c0	Fox register-library wrapper(L,name,luaL_Reg*)	VERIFIED	111 callers; calls luaL_register between protect-env toggles 0x1a15b40/0x1a15b70
+0x23052f0	0x1423052f0	Lua-API dispatch vtable (277 slots, no RTTI)	VERIFIED(structure)	slots 134..258 are thunks -> lua_*/luaL_* in alphabetical order (cross-checked by 15 independent anchors)
+0x24b6a70	0x1424b6a70	base_funcs[] (luaL_Reg)	VERIFIED	static luaL_Reg passed to luaL_register(L,'_G',...)
+0x1a2ebb0	0x141a2ebb0	base_open	VERIFIED	registers _G, 'Lua 5.1' _VERSION, ipairs/pairs/newproxy
+0x1c658e0	0x141c658e0	common no-op stub (print, Fox.Log, ... stripped in retail)	VERIFIED	shared target of many luaL_Reg entries (print, Fox.Log/Warning/Error)
+0x1a35610	0x141a35610	db_errorfb(debug.traceback)	VERIFIED	'stack traceback:'; debug lib table
+0x1a16bc0	0x141a16bc0	l_alloc(lauxlib)	VERIFIED	passed to lua_newstate by luaL_newstate
+0x1a17c30	0x141a17c30	luaI_openlib	VERIFIED	'_LOADED' + "name conflict for module '%s'"
+0x24b4b40	0x1424b4b40	lualibs[] (luaL_Reg)	VERIFIED	{"",luaopen_base 0x1a2f1f0},{"package",0x1a364f0},{"table",0x1a2fe20},{"io",0x1a310d0},{"os",0x1a31eb0},{"string",0x1a33330},{"math",0x1a34ae0},{"debug",0x1a35a10}
+0x1a18200	0x141a18200	panic(lauxlib)	VERIFIED	'PANIC: unprotected error in call to Lua API (%s)\n'

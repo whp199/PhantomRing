@@ -1,0 +1,694 @@
+#include "Frame.h"
+
+#include "Addresses.h"
+#include "Capture.h"
+#include "Combat.h"
+#include "Config.h"
+#include "Death.h"
+#include "Follow.h"
+#include "FramePace.h"
+#include "Hold.h"
+#include "Blast.h"
+#include "Link.h"
+#include "Menu.h"
+#include "Log.h"
+#include "Logic.h"
+#include "Pad.h"
+#include "Placed.h"
+#include "Skeleton.h"
+#include "State.h"
+#include "Throw.h"
+#include "Vars.h"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <cmath>
+#include <format>
+#include <mutex>
+#include <numbers>
+
+namespace phantom::guest::frame
+{
+	namespace
+	{
+		using logic::Vec3;
+		using state::LuaFlags;
+
+		constexpr std::uint16_t kNullId = 0xFFFF;
+
+		// Frame-thread state (the camera hook never runs concurrently with itself).
+		std::uint64_t     g_frame{ 0 };
+		std::int64_t      g_lastQpc{ 0 };
+		std::int64_t      g_qpcFreq{ 0 };
+		logic::Odometer   g_odo;
+		logic::AmmoWatch  g_ammo;
+		std::uint32_t     g_attachGen{ ~0u };
+		std::uint16_t     g_lastBuddyAmmo{ 0 };
+		bool              g_buddyAmmoPrimed{ false };
+		ULONGLONG         g_warpAt{ 0 };        // when we queued the last treadmill warp
+		bool              g_warpPending{ false };
+		float             g_settleY{ 0 };        // height the odometer sees while a landed warp settles
+		float             g_warpTargetY{ 0 };    // root height the queued warp aims at (the centre's)
+		std::uint64_t     g_settleUntil{ 0 };    // frame: the odometer ignores vertical motion until then
+		Vec3              g_lastRoot;             // last frame's root (landing detection)
+		std::uint64_t     g_landings{ 0 };
+		logic::FlameBurst g_flameBurst;
+		std::uint64_t     g_flames{ 0 };
+		std::uint64_t     g_warps{ 0 };
+		bool              g_diedLatched{ false };
+		bool              g_diedNow{ false };      // this frame: the life clamp latched (Death.cpp)
+		bool              g_respawnedNow{ false };  // this frame: kHEvRespawn
+		std::int32_t      g_lifeWritten{ -1 };  // value of our last native write, for the stickiness check
+		std::uint64_t     g_lifeWrittenFrame{ 0 };
+		bool              g_lifeWarned{ false };
+		bool              g_nativeHoldWarned{ false };
+		bool              g_wasReady{ false };
+		Vec3              g_buddyLast;        // buddy heading from its motion (no per-frame GetRotationY)
+		bool              g_buddyLastValid{ false };
+		float             g_buddyYaw{ 0 };
+		proto::GuestState g_last{};
+		std::mutex        g_publishLock;  // GuestState has two writers: the camera frame, and the Lua thread while frames stall
+		std::uint64_t     g_lastFrameMs{ 0 };
+		std::uint64_t     g_stalledPublished{ 0 };
+		std::mutex        g_describeLock;
+		std::string       g_describe{ "no player frame yet" };
+
+		std::int64_t Qpc()
+		{
+			LARGE_INTEGER t;
+			::QueryPerformanceCounter(&t);
+			return t.QuadPart;
+		}
+
+		proto::AmmoKind KindOf(std::uint16_t a_weapon)
+		{
+			const auto& c = Cfg();
+			if (std::ranges::find(c.tranqWeapons, a_weapon) != c.tranqWeapons.end()) {
+				return proto::kAmmoTranq;
+			}
+			if (std::ranges::find(c.stunWeapons, a_weapon) != c.stunWeapons.end()) {
+				return proto::kAmmoStun;
+			}
+			return proto::kAmmoLethal;
+		}
+
+		void SetV(float a_out[3], const Vec3& a_v)
+		{
+			a_out[0] = a_v.x;
+			a_out[1] = a_v.y;
+			a_out[2] = a_v.z;
+		}
+
+		// Riding with the camera in the cockpit: aiming (LT) on D-Walker always puts MGSV's camera there, ~0.6 m in front of
+		// the walker's root and ~2.3 m up; in third person it is ~5 m behind (VERIFIED live 2026-10-12: (820.74, -9.79,
+		// 1180.94) aiming vs (826.36, -10.47, 1181.92) not, walker root (821.35, -12.05, 1180.88)). MGSV sets no status for it.
+		bool RidingFirstPerson(const camera::Sample& a_cam, const Vec3& a_root)
+		{
+			const Vec3 d = Vec3{ a_cam.pos[0], a_cam.pos[1], a_cam.pos[2] } - a_root;
+			return d.Finite() && d.LengthXZ() < 1.8f && d.y > 1.0f;
+		}
+
+		// D-Walker's flamethrower nozzle (its right arm) relative to the walker's root and facing: estimated from MGSV's
+		// first-person view (the nozzle at the lower right, ~1.6 m beyond the cockpit camera), m.
+		constexpr float kNozzleAhead = 1.8f, kNozzleRight = 0.45f, kNozzleUp = 1.9f;
+		constexpr float kFlameReach = 12.0f;  // the stream's reach (kGEvBuddyFire pad[1] in mm)
+
+		// ---- Elden Ring -> Snake ------------------------------------------------------------------
+		void HostEvents(const vars::Snapshot& a_vars, const Vec3& a_root)
+		{
+			proto::HostEvent e;
+			std::uint16_t    life = a_vars.life;
+			if (const int pending = vars::PendingLife(); pending >= 0 && pending < life) {
+				life = static_cast<std::uint16_t>(pending);  // a hit queued a moment ago, not applied yet
+			}
+			while (link::PopHostEvent(e)) {
+				switch (e.type) {
+				case proto::kHEvHurt:
+					{
+						const auto r = logic::ApplyHurt(life, static_cast<float>(e.a), Cfg().lifeScale);
+						Log::Debug("hurt: er {} kind {} -> life {} -> {}", e.a, e.b, life, r.life);
+						if (Cfg().nativeLifeWrite && r.life != life && vars::WriteLife(r.life)) {
+							g_lifeWritten = r.life;
+							g_lifeWrittenFrame = g_frame;
+						}
+						if (Cfg().hurtFeedback && r.life < life) {
+							// MGSV's own reaction: its camera (= Elden Ring's) shakes, Snake gets blood where it hit.
+							const Vec3 from{ e.v0[0], e.v0[1], e.v0[2] };
+							const auto fb = logic::FeedbackFor(static_cast<std::uint16_t>(life - r.life), a_vars.lifeMax, e.b, a_root, from);
+							if (fb.shake) {
+								std::string cmd = std::format("hurt {:.2f} {:.2f} {:.2f}", fb.level, fb.time, fb.decay);
+								if (fb.blood && Cfg().hurtBlood) {
+									cmd += std::format(" {:.2f} {:.2f} {:.2f} {:.2f}", fb.bloodPos.x, fb.bloodPos.y, fb.bloodPos.z, fb.bloodRadius);
+								}
+								state::QueueCommand(cmd);
+							}
+						}
+						life = r.life;
+						if (r.died && !g_diedLatched) {
+							g_diedLatched = true;
+							g_diedNow = true;
+							proto::GuestEvent d{};
+							d.type = proto::kGEvDied;
+							d.frame = static_cast<std::uint32_t>(g_frame);
+							link::PushEvent(d);
+							Log::Info("life: Snake would have died -- kept at 1, kGEvDied sent");
+						}
+						break;
+					}
+				case proto::kHEvRespawn:
+					g_diedLatched = false;
+					g_respawnedNow = true;
+					if (a_vars.lifeMax && vars::WriteLife(a_vars.lifeMax)) {
+						g_lifeWritten = a_vars.lifeMax;
+						g_lifeWrittenFrame = g_frame;
+						life = a_vars.lifeMax;
+					}
+					Log::Info("life: respawn -- refilled to {}", a_vars.lifeMax);
+					break;
+				case proto::kHEvHeal:
+					{
+						// Elden Ring healed the puppet (Crimson Tears, a grace): the same share of Snake's life back, in kHEvHurt
+						// units (x LifeScale). Never while he lies dead: the respawn refills him.
+						if (g_diedLatched || !a_vars.lifeMax) {
+							break;
+						}
+						const float add = static_cast<float>(e.a) * Cfg().lifeScale;
+						const auto  healed = static_cast<std::uint16_t>(std::min<float>(a_vars.lifeMax, static_cast<float>(life) + std::max(0.0f, add)));
+						if (healed > life && Cfg().nativeLifeWrite && vars::WriteLife(healed)) {
+							g_lifeWritten = healed;
+							g_lifeWrittenFrame = g_frame;
+							Log::Debug("heal: er {} -> life {} -> {}", e.a, life, healed);
+							life = healed;
+						}
+						break;
+					}
+				case proto::kHEvWarped:
+					Log::Debug("host: the Elden Ring player was moved by the game (warp/elevator)");
+					break;
+				case proto::kHEvStatus:
+					Log::Debug("host: status proc {}", e.a);
+					break;
+				case proto::kHEvDetonate:
+					placed::Detonate(e.b);  // an Elden Ring enemy walked into one of Snake's mines
+					break;
+				default:
+					break;
+				}
+			}
+			// Does the engine keep a native write? (UNVERIFIED: vars.playerLife may be a copy the player
+			// object overwrites.) A big jump back up within a few frames means it doesn't.
+			if (g_lifeWritten >= 0 && g_frame == g_lifeWrittenFrame + 8) {
+				if (!g_lifeWarned && a_vars.life > g_lifeWritten + 300) {
+					g_lifeWarned = true;
+					Log::Warn("life: native playerLife write did not stick ({} written, {} now) -- need the Lua/native damage path (RE M6)",
+						g_lifeWritten, a_vars.life);
+				}
+				g_lifeWritten = -1;
+			}
+		}
+
+		// ---- shots ---------------------------------------------------------------------------------
+		void Shots(const vars::Snapshot& a_vars, const camera::Sample& a_cam, const state::LuaView& a_lua)
+		{
+			const Vec3 forward = logic::RotateByQuat(a_cam.quat, { 0.0f, 0.0f, 1.0f });
+			const Vec3 camPos{ a_cam.pos[0], a_cam.pos[1], a_cam.pos[2] };
+			// Ammo counters are the fallback for when the ShotSolver hook (Combat.cpp) is refused.
+			if (Cfg().fireFromAmmo && !combat::NativeShots()) {
+				if (const auto shot = g_ammo.Update(a_vars.weapons, a_vars.ammo)) {
+					float      muzzle[3];
+					const bool fromBone = skeleton::BoneWorld(Cfg().muzzleBone, muzzle);
+					if (!fromBone) {
+						SetV(muzzle, camPos);
+					}
+					for (int i = 0; i < shot->rounds; ++i) {
+						proto::GuestEvent e{};
+						e.type = proto::kGEvFire;
+						e.a = shot->weapon | (static_cast<std::uint32_t>(KindOf(shot->weapon)) << 16);
+						e.b = 1;
+						e.frame = static_cast<std::uint32_t>(g_frame);
+						std::copy_n(muzzle, 3, e.v0);
+						SetV(e.v1, forward);
+						link::PushEvent(e);
+					}
+					Log::Debug("fire: slot {} weapon {:#x} rounds {} muzzle {}", shot->slot, shot->weapon, shot->rounds, fromBone ? "bone" : "camera");
+				}
+			}
+			// D-Walker's gun (vars.buddyGearAmmoCount[0]); UNVERIFIED that it counts down live. Only until
+			// the ShotSolver hook has seen a buddy round itself (re-backlog M5: its fire path is unknown).
+			const auto buddyAmmo = a_vars.buddyGearAmmo[0];
+			if (g_buddyAmmoPrimed && a_lua.buddyActive >= 0 && combat::BuddyRounds() == 0) {
+				const int rounds = logic::CounterDrop(g_lastBuddyAmmo, buddyAmmo);
+				for (int i = 0; i < rounds; ++i) {
+					proto::GuestEvent e{};
+					e.type = proto::kGEvBuddyFire;
+					e.a = a_vars.buddyGearMainWp;
+					e.b = 1;
+					e.frame = static_cast<std::uint32_t>(g_frame);
+					const bool ridden = a_lua.ridden != kNullId && a_lua.ridden == a_lua.buddyId;
+					if (a_lua.buddyPosValid && !ridden) {
+						SetV(e.v0, a_lua.buddyPos + Vec3{ 0.0f, 1.5f, 0.0f });
+						const float yaw = a_lua.buddyYawValid ? a_lua.buddyYaw : 0.0f;
+						SetV(e.v1, { std::sin(yaw), 0.0f, std::cos(yaw) });
+					} else {
+						SetV(e.v0, camPos);
+						SetV(e.v1, forward);
+					}
+					link::PushEvent(e);
+				}
+			}
+			g_lastBuddyAmmo = buddyAmmo;
+			g_buddyAmmoPrimed = true;
+
+			// D-Walker weapons that fire no rounds (its flamethrower: no ShotSolver call, no ammo counter;
+			// VERIFIED live 2026-10-12): while Snake rides it and MGSV reports GUN_FIRE, a burst of short-range
+			// kGEvBuddyFire along the aim, ~8 per second. pad[1] = range in mm (guest extension, like pad[0]).
+			// Only with the ShotSolver hook: without it no round is ever seen and every gun would look like
+			// a flamethrower (logic::FlameBurst). And only with the flamethrower as main weapon: a walker gun
+			// whose rounds bypass the counted ShotSolver call would otherwise burn as well.
+			const bool ridingBuddy = a_lua.buddyId != kNullId && a_lua.ridden == a_lua.buddyId;
+			const bool firing = logic::FlameBurst::Firing(combat::NativeShots(), ridingBuddy, (a_lua.flags & state::kLGunFire) != 0, a_vars.buddyGearMainWp);
+			if (g_flameBurst.Update(firing, combat::BuddyRounds(), ::GetTickCount64())) {
+				proto::GuestEvent e{};
+				e.type = proto::kGEvBuddyFire;
+				e.a = (a_vars.buddyGearMainWp & 0xFFFF) | (static_cast<std::uint32_t>(proto::kAmmoLethal) << 16);
+				e.b = 1;
+				e.frame = static_cast<std::uint32_t>(g_frame);
+				// From the nozzle on the walker's right arm. Aiming (LT: the cockpit camera, first person) MGSV burns where the
+				// reticle points: at the camera's centre line, the stream's reach away. Not aiming, along the walker's facing
+				// at the camera's pitch.
+				const Vec3  root = logic::MatrixTranslation(a_cam.root);
+				const float walkerYaw = logic::MatrixYaw(a_cam.root);
+				const Vec3  nozzle = logic::FlameNozzle(root, walkerYaw, kNozzleAhead, kNozzleRight, kNozzleUp);
+				const bool  aiming = (a_vars.buttons & addr::kPadHold) != 0;
+				const float flat = std::sqrt(std::max(0.0f, 1.0f - forward.y * forward.y));
+				const Vec3  facing{ std::sin(walkerYaw) * flat, forward.y, std::cos(walkerYaw) * flat };
+				SetV(e.v0, nozzle);
+				SetV(e.v1, aiming ? logic::FlameDirection(nozzle, camPos, forward, kFlameReach) : facing);
+				e.pad[1] = static_cast<std::uint32_t>(kFlameReach * 1000.0f);
+				link::PushEvent(e);
+				if (g_flames++ == 0) {
+					Log::Info("shots: D-Walker fires without rounds (main weapon type {}) -- flame bursts as kGEvBuddyFire", a_vars.buddyGearMainWp);
+				}
+			}
+		}
+
+		// ---- hold in place -------------------------------------------------------------------------
+		// Treadmill (Lua Warp, or the native set-position call) past the radius, or the native call every
+		// frame (re-backlog M1). The odometer has already taken this frame's motion; a native placement
+		// rebases it, a Lua warp is recognised as a teleport when it lands.
+		void Hold(const camera::Sample& a_cam, const Vec3& a_root, float a_yaw, const vars::Snapshot& a_vars, const state::LuaView& a_lua, bool a_ready)
+		{
+			if (const auto req = state::TakeHoldRequest()) {
+				auto& m = MutableCfg();
+				m.holdMode = static_cast<HoldMode>(req->mode);
+				if ((m.holdMode == HoldMode::kNative || m.holdMode == HoldMode::kNativeTreadmill) && !hold::Available()) {
+					hold::Init();  // byte checks only: fine on the game thread, so !hold can switch to it live
+					g_nativeHoldWarned = false;
+				}
+				if (req->radius > 0.0f) {
+					m.radius = req->radius;
+				}
+				Log::Info("motion: hold mode {} radius {:.1f} m", req->mode, m.radius);
+			}
+			const auto& c = Cfg();
+			const auto  centre = state::Centre();
+			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled()) {
+				return;
+			}
+			const bool onVehicle = (a_lua.flags & state::kLVehicle) || a_vars.vehicleId != kNullId || a_lua.ridden != kNullId;
+			const bool busy = (a_lua.flags & (state::kLCqc | state::kLFall | state::kLDemo | state::kLMenu | state::kLDead | state::kLCarry));
+			const bool normal = (a_lua.flags & state::kLNormal) || (onVehicle && c.treadmillOnVehicle);
+			const bool wantNative = c.holdMode == HoldMode::kNative || c.holdMode == HoldMode::kNativeTreadmill;
+			if (wantNative && !hold::Available() && !g_nativeHoldWarned) {
+				g_nativeHoldWarned = true;
+				Log::Warn("motion: native hold unavailable -- using the Lua treadmill");
+			}
+			const bool native = wantNative && hold::Available() && !onVehicle;
+
+			if (c.holdMode == HoldMode::kNative && native) {
+				if (!normal || busy) {
+					return;  // CQC, dives, falls: let MGSV move him; the next held frame pulls him back
+				}
+				const Vec3 anchor{ centre->x, a_root.y, centre->z };
+				if (hold::Place(anchor + Vec3{ 0.0f, c.warpLift, 0.0f }, logic::MatrixToQuat(a_cam.root))) {
+					g_odo.Rebase(anchor);
+					++g_warps;
+				}
+				return;
+			}
+
+			logic::TreadmillInput in;
+			in.root = a_root;
+			in.centre = *centre;
+			in.velocity = g_odo.Velocity();
+			in.radius = c.radius;
+			in.allowed = normal && !busy && !g_warpPending;
+			in.nowMs = static_cast<double>(::GetTickCount64());
+			in.lastWarpMs = static_cast<double>(g_warpAt);
+			in.cooldownMs = c.warpCooldownMs;
+			const auto d = logic::Treadmill(in);
+			if (!d.warp) {
+				return;
+			}
+			// The Warp command takes MGSV's own yaw convention: vars.playerRotY (degrees) in radians, as IH and
+			// TppPlayer.Warp do. The root-matrix yaw is the fallback (same convention unless the live test says otherwise).
+			const float warpYaw = a_vars.valid && a_vars.rotYDeg != 0.0f ? a_vars.rotYDeg * std::numbers::pi_v<float> / 180.0f : a_yaw;
+			std::string cmd;
+			bool        placed = false;
+			g_warpTargetY = d.target.y;
+			// Warp and the native set-position place the character ~0.6-0.8 m *below* the root height they are
+			// given: he then climbs out of the ground over ~7 frames and drops into a crouch (VERIFIED live
+			// 2026-10-12, both paths). [Motion] WarpLift (0.8 m) lands him exactly on the ground, standing.
+			const Vec3 lifted = d.target + Vec3{ 0.0f, c.warpLift, 0.0f };
+			if (native && hold::Place(lifted, logic::MatrixToQuat(a_cam.root))) {
+				g_odo.Rebase(d.target);
+				placed = true;
+			} else if (onVehicle) {
+				// Move what he rides; he comes along (IH's walker/vehicle SetPosition). By the horizontal shift
+				// from where *it* is: Snake's root is on its seat, a metre or more above the walker's feet.
+				const auto vehicle = a_vars.vehicleId != kNullId ? a_vars.vehicleId : a_lua.ridden;
+				Vec3       at = d.target;
+				if (vehicle == a_lua.buddyId && a_lua.buddyPosValid) {
+					at = a_lua.buddyPos + Vec3{ d.shift.x, 0.0f, d.shift.z };
+				}
+				cmd = std::format("owarp {} {} {} {} {}", vehicle, at.x, at.y, at.z, warpYaw);
+				// The riding camera stays where it was in the world and turns to look at the vehicle's new place: every
+				// warp swung it (VERIFIED live: 6 m -> 166 deg, 75-100 deg once a second while riding; the walker kept
+				// its own heading). Its orientation before the warp is asked back right after it (MGSV's own request:
+				// rotY = world yaw, rotX = -pitch, degrees; an interpTime of 0 is ignored, 0.02 s works).
+				if (c.ridingCameraKeep) {
+					const auto fwd = logic::RotateByQuat(a_cam.quat, { 0.0f, 0.0f, 1.0f });
+					const float camYaw = std::atan2(fwd.x, fwd.z) * 180.0f / std::numbers::pi_v<float>;
+					const float camPitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f)) * 180.0f / std::numbers::pi_v<float>;
+					if (std::isfinite(camYaw) && std::isfinite(camPitch)) {
+						cmd += std::format(";camrot {:.3f} {:.3f} 0.02", -camPitch, camYaw);
+					}
+				}
+			} else {
+				// Warp, not WarpAndWaitBlock: no block wait in the already-streamed sandbox (re-backlog M1).
+				cmd = std::format("warp {} {} {} {}", lifted.x, lifted.y, lifted.z, warpYaw);
+			}
+			// Keep the buddy where it was relative to Snake, or Elden Ring would see it jump by the radius.
+			if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId) {
+				const Vec3 b = a_lua.buddyPos + d.shift;
+				cmd += std::format("{}owarp {} {} {} {} {}", cmd.empty() ? "" : ";", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw);
+				follow::OnShift(d.shift);  // and where it is walking to
+			}
+			if (!cmd.empty()) {
+				state::QueueCommand(cmd);
+			}
+			g_warpAt = ::GetTickCount64();
+			g_warpPending = !placed;
+			++g_warps;
+			Log::Debug("treadmill: {}{} (shift {:.2f},{:.2f})", placed ? "native placement; " : "", cmd, d.shift.x, d.shift.z);
+		}
+
+		std::uint16_t Stance(std::uint32_t a_flags)
+		{
+			if (a_flags & state::kLCrawl) {
+				return 2;
+			}
+			return (a_flags & state::kLSquat) ? 1 : 0;
+		}
+	}
+
+	void OnPlayerCamera(const camera::Sample& a_sample)
+	{
+		++g_frame;
+		link::NoteGameTick();
+		skeleton::ObserveOwner(a_sample.owner, g_frame);
+		if (!g_qpcFreq) {
+			LARGE_INTEGER f;
+			::QueryPerformanceFrequency(&f);
+			g_qpcFreq = f.QuadPart;
+		}
+		const auto now = Qpc();
+		framepace::OnGameFrame(now);
+		const double dt = g_lastQpc ? static_cast<double>(now - g_lastQpc) / static_cast<double>(g_qpcFreq) : 0.0;
+		g_lastQpc = now;
+
+		const auto& c = Cfg();
+		const auto  v = vars::Read();
+		const auto  lua = state::Lua();
+		const Vec3  root = logic::MatrixTranslation(a_sample.root);
+		const float yaw = logic::MatrixYaw(a_sample.root);
+		const bool  bootReady = state::CurrentBoot() == state::Boot::kReady;
+		const bool  luaFresh = lua.valid && ::GetTickCount64() - lua.tickMs < 1000;
+		const bool  ready = bootReady && luaFresh && lua.InGame();
+
+		state::SetFrame({ true, g_frame, ::GetTickCount64(), root, yaw, { a_sample.pos[0], a_sample.pos[1], a_sample.pos[2] }, g_odo.Velocity() });
+		{
+			const float at[3] = { root.x, root.y, root.z };
+			capture::NoteFrame(g_frame, at, yaw, a_sample.pos);  // the draw anchor (Capture.cpp)
+		}
+
+		// A new host session (or our first frame) starts a new odometer epoch; so does the boot sequence
+		// reaching Ready (its warps are not motion the host should replay). Brief not-ready spells (MGSV's
+		// pause menu stops Lua updates) keep the epoch.
+		const auto gen = link::AttachGeneration();
+		if (gen != g_attachGen || (bootReady && !g_wasReady)) {
+			g_attachGen = gen;
+			g_odo.Reset(root);
+			g_ammo.Reset();
+			g_buddyAmmoPrimed = false;
+			g_warpPending = false;
+			Log::Info("motion: odometer epoch {} at {:.2f},{:.2f},{:.2f}", g_odo.Epoch(), root.x, root.y, root.z);
+		}
+		g_wasReady = bootReady;
+
+		const bool warpWindow = g_warpPending && ::GetTickCount64() - g_warpAt < 3000;
+		if (g_warpPending && !warpWindow) {
+			g_warpPending = false;
+			Log::Warn("treadmill: warp didn't land within 3 s");
+		}
+		// A warp lands where we sent him (WarpLift puts him on his feet), but MGSV's root still settles a few cm
+		// over the next frames, and the pre-warp root bobbed with his stride: vertical is held at the warp's
+		// target height for 20 frames after the landing, so neither shows up as odometer height.
+		Vec3 odoRoot = root;
+		if (g_frame < g_settleUntil) {
+			odoRoot.y = g_settleY;
+		}
+		if (warpWindow && g_odo.Primed() && (root - g_lastRoot).Length() > std::min(0.75f, c.teleportJump)) {
+			// The landing frame: the jump stays out, but this frame's own running motion counts (else the
+			// puppet stalls one frame per warp). MGSV's smoothed velocity is the best guess of it.
+			g_settleY = odoRoot.y = g_warpTargetY;
+			g_odo.Rebase(odoRoot - g_odo.Velocity() * static_cast<float>(std::clamp(dt, 0.0, 0.1)));
+			g_warpPending = false;
+			g_settleUntil = g_frame + 20;
+			++g_landings;
+		}
+		g_odo.Update(odoRoot, dt, warpWindow && g_warpPending, c.teleportJump, c.velocitySmoothing);
+		g_lastRoot = root;
+
+		pad::SetSource(bootReady || c.padDuringBoot ? pad::Source::kHost : pad::Source::kNeutral);
+		g_diedNow = g_respawnedNow = false;
+		HostEvents(v, root);
+		{
+			proto::HostState hs{};
+			const bool       haveHost = link::ReadHostState(hs);
+			death::Update({ .ready = ready,
+				.died = g_diedNow,
+				.hostDead = haveHost && (hs.flags & proto::kHostPlayerDead),
+				.respawned = g_respawnedNow,
+				.hostAlive = link::HostAlive(),
+				.luaFlags = lua.flags,
+				.riding = (lua.flags & state::kLVehicle) || v.vehicleId != kNullId || lua.ridden != kNullId });
+		}
+		if (ready) {
+			Shots(v, a_sample, lua);
+		} else {
+			g_ammo.Reset();  // counters change across loads/menus without shots
+			g_buddyAmmoPrimed = false;
+		}
+		combat::ObserveOwner(a_sample.owner, g_frame, lua.buddyActive >= 0 && lua.buddyId != kNullId);
+		{
+			const float at[3] = { root.x, root.y, root.z };
+			blast::Observe(ready, g_frame, at);
+		}
+		// Throws and placed explosives (docs/GUEST.md 18.8): the projectiles' lifetimes, the arc Snake aims, his mines.
+		const auto support = v.supportIndex < v.supportWeapons.size() ? v.supportWeapons[v.supportIndex] : std::uint16_t(0);
+		const auto aim = throwing::Observe(ready, g_frame, (v.buttons & addr::kPadHold) != 0, v.inventorySlot, support);
+		placed::Update(ready, g_frame, root);
+		if (ready) {
+			const float at[3] = { root.x, root.y, root.z };
+			combat::PollMelee(at, yaw);
+		}
+		Hold(a_sample, root, yaw, v, lua, ready);
+
+		proto::GuestState s{};
+		s.frame = g_frame;
+		s.qpc = now;
+		std::uint32_t f = 0;
+		const std::uint32_t lf = lua.flags;
+		if (ready) {
+			f |= proto::kGuestReady;
+		}
+		if (!lua.InGame() || !(lf & state::kLPrepared)) {
+			f |= proto::kGuestLoading;
+		}
+		if (lf & state::kLDead) {
+			f |= proto::kGuestDead;
+		}
+		if ((lf & state::kLMenu) || menu::PauseOpen()) {
+			f |= proto::kGuestInMenu;
+		}
+		if (lf & state::kLDemo) {
+			f |= proto::kGuestCutscene;
+		}
+		const bool riding = (lf & state::kLVehicle) || v.vehicleId != kNullId || lua.ridden != kNullId;
+		if (riding) {
+			f |= proto::kGuestOnVehicle;
+		}
+		if (v.buttons & addr::kPadHold) {
+			f |= proto::kGuestAiming;
+		}
+		if (lf & state::kLDash) {
+			f |= proto::kGuestSprint;
+		}
+		if (lf & state::kLStand) {
+			f |= proto::kGuestStanding;
+		}
+		if (lf & state::kLSquat) {
+			f |= proto::kGuestCrouching;
+		}
+		if (lf & state::kLCrawl) {
+			f |= proto::kGuestProne;
+		}
+		if (lf & state::kLCqc) {
+			f |= proto::kGuestCqc;
+		}
+		// First person: MGSV's own SUBJECT/BINOCLE status, or riding with the camera in the cockpit (RB while riding D-Walker:
+		// MGSV sets no status for it; its camera sits ~0.6 m in front of the walker's root, ~5 m behind in third person).
+		if ((lf & (state::kLSubject | state::kLBinocle)) || (riding && RidingFirstPerson(a_sample, root))) {
+			f |= proto::kGuestFirstPerson;
+		}
+		// v8: inside a cardboard box (PlayerStatus CBOX), and one with a poster (docs/GUEST.md 18.9). Keeping still or moving
+		// in it shows in velocity (MGSV's box shuffle ~1.3 m/s, still 0).
+		if (lf & state::kLCbox) {
+			f |= proto::kGuestInBox;
+			if (lf & state::kLPoster) {
+				f |= proto::kGuestBoxPoster;
+			}
+		}
+		if (aim.valid) {
+			f |= proto::kGuestThrowAim;  // v6: the arc MGSV draws, for the host's own
+			std::copy_n(aim.pos, 3, s.aimThrowPos);
+			std::copy_n(aim.vel, 3, s.aimThrowVel);
+			s.aimThrowKind = aim.kind;
+		}
+		s.flags = f;
+		s.missionCode = v.missionCode;
+		s.locationCode = v.locationCode;
+		s.odoEpoch = g_odo.Epoch();
+		const auto& odo = g_odo.Odo();
+		std::copy(odo.begin(), odo.end(), s.odo);
+		SetV(s.rootPos, root);
+		s.rootYaw = yaw;
+		SetV(s.velocity, g_odo.Velocity());
+		std::copy_n(a_sample.pos, 3, s.camPos);
+		std::copy_n(a_sample.quat, 4, s.camQuat);
+		// MGSV's own projection when capture has seen it (exact); else the focal-length estimate.
+		const float projFov = capture::ProjectionFovY();
+		float fov = c.fovOverrideDeg > 0.0f ? c.fovOverrideDeg * std::numbers::pi_v<float> / 180.0f
+		          : projFov > 0.0f        ? projFov
+		                                  : logic::FocalToFovY(a_sample.focalMm, c.filmHeightMm);
+		if (!(fov > 0.0f)) {
+			fov = 60.0f * std::numbers::pi_v<float> / 180.0f;
+		}
+		s.camFovY = fov;
+		s.camNear = c.nearPlane;
+		s.life = v.life;
+		s.lifeMax = v.lifeMax;
+		s.stamina = v.stamina;
+		s.stance = Stance(lf);
+		const auto slot = v.inventorySlot;  // UNVERIFIED: index into weapons[] of the equipped one
+		s.weaponId = slot < v.weapons.size() ? v.weapons[slot] : 0;
+		s.ammoInClip = slot < v.ammo.size() ? v.ammo[slot] : 0;
+		s.ammoStock = 0;  // not mapped yet (Player.GetAmmoStockBySlot)
+		s.buddyType = v.buddyType;
+		s.vehicleId = riding ? (v.vehicleId != kNullId ? v.vehicleId : lua.ridden) : kNullId;
+		s.phase = v.phase;
+
+		// Buddy (D-Walker first).
+		std::uint32_t bf = 0;
+		if (lua.buddyActive >= 0 && lua.buddyId != kNullId) {
+			bf |= proto::kBuddyPresent;
+		}
+		if (lua.buddyPosValid && luaFresh) {
+			bf |= proto::kBuddyPosValid;
+			SetV(s.buddyPos, lua.buddyPos);
+		}
+		if (lua.buddyId != kNullId && (lua.ridden == lua.buddyId || (riding && v.vehicleId == lua.buddyId))) {
+			bf |= proto::kBuddyRidden;
+		}
+		if (state::CurrentBoot() == state::Boot::kBuddy) {
+			bf |= proto::kBuddyLoading;
+		}
+		if (state::BuddyMissing()) {
+			bf |= proto::kBuddyMissing;
+		}
+		if (lua.buddyPosValid) {
+			const Vec3 d = lua.buddyPos - g_buddyLast;
+			if (!g_buddyLastValid) {
+				g_buddyYaw = yaw;  // it was called facing Snake's way
+			} else if (d.LengthXZ() > 0.02f && d.LengthXZ() < 2.0f) {
+				g_buddyYaw = std::atan2(d.x, d.z);
+			}
+			g_buddyLast = lua.buddyPos;
+			g_buddyLastValid = true;
+		} else {
+			g_buddyLastValid = false;
+		}
+		if (bf & proto::kBuddyRidden) {
+			g_buddyYaw = yaw;  // ridden: it faces where Snake's root faces
+		}
+		s.buddyFlags = bf;
+		capture::NoteBuddy((bf & proto::kBuddyPosValid) != 0, s.buddyPos);
+		s.buddyObjectId = lua.buddyId;
+		s.buddyAmmo = v.buddyGearAmmo[0];
+		s.buddyYaw = lua.buddyYawValid ? lua.buddyYaw : g_buddyYaw;
+		{
+			std::scoped_lock lock(g_publishLock);
+			link::PublishState(s);
+			g_last = s;
+			g_lastFrameMs = ::GetTickCount64();
+		}
+
+		if (g_frame % 30 == 0) {
+			std::scoped_lock lock(g_describeLock);
+			g_describe = std::format("frame {} ready {} flags {:#x} lua {:#x} root {:.2f},{:.2f},{:.2f} yaw {:.1f} (vars {:.1f}) odo {:.2f},{:.2f},{:.2f} epoch {} "
+			                         "teleports {} warps {} landed {} life {}/{} fov {:.1f} focal {:.1f} pose {} pad polls {} buddy {:#x} id {} ammo {}",
+				g_frame, ready, f, lf, root.x, root.y, root.z, yaw * 57.2958f, v.rotYDeg, odo[0], odo[1], odo[2], g_odo.Epoch(), g_odo.Teleports(), g_warps, g_landings, v.life,
+				v.lifeMax, fov * 57.2958f, a_sample.focalMm, skeleton::PublishedFrames(), pad::Polls(), bf, lua.buddyId, s.buddyAmmo);
+		}
+	}
+
+	void PublishStalled(std::uint64_t a_nowMs, bool a_ready)
+	{
+		std::scoped_lock lock(g_publishLock);
+		// Only a ready sandbox whose frames stopped a moment ago (not a load: the boot sequence tells those apart and
+		// says "loading" itself), and only while one of MGSV's menus is open -- that is what stops them.
+		if (!a_ready || !g_lastFrameMs || a_nowMs - g_lastFrameMs < 100 || !(g_last.flags & proto::kGuestReady)) {
+			return;
+		}
+		const bool open = menu::Open();
+		if (!open && !(g_last.flags & proto::kGuestInMenu)) {
+			return;  // stalled without a menu: leave the last state as it is (the boot sequence reports the stall)
+		}
+		proto::GuestState s = g_last;
+		s.flags = open ? (s.flags | proto::kGuestInMenu) : (s.flags & ~proto::kGuestInMenu);
+		s.flags &= ~proto::kGuestLoading;
+		s.qpc = Qpc();
+		link::PublishState(s);
+		g_last = s;
+		link::NoteGameTick();  // MGSV is alive (its Lua runs): keep the heartbeat while no frame comes
+		++g_stalledPublished;
+	}
+
+	std::string Describe()
+	{
+		std::scoped_lock lock(g_describeLock);
+		return g_describe;
+	}
+}

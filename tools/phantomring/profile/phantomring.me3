@@ -1,0 +1,17 @@
+# PhantomRing me3 profile (me3 0.13.0, ModProfileV1; schema: me3 schemas/mod-profile.json).
+# Relative paths resolve against this file's directory. `pr launch` checks every value below before it
+# starts Elden Ring (tools/phantomring/launch.py check_profile).
+profileVersion = "v1"
+
+# Isolated save: created by `pr launch` as a copy of ER0000.sl2 (or --seed-save; after the backup) if missing.
+savefile = "PhantomRing0000.sl2"
+# Elden Ring stays offline (also passed as --online=false); EasyAntiCheat is never involved.
+start_online = false
+# Profile-level in me3 >= 0.8 (not per native): dearxan neutralises Arxan before natives load.
+disable_arxan = true
+
+[[supports]]
+game = "eldenring"
+
+[[natives]]
+path = "../../../build/PhantomRingHost.dll"

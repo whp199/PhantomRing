@@ -1,0 +1,30 @@
+Proton: 1790839227 experimental-11.0-20261001-x86_64
+SteamGameId: 0
+Command: ['<scratch>/ipc/shmtest.exe', 'info']
+Options: {'gamedrive', 'forcelgadd'}
+depot: 4.0.20260805.254769
+pressure-vessel: 0.20260805.0
+pressure-vessel-arm64: 0.20260805.0
+steamrt4: 4.0.20260805.254769 steamrt4 4.0.20260805.254769
+Kernel: Linux 7.2.10-gentoo x86_64
+ntsync: up and running.
+31956.031:0028:002c:trace:seh:install_bpf Installing seccomp filters.
+31956.031:0028:002c:trace:seh:check_bpf_jit_enable enabled 0x31.
+31956.051:0030:0034:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31956.051:0030:0034:trace:seh:install_bpf Seccomp filters already installed.
+31956.069:003c:0040:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31956.069:003c:0040:trace:seh:install_bpf Seccomp filters already installed.
+31956.087:0064:0068:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31956.087:0064:0068:trace:seh:install_bpf Seccomp filters already installed.
+31956.646:007c:0080:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31956.646:007c:0080:trace:seh:install_bpf Seccomp filters already installed.
+31956.667:0098:009c:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31956.667:0098:009c:trace:seh:install_bpf Seccomp filters already installed.
+31961.370:0020:0024:trace:seh:install_bpf Installing seccomp filters.
+31961.370:0020:0024:trace:seh:check_bpf_jit_enable enabled 0x31.
+31961.472:00d8:00dc:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31961.472:00d8:00dc:trace:seh:install_bpf Seccomp filters already installed.
+31961.576:00e0:00e4:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31961.576:00e0:00e4:trace:seh:install_bpf Seccomp filters already installed.
+31961.771:00f0:00f4:trace:seh:sigsys_handler SIGSYS, rax 0xffff, rip 0x600000000005.
+31961.771:00f0:00f4:trace:seh:install_bpf Seccomp filters already installed.

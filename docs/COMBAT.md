@@ -1,0 +1,517 @@
+# PhantomRing combat (phase 3)
+
+DESIGN.md §8 made concrete: Snake's shots, CQC and explosions hurt Elden Ring characters through Elden
+Ring's own pipeline; Elden Ring's hits drain Snake's MGSV life; Snake's death is the Tarnished's death
+(YOU DIED, grace respawn) and the respawn refills Snake.
+
+Status: **live with both games** (2026-10-12, §8 has the numbers): real MGSV shots, CQC and D-Walker's
+flamethrower hurt, stagger and kill Elden Ring enemies (kills give runes), Elden Ring's hits drain Snake's life,
+Snake's death is YOU DIED and the respawn refills him. Every game address is verified against the exe on disk
+(`verify_er_addresses.exe`: 67/67). Every param row and field offset the host patches is checked against this
+game's `regulation.bin` (`test_host_combat`). The original live test plan is §6.
+
+## 1. What happens where
+
+| Event | Guest (MGSV) | Host (Elden Ring) |
+|---|---|---|
+| a round leaves Snake's gun | ShotSolver hook: `kGEvFire` (muzzle, direction, weapon, ammo kind, pellets, `pad[0]` = bulletId \| 0x80000000 explosive) | anchor-mapped ray: ER's world ray gives the first wall, ray-vs-capsule over every character nearby gives the first body before it → hit effect → applied (§2) |
+| D-Walker fires | `kGEvBuddyFire`; its flamethrower (no rounds): ~8 events/s while it burns, `pad[1]` = reach (12 m) | same, × `buddy_mult`; flame: a stream as long as the reach, bodies within 0.6 m of it burn, **fire** damage (ER's fire absorption, its burning VFX) |
+| CQC strike | attack-serial poll: `kGEvMelee` (strike sphere, facing, kind) | the nearest hostile the sphere touches, or in reach (`melee_range`) inside the arc (`melee_arc_deg`) in front of Snake |
+| grenade/rocket | `kGEvThrow` / `kGEvPlaced` (v5), then `kGEvExplosion` (pad[1] = its id; kind = lethal/sleep/stun/smoke), or an explosive round's hit point (gun-fired) | our copy flown through ER's world / the mine kept where it lies (HOST.md); every hostile inside the blast, damage falling to 25% at the edge; ER enemies near a mine -> `kHEvDetonate` |
+| ER hits the puppet | (receives `kHEvHurt`) life −= amount × `LifeScale`; camera shake + blood (`HurtFeedback`) | `ReceiveDamage` hook lets ER compute the hit at full HP, puts the HP back and sends `kHEvHurt`: the share of the Tarnished's max HP it took, as a share of Snake's life (`hurt_share`; melee/projectile by attacker distance, direction in MGSV world); poison/fall/other HP loss: HP-delta check, same share |
+| a hard landing | (receives `kHEvHurt`, kind fall) | kinematic motion: host computes it from the landing speed (`fall_damage`); ER's own fall damage for the same landing is ignored |
+| Snake's life would hit 0 | kept at 1, `kGEvDied` once (latched) | NoDead/NoDamage dropped, `ChrIns::Kill` → YOU DIED → respawn → `kHEvRespawn`; kill verified (retried, else Snake is refilled) |
+| ER respawn | refill to lifeMax, unlatch | `kHEvRespawn` on dead → alive |
+| HP bar | — | puppet HP = max(1, round(max HP × life / lifeMax)) every frame (`mirror_life`); hits measured at full HP, the mirrored HP put back |
+| ER heals the puppet (grace rest, regeneration) | (receives `kHEvHeal`, v3) life += amount × `LifeScale` -- **not yet in mgsv/** | HP above last frame's mirror -> `kHEvHeal` with the same share of Snake's life (`forward_heals`) |
+
+## 2. How a hit is applied in Elden Ring (`er/Combat.cpp`)
+
+**Targets.** `WorldChrMan`'s by-distance list; each character is an upright capsule from its feet with
+the physics module's hit height/radius (`CSChrPhysicsModule+0x2F0/+0x2F4`, loaded from NpcParam
+`hitHeight/hitRadius`; `+0x2E0/+0x2E4` second; `[Combat] capsule_*` last). **Hostility** is Elden Ring's
+own: `ChrIns::GetTeamType` (team + SpEffect overrides, `0x3F1C90`) for both, then the static
+`CSTeamTypeBase* [79][79]` relation table that `0x51B5D0` indexes (`0x3B283F0`): hostile when the entry
+is `CSTeamTypeEnemy` or `CSTemaTypeRival` (sic). Read offline, the Tarnished (team 1) may attack teams
+6–9, 11, 12, 16–22, 24, 25, 27, 29, 31–45, 48–77, and not 0–5, 10, 13–15, 23, 26, 28, 30, 46, 47.
+`[Combat] targets = all` ignores this.
+
+**Damage, poise, sleep** (`er/CombatLogic.cpp`, unit-tested):
+
+- **Damage is counted in MGSV soldiers' lives** (2026-10-12; `combat::ShotEffect`): a hit is worth a share of one
+  standard MGSV soldier's life -- **MGSV's own number** when the guest sends it (protocol v8: `kGEvFire` pad[1] = the
+  round's lethal damage on a body hit / the soldier's life × 10000, per pellet; × `share_mult`), else the class value
+  (handgun 13, magnum 30, rifle 17, battle rifle 20, MG 15, sniper 55, buckshot 6/pellet, slug 40, heavy 60, explosive 70,
+  unknown 15, stun 1 (+ 40 poise), tranquilizer 0) / `units_per_life` (40: a handgun round 0.33 of a life, a rifle round
+  0.43, a sniper round 1.4). Stun, flame and explosive rounds keep their class rules.
+- × the target's **reference HP**: its max HP for an ordinary enemy, so a soldier dies to as many hits as in MGSV
+  wherever he stands in Elden Ring (Elden Ring scales max HP with the area; measured against the Tarnished's own max HP
+  -- read every frame -- a late-game soldier is as ordinary as a Limgrave one). Bigger ones are worth more lives:
+  bigness t = 0 up to `big_from` (1.5) × the Tarnished's max HP, 1 from `boss_from` (5) ×, log-interpolated between;
+  reference = max HP / `boss_lives`^t (70: a 3000 HP field boss against a 522 HP Tarnished takes 18 per rifle round,
+  an assault-rifle magazine ~18%). Bosses are recognised by their HP, not by the boss bar (its entries, CSFeMan
+  +0x5BF0, are unverified). Elden Ring's guard reductions still apply (the top-up scales by what got through, below).
+- Headshot: hit above `head_fraction` of the capsule height: × `headshot_mult` (4.5 on an ordinary enemy: MGSV's
+  headshots kill) down to `headshot_mult_boss` (1.5) with t, and at least a medium flinch. A lethal headshot (not stun,
+  not flame) on an ordinary enemy also takes at least `headshot_min_lives` (1.05) of a soldier's life, × (1 - t): none
+  on a boss. Without it the assault rifle's own share (0.2115 × 4.5 = 0.95 of a life) left a Limgrave soldier at 11 HP.
+- Targets met with MGSV's own shares: assault rifle 5 body hits / 1 head on a Limgrave soldier (219 HP: 0.2115 -> 46 a
+  hit; head 230), handgun 4, sniper (0.71) 2 / 1, field boss ~10-20% a magazine (tested). VERIFIED live with both games
+  (2026-10-12 evening): five body hits `hp 219 -> 177 ... 35 -> 9 (wanted -46)` and dead; one headshot `HEADSHOT ...
+  bullet 230` on a 219 HP soldier: dead.
+- Tranquilizer: no damage, sleep build-up: `tranq_share` (head: `tranq_share_head`) of the target's own sleep resistance
+  (`tranq_sleep` / `tranq_sleep_head` when it can't be read). CQC choke: `choke_share`. Sleep gas: `gas_share` per MGSV
+  report (every 0.5 s). Stun rounds: a token of damage, heavy poise, the large flinch. Stun and sleep never kill (`nonLethal`:
+  our part of their damage stops at 1 HP, and so does Elden Ring's: `combat::NonLethalCorrection` caps the hit bullet's
+  AtkParam correction so that even kNonLethalSpread (1.6) × a full hit of that enemy's reference HP leaves 1 HP -- 0% at
+  2 HP or less, the sleep correction when there is no damage at all. A stun grenade's fixed 15% used to kill a target at
+  1 HP: Elden Ring never clamps its own hits).
+- CQC: punch/kick damage + `melee_strike_poise`; throw: `melee_throw_poise`, large flinch.
+
+**Routes** (`[Combat] route`):
+
+- `bullet`: a bullet **owned by the Tarnished** is spawned 0.6 m in front of the hit point, aimed through
+  it, with the victim as its target (`CSBulletManager::SpawnBullet 0x3A2CB0`; spawn data per
+  fromsoftware-rs: owner handle, bulletId, magic/goods/behavior/dummy-poly −1, target handle, forward
+  vector, position; `0x38E220`/`0x38E550` confirm that magic = goods = −1 means a plain bullet with
+  no spell or item scaling). The row is `bullet_id` (10170000, the Throwing Dagger's); its AtkParam_Pc row
+  (10170000) gets this hit's `atkPhys` or `atkFire` (flame), the matching corrections, `atkStam` and
+  `atkSuperArmor` (poise, correction 100) and `dmgLevel` written just before the spawn.
+  The flight effect is hidden (`bullet_hide_sfx`). Elden Ring then does the rest: hit reaction, poise,
+  stagger, aggro on the Tarnished, guard, its own defence and absorption, runes for a kill. Those rows only
+  change while the puppet is active (the player can't throw daggers then), and every byte goes back when the
+  puppet stops. Two bullets in flight in the same frame share the last numbers written (one target per
+  shot, so this only blurs shotgun blasts or explosions on a crowd).
+  - **Elden Ring ignores `atkPhys` for this bullet** (VERIFIED live): the row's `atkBehaviorId` is 0, i.e. the
+    attack comes from the Tarnished's own weapon × the row's correction. A 38-, 190- and 714-attack bullet all
+    dealt ~42 HP to a 219 HP Gatefront soldier (63 on a counter hit), a blocked one 5. So **`top_up`** (on):
+    once ER has applied its hit (`verify_ms`, 300), the rest of the wanted damage is added with
+    `CSChrDataModule::ChangeHp` / `ChrIns::Kill` on the frame after ER's hit lands (pending hits are looked at every
+    frame; VERIFIED live: 31-49 ms after the spawn, it was `verify_ms` = 300 ms for every hit) -- scaled by how much of a normal hit got through
+    (`combat::TopUp`: ER's largest damage of one of our bullets on this kind of enemy is the reference; half of
+    it or more counts as unblocked, less as guarded and lets that share through). Kills this way give runes
+    (VERIFIED: +64 for a soldier). Wanted damage below the reference (stun rounds, flame) flies with a
+    proportionally lower correction so ER's own hit never exceeds it (a stun round: ER 1 HP + 4 topped up).
+  - Blasts (explosive rounds, `kGEvExplosion`) come down on each target from above, not from the blast centre:
+    a raised shield faces the shooter.
+  - **One row for every bullet** (`combat::MayFly`): all hit bullets share one patched AtkParam_Pc row, and ER
+    most likely reads it when the bullet lands (UNVERIFIED), so a bullet only flies next to bullets in flight with the
+    same numbers, and only one with damage per target (the top-up measures a target's HP loss against its pending
+    bullet). The others take the `hp` route at once (`N hp (M while a bullet flew)` in `combat`): a blast's
+    other targets and a shotgun's other pellets get their damage but no ER reaction. An HP-route hit on a target
+    whose bullet already landed keeps what ER had dealt for the top-up.
+- `hp`: `CSChrDataModule::ChangeHp` (with Kill's own arguments) or `ChrIns::Kill` at 0. Always lands. No
+  reaction, no aggro. A lethal hit first asks `ChangeHp(0)`: Elden Ring holds an event-immortal boss or NPC at
+  1 HP there (NoDead bits, data+0x19A bit 7, SpEffect states 0x8F/0xEB; VERIFIED in Ghidra), and only what reaches
+  0 is killed (`ChrIns::Kill` marks anything dead). Same for the top-up and the fallback.
+- `auto` (default): `bullet`, verified per hit. Did the target lose HP (or die) within `verify_ms`? Until
+  one bullet lands, each miss also gets the `hp` damage. `verify_failures` misses in a row switch to `hp`
+  for the session (`combat route bullet` retries). Once a hit lands the route is **confirmed** and misses
+  stay misses (a block or a dodge is ER's call). Landed hits also measure how much of the wanted damage
+  ER actually dealt (`combat` shows it); tune `bullet_damage_mult` with that number.
+- **Sleep rides on the hit bullet** (player report: "sleep grenade did not work at all"): its BulletParam `spEffectId0..4`
+  get rungs of ER's own sleep build-up ladder, SpEffectParam 25000 + n − 1 = n × 10 (10..200; stateInfo 436 = sleep,
+  checked at run time; more than 200 takes several slots), as Elden Ring's own sleep bullets do (Bullet 2270260 -> 25006;
+  the Sleep Pot's mist -> 500640). A sleep-only hit flies with AtkParam correction `sleep_correction` = 0: no damage, no
+  flinch, and the build-up still lands. VERIFIED live: `ChrIns::ApplySpEffect` of a build-up row (25019 twice, the
+  self-targetable 1885 three times) built **nothing** on a soldier (the old route: every sleep the logs counted since
+  phase 3 did nothing), and the AtkParam's own `spEffectId` slots didn't either; the bullet's slots do.
+- **The amount is a share of the target's resistance** (`CSChrResistModule`, `[modules+0x20]`, VERIFIED live on a
+  Gatefront soldier): `+0x2C` i32[7] the thresholds (poison, rot, bleed, death, frost, **sleep**, madness: 169 169 226 999
+  226 226 2015 -- NpcParam's 112 with Limgrave's scaling), `+0x10` i32[7] what is left before each procs (the sleep entry
+  fell 226 -> 151 -> 4 under the gas, then the soldier slept and it reset to the raised threshold 268: `resistCorrectId`).
+  999 = immune (none given). So 2 body darts (0.6), 1 head dart (1.1), a choke (1.1) or ~3 s of gas (0.2 per report) put an
+  enemy to sleep whatever its area or how often it already slept.
+- **One blast, one set of numbers** (`combat::StunBlastEffect` / `GasBlastEffect`): every hit bullet shares one patched row
+  and only identical numbers fly together (`MayFly`), so a stun grenade gives everyone inside the centre's stagger (MGSV's
+  flash doesn't fall off) with a fixed correction (15), and a sleep-gas puff one build-up for everyone: `gas_share` of the
+  largest known resistance among the enemies inside (immune ones still get nothing). Before, only the first target's
+  bullet flew; the others went to the HP route (no stagger) or lost the sleep. VERIFIED live (both games, three Limgrave
+  soldiers of resistance 169 and 197 in one cloud): +39 each per puff, 68 sleep build-ups, 0 lost, three of them slept.
+  `HitKey` keeps the sleep sum in 10 bits (up to 1023; the default ladder tops at 1000); more never shares the row.
+- Rate limit: `max_hits_per_second` token bucket. Drops are counted.
+
+**Params at run time** (`er/Params.cpp`): `SoloParamRepository` (`0x3D85F58`, vtable
+`CS::SoloParamRepositoryImp`) → holder (`+0x80 + 0x48·i`) → `CS::ParamResCap` (vtable checked, name at
+`+0x08`) → `+0x80` FD4ParamResCap → `+0x80` ParamFile. A table is used only if its resource name (or,
+failing that, fromsoftware-rs's holder index), struct name and row stride all match. Offsets:
+`tools/re/er_params.py fields <STRUCT>`.
+
+## 3. Ini flags
+
+### Host: `PhantomRingHost.ini`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `[Puppet] hit_hook` | **true** (was false) | ER hits on the puppet are caught in `CSPlayerDamageModule::ReceiveDamage` (instance-vtable swap, slot 7) and cancelled: no HP loss, no stagger. Forwarded as `kHEvHurt`. Set false if the first enemy hit misbehaves. HP-delta detection stays on for poison and falls. |
+| `[Puppet] kill_on_guest_death` | true | Snake's death kills the Tarnished (YOU DIED). false: no ER death; the host refills Snake at once (`kHEvRespawn` 1), so his collapse ends and later deaths are reported again (UNVERIFIED live). |
+| `[Puppet] mirror_life` | true | HP bar = Snake's life fraction. |
+| `[Puppet] forward_heals` | true | Elden Ring heals on the puppet raise Snake's life by the same share (`kHEvHeal`); false = the mirror puts the HP back. |
+| `[Combat] damage` | true | Off: shots are only traced and logged. |
+| `route` | auto | auto \| bullet \| hp (§2). |
+| `targets` | hostile | hostile (ER's team relation) \| all. |
+| `bullet_id`, `bullet_hide_sfx`, `bullet_offset`, `bullet_damage_mult` | 10170000, true, 0.6, 1.9 | bullet route row, flight effect, spawn distance before the hit, atkPhys = damage × this |
+| `top_up` | true | complete the wanted damage with ChangeHp after ER's own (weapon-based) bullet damage (§2) |
+| `verify_ms`, `verify_failures` | 300, 3 | how long a bullet may take to land before it counts as a miss (a landed hit is topped up the next frame) |
+| `units_per_life` | 40 | class units in one soldier's life (when MGSV sends no share) |
+| `big_from`, `boss_from`, `boss_lives` | 1.5, 5, 70 | max HP / the Tarnished's: ordinary up to big_from, a boss (worth boss_lives soldiers) from boss_from |
+| `share_mult` | 1 | × MGSV's own damage share (v8) |
+| `head_fraction`, `headshot_mult`, `headshot_mult_boss` | 0.82, 4.5, 1.5 | headshots (ordinary → boss) |
+| `headshot_min_lives` | 1.05 | a lethal headshot on an ordinary enemy takes at least this many soldiers' lives (none on a boss) |
+| `buddy_mult`, `max_damage` | 1, 9999 | D-Walker rounds; cap per hit |
+| `tranq_share`, `tranq_share_head`, `choke_share`, `gas_share` | 0.6, 1.1, 1.1, 0.2 | sleep build-up as shares of the target's sleep resistance (§2) |
+| `tranq_sleep`, `tranq_sleep_head`, `choke_sleep`, `gas_sleep` | 80, 200, 200, 40 | the same, absolute, when the resistance can't be read |
+| `sleep_correction` | 0 | AtkParam correction (%) of a sleep-only hit (0: no damage, still lands) |
+| `stun_poise_mult` | 1 | stun rounds' poise |
+| `sleep_speffect_base/step/count` | 25000, 10, 20 | the sleep ladder |
+| `melee_punch/kick/throw`, `melee_throw_poise`, `melee_strike_poise` | 5, 7, 4, 80, 25 | CQC values (MGSV units, poise) |
+| `melee_range`, `melee_arc_deg` | 1.6, 60 | CQC reach / half angle |
+| `explosion_radius` | 4 | blast radius when none is reported |
+| `max_hits_per_second` | 30 | rate limit |
+| `capsule_radius`, `capsule_height` | 0.5, 1.8 | fallback capsule |
+| `fall_damage` | auto | auto (host computes it with kinematic motion; with root_motion ER does) \| host \| off |
+| `fall_hurt_speed`, `fall_lethal_speed` | 12.5, 19.8 | m/s at landing (~8 m hurts, ~20 m kills; ≥ 10% once it hurts) |
+| `guest_life_scale` | 4 | must equal the guest's `LifeScale` (fall damage is sent in ER units) |
+| `hurt_share`, `hurt_mult` | true, 1 | ER's hits cost Snake the share of his life they'd cost the Tarnished (44 of a 522 HP Tarnished = 8.4% of Snake's 7801); false = raw ER damage (× `LifeScale`: 2%, regenerated in under a second) |
+| `explosion_fx` | auto | explosion visuals (§9): auto \| bullet \| sfx (no verified call: off) \| off |
+| `explosion_lethal/stun/sleep/smoke` | 10030001, 10035001, 10064001, `10033001 300192` | each look: BulletParam burst row [+ effect id instead of its own] |
+| `explosion_flame`, `explosion_breaker`, `explosion_shrapnel` | 10700000, 10030000, 10030000 | D-Walker's flames (Dragonfire), the breakers (the flying Fire Pot) |
+| `explosion_carriers` | 10048000, 10048001, 10302000 .. 10302004 | cut-content rows the looks are copied into (lethal, stun, sleep, smoke, flame, breaker, shrapnel; 4 = an older ini) |
+| `explosion_max_bursts`, `explosion_per_second`, `explosion_cloud_repeat`, `explosion_cloud_life`, `explosion_ground` | 7, 40, 2.5, 6, true | bursts per blast, per second; s between two bursts of one cloud; s one cloud burst lasts; drop onto ER's ground |
+| `explosion_max_live` | 48 | our effect bullets alive at once (Elden Ring's pool is shared; also capped by its own emitter/bullet counts) |
+| `break_objects`, `breaker_atk`, `breaker_obj_attack`, `explosion_atk`, `explosion_obj_attack` | true, 10048000, 10, 10048001, 100 | destructible assets (§9): the object-only AtkParam_Pc rows and their atk_obj |
+| `breaker_radius`, `breaker_speed`, `breaker_lead`, `shrapnel_count`, `breaker_hits_characters`, `explosion_breaks`, `breaker_per_second` | 0.15, 25, 0.6, 8, true, true, 20 | breaker size, speed, run-up; shrapnel per lethal blast; rate |
+| `round_flight`, `round_speed_rocket`, `round_speed_grenade` | true, 16, 80 | explosive rounds fly (m/s) from Snake's muzzle (§9) |
+| `round_speed_rocket_boost`, `round_rocket_boost_after` | 60, 1 | a rocket's motor: from 16 to 60 m/s over 0.3 s after 1 s (docs/HOST.md "Rocket motor") |
+| `flame_fx`, `flame_per_second`, `flame_speed` | true, 6, 14 | D-Walker's flamethrower drawn with Elden Ring flames |
+| `[Puppet] motion`, `catch_up`, `unstick`, `unstick_seconds` | root_motion, 0.6, true, 0.5 | docs/HOST.md "Motion" |
+| `[Stealth] box_hide`, `speffect`, `still_speed`, `slow_speed`, `slow_grace`, `reveal_distance` | true, 20004999, 0.4, 1.8, 1.5, 2 | the cardboard box (docs/HOST.md) |
+| `[Stealth] poster`, `poster_range`, `poster_stare`, `poster_cooldown` | true, 15, 4, 12 | enemies stop and stare at a poster box |
+
+### Guest: `PhantomRingGuest.ini [Combat]`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `LifeScale` | 4 | MGSV life per ER damage point |
+| `NativeLifeWrite` | true | life written to `vars.playerLife` |
+| `HurtFeedback` | true | `Player.RequestToSetCameraNoise{levelX, levelY, time, decayRate}` per hit (keys read from the exe at `0x1409DAE50`). MGSV's camera is ER's camera, so the shake shows in Elden Ring. Level 0.15–1 and time 0.25–1.2 s grow with the share of life lost. |
+| `HurtBlood` | true | `Player.SetBloodToModel{pos = Vector3, radius}` (`0x1409DD4E0`) at Snake's chest on the side the hit came from. It shows on the captured model once rendering picks it up. |
+| `NativeShots`, `FireFromAmmo`, `Melee`, `TranqWeapons`, `StunWeapons` | — | unchanged (GUEST.md) |
+| `Blasts` | true | Snake's thrown and placed explosives as `kGEvExplosion` (GUEST.md 18.5) |
+
+**Explosions: one route per explosive (guest, protocol v4).**
+
+- **Thrown / placed** (hand grenades, sleep / stun / smoke grenades, molotovs, C4, claymores, mines): `kGEvExplosion`
+  from MGSV's attack-area system, `v0` = the blast centre in MGSV world (where it went off in MGSV's flat sandbox: map it
+  through the anchor like Snake), `b` = MGSV's own radius in mm (hand grenade 7000, sleep gas 9000, smoke 8000),
+  `a` = `AmmoKind`:
+  - `kAmmoLethal`: one event per blast;
+  - `kAmmoTranq`: the sleep **gas cloud**: one event at impact and one every **0.5 s while the cloud lasts (~12 s, ~24
+    events)**: apply a small sleep build-up per event to everything inside (the host's `Blast` gives `tranq_sleep / 4`);
+  - `kAmmoStun`: stun grenades / net mines: stagger, no real damage;
+  - `kAmmoSmoke`: smoke and flares, every 0.5 s for up to a minute: **no damage** (the host ignores them).
+  `pad[0]` = MGSV attack id | class << 16 | owner << 24 (log it).
+- **Gun-fired explosive rounds** (ZORN-KP grenades, rockets, under-barrel and grenade launchers, missiles): only the
+  `kGEvFire` with the explosive bit in `pad[0]`; blast where the round hits in Elden Ring's world. MGSV's own blast of
+  that round (e.g. `ATK_10603` for the ZORN-KP, 37 m away on MGSV's apron) is never sent: no double count (VERIFIED live).
+
+**Damage share (guest, protocol v8, `kGEvFire pad[1]`; VERIFIED live 2026-10-12).** Every round Snake fires carries MGSV's own
+lethal damage of one body hit as a share of a standard MGSV soldier's life, in 1/10000 (10000 = one hit kills; more = more than
+one soldier's life; 0 = nothing lethal or unknown: use the per-class table). Shotguns: per pellet (`b` pellets each carry it);
+explosive rounds: the round's own attack (the blast it makes in MGSV has the same attack id).
+
+- Where it comes from (`mgsv/Combat.cpp`, `Addresses.h` "damage parameters"/"soldier parameters", byte-checked at install):
+  the WeaponState's u16 at `+0x224` is the round's attack id (`TppDamage.ATK_*`); MGSV's damage table (`TppDamage.
+  ReloadDamageParameter`, 489 rows of 26 bytes at `0x142A1A130 + 8`) gives its lethal (life) damage in row u16 [0], the
+  non-lethal (stun/sleep) damage in [1] and the damage source (weapon class) at +0x16; the soldier's life is the
+  `lifeParameterTable` maxLife of `TppSoldier2.ReloadSoldier2ParameterTables` (live: **2600**; stamina 3000, limbs 1500,
+  armour 7500, helmet 500). Share = round(lethal x 10000 / 2600).
+- Which column is lethal is read off the table (UNVERIFIED by code: its consumers go through the hub's service table): tranquilizer
+  and stun rows have 0 there and their damage in [1]; lethal rows scale with the weapon class; grenades are above a soldier's life.
+- Headshots, limbs and armour are not in the share (MGSV handles them with other columns and the soldier's limb/helmet/armour life):
+  the host keeps its own headshot rule.
+
+| Weapon (equip) | bullet | attack id | lethal / non-lethal | class | pad[1] | MGSV: body hits to kill |
+|---|---|---|---|---|---|---|
+| WU S.PISTOL tranquilizer (7, the new default handgun) | 10 BL_HgTranq | 325 | 0 / 750 (sleep) | 1 handgun | 0 | never (sleep) |
+| S1000 AIR-S stun shotgun (871, the save's primary) | 22 BL_12GAAir | 383 ATK_40126 | 0 / 3000 (stun = a soldier's whole stamina) | 4 shotgun | 0 | never (knocks out in 1) |
+| ZORN-KP grenade pistol (875) | 23 BL_HgGrenade (explosive) | 347 | 2600 / 0 | 5 grenade launcher | 10000 | 1 |
+| CGM 25 rocket launcher (873) | 59 (explosive) | 443 | 2200 / 0 | 8 missile | 8462 | 2 |
+| EQP_WP_West_ms_010 FB MR R-LAUNCHER (54, the default `Primary2`) | 46 (explosive) | 432 | 3500 / 0 | 8 missile | 13462 | 1 |
+| EQP_WP_East_ar_010 assault rifle (36) | 15 | 364 ATK_30001 | 550 / 0 | 3 assault rifle | 2115 | 5 |
+| EQP_WP_West_sr_010 sniper rifle (41) | 37 | 412 | 1850 / 0 | 6 sniper | 7115 | 2 |
+| D-Walker's flamethrower | (no rounds) | ATK_WalkerGear_Flame 150 | -- | -- | (kGEvBuddyFire pad[1] = reach) | -- |
+
+  The per-weapon rows of the table (attack ids 319-488) by damage source, lethal per hit (-> share): 1 handgun 400-1900
+  (1538-7308), 2 SMG 400-500, 3 assault rifle 400-680 (1538-2615), 4 shotgun 450-3100 per pellet, 5 grenade launcher 2600
+  (10000), 6 sniper 1200-2100 (4615-8077), 7 MG 550-680, 8 missile 2100-4000 (8077-15385), 9 (heavy) 2600-4000, 10 grenade
+  4500-5600; non-lethal rows 0 lethal and 400-3500 stun/sleep in [1] (the sleep and stun rounds: pad[1] = 0, the ammo kind tells
+  the host). **Player report "the gun does very little
+  damage" (session 4):** the gun was the save's S1000 AIR-S, a *stun* shotgun (no lethal damage in MGSV at all; it knocks soldiers
+  out); the 13-per-hit numbers in that log were D-Walker's flamethrower.
+
+**Rocket flight (guest, for the host's own copy):** MGSV's CGM 25 round (bullet 59) fired level along MGSV +x set off its blasts
+1.16 s after the shot 19 m on, then along its line to 150 m by 3.5 s (two shots, identical): flight time ~0.8 s + distance / 60 m/s.
+The guest still sends only the `kGEvFire` at the moment of the shot (no rocket position: MGSV's projectile isn't tracked); a host that
+wants a visible flight can delay the impact by that much (`rocket_shots.prrec`).
+
+## 4. Dev console
+
+```
+pr er combat                         route + verification state, ER-dealt %, counters, param tables
+pr er "combat targets"               the 16 nearest characters: npc, team, HOSTILE/friendly, hp, capsule,
+                                     and (puppet on) the yaw/pitch to aim fake_mgsv's !fire at them
+pr er "combat hit <n> [dmg [poise]]" a hit on character n through the current route (no aiming needed)
+pr er "combat sleep <n> [power]"     sleep build-up on character n
+pr er "combat team <n>"              team of n, the Tarnished's, and whether ER calls it hostile
+pr er "combat resist <n>"            n's resistance module: what is left before each status procs, the thresholds
+pr er "combat effects <n>"           n's active SpEffect ids;  "combat speffect <n> <id>": ApplySpEffect directly (diagnostics)
+pr er "combat hit|sleep <n> ... above"   the bullet comes down on top of n (a raised shield can't take it)
+pr er "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction <v>"   live tuning
+pr er "combat route auto|bullet|hp|ini"
+pr er "boom lethal|stun|sleep|smoke [radius]"   an explosion visual 5 m in front of the Tarnished (§9); `boom` = status
+pr er "boom mode auto|bullet|sfx|off|ini"       `boom restore` puts the carrier rows back now
+pr er status                         the puppet line includes host falls and "DYING for Snake"
+```
+
+fake_mgsv (`pr fake-mgsv`, guest console `pr lua '!…'`): `!walk on|off`, `!autofire on|off`,
+`!fire <lethal|handgun|rifle|sniper|buck|tranq|stun|explosive> [n] [yaw_deg] [pitch_deg]`,
+`!cqc <punch|kick|throw|choke>`, `!blast [radius]`, `!die`.
+
+## 5. Files
+
+- Explosion visuals (§9): `er/ExplosionLogic.{h,cpp}` (pure), `er/Explosion.{h,cpp}`, `er/BulletSpawn.h` (SpawnBullet's
+  argument block, shared with `er/Combat.cpp`).
+- Thrown / placed explosives (v5/v6): `er/ThrowLogic.{h,cpp}` (pure: flight, bounce, roll, the aiming arc),
+  `er/Throw.{h,cpp}`, `er/Mines.{h,cpp}`, `er/RenderMarkers.{h,cpp}` (+ the marker pipeline in `er/Renderer.cpp`,
+  shaders in `er/Shaders.cpp`), `er/WorldShift.{h,cpp}`; tests `tests/test_host_throw.inc` (in test_host_combat).
+- Host: `er/CombatLogic.{h,cpp}` (pure), `er/Params.{h,cpp}`, `er/Combat.{h,cpp}`, `er/Events.cpp`
+  (dispatch), `er/Puppet.cpp` (death/respawn, fall damage, patch restore), `er/HitHook.*` (unchanged
+  logic, on by default), `er/Config.*`, `er/PhantomRingHost.ini`.
+- Shared, a few lines: `er/Addresses.*` (12 entries), `er/Console.cpp` (`combat`),
+  `protocol/phantomring_protocol.h` (comments documenting `GuestEvent.pad[0]` for Fire/Melee; no
+  layout change, still v2), `CMakeLists.txt` (`test_host_combat` in `check_host`).
+- Guest: `mgsv/Logic.*` (`FeedbackFor`, `KindOfBullet` moved here), `mgsv/Combat.*`, `mgsv/Frame.cpp`
+  (queues `hurt`), `mgsv/GuestScript.cpp` (`PR.Hurt`), `mgsv/Config.*`, `mgsv/PhantomRingGuest.ini`.
+- Tests: `tests/test_host_combat.cpp` (+ the real-regulation checks when `build/er_params` exists),
+  `tests/test_guest_logic.cpp`, `tests/test_guest_script.lua`, `tests/test_guest_link.cpp`.
+- Tools: `tools/re/er_params.py` (decrypts `regulation.bin`, dumps/greps params with fromsoftware-rs's
+  layouts; `ids Bullet` once fills `build/er_params` for the test), `tools/phantomring/fake_mgsv.py`.
+
+## 6. LIVE TEST (for the lead)
+
+Build (`cmake --build build`, under the build lock) and run `check_host`/`check_guest`. To also run the
+real-data checks: `python3 -I tools/re/er_params.py ids Bullet`, which writes `build/er_params`. Then `pr
+launch` copies the new DLLs and ini as usual. Keep `[Debug] debug = true` in the host ini for the
+first run (bullet-landed lines and hit-hook lines are debug after the first 120 Info lines). Stand the
+saved character somewhere with weak enemies in reach: Limgrave soldiers, wandering nobles, or a camp.
+
+### Stage A: Elden Ring only, with fake_mgsv (no MGSV needed)
+
+1. `tools/pr launch --er-only` and get past the title (HOST title automation). Then run `tools/pr fake-mgsv`
+   in a second terminal. Wait for `puppet ON`. Run `pr lua '!walk off'` and `pr lua '!autofire off'`
+   (Snake stands still; the puppet keeps the Tarnished's facing).
+2. `pr er "combat targets"`. Enemies show as `HOSTILE` with a capsule of radius ~0.4–0.7 and height
+   ~1.4–2.4 `(hit)`. Merchants/spirit ashes show `friendly`. If every capsule says `fallback`, the
+   physics offsets are wrong (check `peek [[[chr]+0x190]+0x68]+0x2F0 f32 2`).
+3. `pr er "combat hit 0 60 30"` on a hostile one. Expect, within a second:
+   - H-log `params: Bullet = holder 10 (name 'Bullet', 15475 rows ...)` and the same for AtkParam_Pc
+     (holder 8) and SpEffectParam (15);
+   - `combat: console hit -> npc … : bullet 60 poise 30 lv 2`;
+   - **the enemy flinches and turns on the Tarnished**;
+   - `combat: bullet on … landed: hp X -> Y` and `combat: bullet route CONFIRMED`.
+
+   `pr er combat` then shows `ER dealt N% of the wanted damage`. Set `bullet_damage_mult ≈ 100/N`
+   (ER's defence; the formula already scales by enemy HP). Failure cases:
+   - `SpawnBullet(…) refused (error 3/4)`: try another `bullet_id`;
+   - `did not land … hp fallback`, 3 times, then `switching to the hp route`: the bullet spawned but didn't
+     hit. Try a larger `bullet_offset` (1.2), or `combat route hp` to keep playing. Record the case.
+4. `pr er "combat sleep 0 250 above"` (the puppet must be on: the bullet row is patched): `combat resist 0` shows the sleep
+   entry fall and reset to a higher threshold, and the enemy lies down with Elden Ring's sleep sparkle. `SpEffectParam
+   25019 is not a sleep build-up row` means the regulation changed.
+5. Aimed shots: `pr er "combat targets"` prints `aim <yaw> <pitch>` for each one. Run
+   `pr lua '!fire rifle 1 <yaw> <pitch>'`. Expect a red tracer to the enemy and
+   `Snake rifle (weapon 291 bullet 15 x1) -> npc …`, then the hit lines. Then try `!fire tranq` (sleep
+   only, no aggro), `!fire stun` (big stagger), `!fire buck` (one hit with 8× damage),
+   `!fire explosive` (blast: every hostile within 4 m), `!cqc kick` / `!cqc throw` (enemy within 1.6 m in
+   front) and `!blast 6`. A friendly NPC must never be hurt (`not hostile … no damage` in the debug log).
+6. ER hits the puppet: let an enemy hit it. Expect H-log
+   `hit hook: CSPlayerDamageModule … slot 7 -> PhantomRing` at puppet start, no stagger or HP loss on the
+   Tarnished from the hit, debug `puppet: hit hook N HP … from D m`, and fake_mgsv's log `hurt` counting
+   up with the HP bar following its life. A crash or a frozen enemy on the first hit means
+   `hit_hook = false`; report it.
+7. Death: `pr lua '!die'`. Expect `guest: Snake died`, then `puppet: killed the ER player (ChrIns::Kill)`,
+   YOU DIED, the grace respawn, `ER player respawned`, and fake life back to 6000. If the player doesn't die:
+   `still alive … retrying` ×2, then `would not kill the player … refilling Snake`. Report it.
+8. Fall: `pr er "call setpos <x> <y+25> <z>"` (puppet position from `pr er status`). The puppet re-anchors
+   and falls. Expect `puppet: landed at ~22 m/s -> fall damage 100% … lethal`, then the death sequence of
+   step 7. A 10 m drop (`y+10`) should cost ~20%, 15 m ~65%.
+
+### Stage B: both games (real MGSV)
+
+1. `tools/pr launch`; wait for `host status: ready`, `puppet ON`.
+2. Equip a handgun / AR in MGSV and shoot a Limgrave soldier. You should see tracers, `Snake handgun
+   (weapon N bullet 5 …) -> npc …`, flinches, and death after ~4 body shots or ~2 headshots. If
+   `bullet 0` shows, the ShotSolver hook isn't on: it's the ammo-counter fallback with default damage.
+3. Tranquilizer pistol (WU S.Pistol, bullet 10/11): the enemy falls asleep (head faster) and does not aggro.
+4. CQC: `Snake CQC kind 1 (MGSV attack 7)` for kicks. Note the raw attack ids of punches, throws and
+   chokes from the log so `mgsv/Combat.cpp` can map them (only 7 = kick is known; everything else is
+   sent as a punch).
+5. Get hit: Snake's life drops (`pr lua 'return vars.playerLife'`), MGSV's camera shakes (it is ER's
+   camera too), and the guest log (with `[Guest] Debug = true`) shows `lua: hurt … -> hurt=noise true blood true`. Let him die: YOU DIED,
+   respawn, life refilled.
+
+Report back: the ER-dealt percentage, any bullet route failure, the hit-hook behaviour, and the CQC
+attack ids.
+
+## 7. Known limits / next steps
+
+- One AtkParam row serves all in-flight bullets (last write wins within a frame).
+- Damage: MGSV's own share per round when the guest sends it (protocol v8), else the class table (tuned by feel: MGSV's
+  per-weapon numbers live in Lua equip tables we don't read). The top-up (§2) makes it the damage dealt; ER's own
+  weapon-based hit is only the reaction. Bosses are recognised by max HP against the Tarnished's, not by the boss bar.
+- The top-up lands on the frame after Elden Ring's own hit (31-49 ms after the shot, VERIFIED live; it used to wait
+  `verify_ms`, 300 ms). Applying it inside the enemy's ReceiveDamage would save one more frame but needs a hook on every
+  enemy's damage module; not worth it at 2-3 frames.
+- Guard detection is a heuristic (ER's damage of one of our bullets vs the best seen on that kind of enemy).
+- CQC: punches (80) and the kick (83) are identified; throws and chokes need a live target in MGSV (MGSV runs
+  them only on its own soldiers, and the sandbox has none): Snake's CQC in Elden Ring is strikes only.
+- Thrown and placed explosives (protocol v5/v6): the host flies its own copy of each throw through Elden Ring's world and
+  keeps placed ones where they were put; MGSV's `kGEvExplosion` (pad[1] = the id) is put where our copy is (HOST.md "Thrown
+  and placed explosives"); without an id, as before at MGSV's point through the anchor. `Blast()`: smoke nothing, sleep
+  build-up (`gas_share`), stun stagger (non-lethal), lethal falloff. Grenade rounds from guns stay kGEvFire.
+- Tranquilizer: kGEvFire with `kAmmoTranq` (the BURKOV TB, GUEST.md 18.7). VERIFIED live with fake_mgsv's `!fire tranq` at a
+  Gatefront soldier 18 m away: dart 1 `sleep +136 (resist 226)` (left 226 -> 90), dart 2 -> asleep (threshold reset to
+  268), HP 219 throughout. And with both games (2026-10-12 afternoon): a BURKOV TB from the iDroid's supply drop, two darts
+  in a torch-bearing Limgrave soldier 16.6 m away (`Snake tranquilizer (weapon 875 bullet 10 x1) -> npc 43005210 ...: sleep
+  +101 (resist 169)` twice): asleep (sleep gauge `+0x64` 1, threshold 169 -> 197), HP 96/96.
+- Hits on characters ER's world ray passes through (no collision) still count, through our capsules;
+  walls stop shots. Foliage stops them too when ER's ray hits it (a soldier behind a bush: "-> world").
+- The ActorProxy model (DESIGN §8.1 "later") would replace all of this with MGSV's own ballistics.
+
+## 8. Verified live, both games (2026-10-12, Gatefront / Agheel Lake, Limgrave)
+
+| What | Result |
+|---|---|
+| ZORN-KP grenade round (bullet 23, explosive) at a 219 HP soldier | ER 42-63 HP, +313 topped up: dead in one round, **+64 runes**; flinch/stagger from 80 poise |
+| the same, before the top-up | ER ~42 per round whatever we asked (38/190/714 attack), 5 through a raised shield: 6-8 rounds per soldier |
+| S1000 AIR-S stun round (bullet 22) | ER 1 HP (correction cut to 15%) + 4 topped up = 5, poise 40, dmgLevel 3: big stagger, no kill |
+| CQC (RT unaimed next to a soldier) | `Snake CQC kind 0 (MGSV attack 80)` -> bullet 27, landed 146 -> 120 |
+| D-Walker flamethrower, 3 s on a soldier | 22 flame events, ER 1-2 + 11-12 topped up each (fire): 133 -> 42 HP, ER's burning VFX on him |
+| a soldier's hits on Snake | 43-81 HP on a 522 HP Tarnished -> kHEvHurt 161-303 -> Snake 7801 -> 6648 (MGSV regenerates ~760 life/s after a moment) |
+| Snake killed by a group | `Snake died` -> ChrIns::Kill -> YOU DIED; Snake dives and lies down in MGSV, drawn lying there in ER (`death_visual = keep`); respawn after the load, life 7801/7801 |
+| a mob near a Stake of Marika | "Choose revival location" waits for the player (dead bit already clear): Snake stays down until the respawn load |
+| bullet route | confirmed on the first hit every session; 0 hp fallbacks |
+
+## 9. Explosion visuals (Elden Ring effects at MGSV's blasts)
+
+Player report: "the rocket launcher made sounds and seemed to do damage but no explosion". Elden Ring draws only Snake's and
+D-Walker's meshes; MGSV's effects never reach it. Every blast the host already handles (§3: explosive rounds' impact
+points, `kGEvExplosion`) now also gets an Elden Ring-native effect at the Elden Ring point (`er/Explosion.cpp`,
+`er/ExplosionLogic.cpp`). Damage is unchanged: `Blast()` stays the only source of it.
+
+| MGSV | look (BulletParam burst row, effect) | per burst | repeats |
+|---|---|---|---|
+| lethal: grenades, C4, mines, rockets, grenade rounds (`explosion_radius` for rounds) | Fire Pot burst 10030001, fireball 300122 + its 18 sparks and ground flames (10030002/3, no attack: kept) | 1.6 m | no |
+| stun grenades | Holy Water Pot burst 10035001, golden flash 300182 | 1.4 m | no |
+| sleep gas (~12 s cloud, a report every 0.5 s) | Sleep Pot mist 10064001, effect 300212, 3 s, grows 1 -> 4 m | 4 m | one per `explosion_cloud_repeat` (2.5 s) while MGSV reports it |
+| smoke / flares (up to a minute) | Fetid Pot cloud row 10033001 with the Fetid Pot's own cloud effect 300192 (normally its hit effect at the same point) | 1.4 m | same |
+
+A blast bigger than 1.25 bursts gets a ring around the centre (at most `explosion_max_bursts` = 7 bursts; ring pulled in
+until the bursts touch): a 4 m rocket is a centre + 6 fireballs within ~2.5 m, MGSV's 9 m sleep gas a centre + 6 mists
+6 m out. Points that come from MGSV's world (thrown explosives, clouds) and every ring burst are dropped onto Elden
+Ring's ground with a short ray (`explosion_ground`); explosive rounds' impact points are already on a surface.
+
+**How (route `bullet`, research 2026-10-12, offline).** Elden Ring's pots are bullets: the flying pot (Fire Pot 10030000)
+hits and spawns its burst bullet (10030001: life 0.07 s, hit radius 1.6 m, atk 10030001 = 230 fire), and the burst's
+*flight* effect is the fireball, which outlives the bullet (`bullet_sfx_delete_type_by_life_dead` 0 on every pot burst).
+So spawning a burst row directly at a point plays the pot's explosion there. What hurts is its attack (`atk_id`) and its
+SpEffects (on hit `spEffectId0..4`, on the owner `spEffectIdForShooter`): the copy we spawn has atk 0 and SpEffect 0, the
+way Elden Ring writes its own effect-only rows (the Sleep Pot's mist 10064001 has atk 0; its only effect is SpEffect
+500640, the sleep build-up, which the copy drops). Children are kept only if none of them has an attack or SpEffect (the
+Fire Pot's sparks and flames: kept; the Lightning Pot's bolts: cut). `createLimitGroupId` is cleared (our own caps apply).
+
+The copies live in **carrier rows nothing spawns**: the cut Roped Freezing Pot's (goods 480, `[ERROR]` name: 10048000,
+10048001) and Miranda's Prayer's (goods 3020: 10302000, 10302001) bullets. Across all 183 extracted params, the only
+i32 equal to a carrier id is in those two goods rows and in those bullets' own chains (`test_host_combat` checks it; an
+event script, EMEVD, could still name a bullet id: not checked). So real pots, the throwing-dagger row the hits use, and
+everything the player or enemies throw stay exactly as shipped. The carriers are written once per look (`params::Patch`,
+the same undo as §2) and go back when the puppet is off and the last burst has had `life + 8 s` to play out (a 3 s mist
+still reads its row), or with `boom restore`.
+
+Spawned with `CSBulletManager::SpawnBullet` (0x3A2CB0, verified on every start, live-proven by the hit route), owned by
+the Tarnished, no target (-1), level, facing away from him. No new address. Caps: `explosion_per_second` (40) bursts per
+second, clouds gated per spot and kind.
+
+**`sfx`**: a direct effect spawn (CSSfxImp / GXFfxSceneCtrl). fromsoftware-rs has the structures (`cs/sfx.rs`,
+`debug_spawn_ffx_id`) but no spawn function, the CT has none either: nothing verified to call, so `sfx` logs why and
+draws nothing. `auto` = `bullet` when SpawnBullet, CSBulletManager and SoloParamRepository verify, else off (logged once
+per reason, e.g. "CSBulletManager not created yet" while loading).
+
+**Verified offline**: rows, fields and chains against this `regulation.bin` (`test_host_combat`: each look is harmful as
+shipped, its copy harmless with the expected effect, the fire chain is the 2 harmless rows, the carriers unreferenced),
+the pure rules (kinds, ini parsing, layout, cloud gate, carrier building). **UNVERIFIED (needs a live run)**: that a burst
+row spawned directly shows its effect and plays its sound (the sound is presumed inside the effect: the burst rows'
+`seId*` fields are all 0); that the Fetid Pot's hit effect shows as the smoke carrier's flight effect (if not:
+`explosion_smoke = 10037001`, the Poison Pot cloud, or `10064001`); that atk 0 bullets neither flinch nor aggro anyone;
+how big each look reads next to MGSV's radius.
+
+### Verified live (2026-10-12, Gatefront, ER 1.17.1)
+
+- `boom lethal|stun|sleep|smoke` (radius 4): each look prepared (`explosion: lethal = Bullet 10030001 (effect 300122, 1.6 m
+  per burst, 0.07 s, its 2 harmless child rows kept) as carrier Bullet 10048000`, likewise 10035001/300182 1.4 m, 10064001/
+  300212 4 m 3 s, 10033001 + 300192 1.4 m 0.6 s) and drawn (`hud shot`): a Fire Pot fireball cluster, the Holy Water Pot's
+  golden flash, the Sleep Pot's pale purple mist, a brown-orange Fetid Pot cloud (the smoke look works; it reads more like
+  dust than MGSV's white smoke). No `SpawnBullet(...) refused`.
+- Harmless: 24 sleep-gas reports with 7 mist carriers bursting over a soldier (and a stun flash, a frag cluster nearby):
+  HP 219 -> 219 apart from our own hits; the carriers carry no attack.
+- Thrown: a real MGSV hand grenade's blast as a fireball cluster where our copy lay on the hillside; sleep gas as a ~9 m mist
+  cloud (7 mists) renewed every 2.5 s for MGSV's ~12 s; mines' blasts where they lie (HOST.md).
+- Carriers go back: `explosion: puppet stopped; carrier rows go back 11 s after the last burst` ... `carrier Bullet rows
+  restored (puppet off)`; `boom` -> `carrier rows: original`.
+- Sizes: a lethal blast of MGSV's 7 m (hand grenade) is a centre + 6 fireballs within ~2.5 m -- about the visible size of
+  MGSV's own fireball (its 7 m is the damage radius, applied by `Blast()`); sleep gas 9 m a centre + 6 mists 6 m out (the
+  whole cloud); kept.
+
+### D-Walker's flames, breakers, rounds in flight, the pool (2026-10-12 evening)
+
+- **Flames** (`explosion_flame` 10700000, carrier 10302002): `kGEvBuddyFire` with no bullet (pad[0] = 0) now draws one
+  Dragonfire flame flying `flame_speed` 14 m/s from D-Walker's muzzle along the stream (`flame_per_second` 6). The breath
+  row is an emitter (`shoot_interval` 0.2: live, one spawn went on shooting for minutes), so the carrier is a single shot
+  (`explosion::MakeSingleShot`: num_shoot 1, no interval) and every spawn is one-shot (below). Damage stays the flame
+  class's (fire). VERIFIED live: a stream of fire from D-Walker to the wall (screenshot), also with `kGuestFirstPerson` set.
+- **Breakers and shrapnel** (`explosion_breaker` / `explosion_shrapnel`, carriers 10302003/4): object-only bullets that
+  break Elden Ring's destructible assets where a round hits the world, a CQC strike meets no one, or a lethal blast goes
+  off (docs/HOST.md "Breakables", with the live results: carts and crates break, a defence-90 fence did not).
+- **Explosive rounds fly** (`round_flight`): a rocket at 20 m/s, a grenade round at 80 m/s, drawn with a trail, the blast
+  where they hit (docs/HOST.md "Explosive rounds in flight"; live: 17.3 m in 0.87 s, 53.2 m in 2.66 s).
+- **The pool**: every `SpawnBullet` now marks its emitter one-shot (spawn data +0x44 bit 0); before, emitters piled up
+  until Elden Ring refused every spawn (`error 4`), hit bullets included. Ours alive are capped by `explosion_max_live`
+  (48) and by Elden Ring's own emitter (192) and bullet (176) counts; clouds last `explosion_cloud_life` (6 s). `boom pool`.
+  Live: 250 blasts in a row capped without a refusal, emitters 14 -> 7 -> 0 after.
+
+### Live test
+
+Stage A (Elden Ring alone is enough; `boom` needs no puppet), standing in an open, quiet spot (no NPCs you care about
+within 15 m; try once near an enemy camp too). In Elden Ring's console (`tools/pr er ...`):
+
+1. `pr er boom` -> `explosion_fx auto -> bullet`, each look "not prepared yet", carrier rows original.
+2. `pr er "boom lethal"` -> a Fire Pot fireball 5 m ahead, with its sound, plus a ring of 6 (radius 4). H-log:
+   `explosion: lethal = Bullet 10030001 (effect 300122, 1.6 m per burst, 0.07 s, its 2 harmless child rows kept) as
+   carrier Bullet 10048000 (no attack, no SpEffect)` and `explosion: console boom -> lethal r 4.0 m ...: 7 burst(s)`.
+   `pr er "boom lethal 1"`: one fireball. Walk into the next one: no HP loss, no burning.
+3. `pr er "boom stun"`: a golden flash; `pr er "boom sleep"`: a pale mist for ~3 s (stand in it: no sleep bar);
+   `pr er "boom smoke"`: a brownish cloud. If smoke shows nothing: `boom mode off`, set `explosion_smoke = 10037001`
+   in the ini, restart, retry, and report which one looked right.
+4. Next to a hostile enemy: `pr er "boom lethal 2"` at it: it must not flinch, lose HP or aggro (`pr er "combat
+   targets"` shows its HP unchanged).
+5. Throw a real Fire Pot as the Tarnished (puppet off): normal damage (the template rows are never touched).
+6. `pr er boom` -> carrier rows `patched`; ~10 s with the puppet off -> H-log `explosion: carrier Bullet rows restored
+   (puppet off)`.
+
+Stage B (both games): rocket launcher / grenade launcher at the ground and at an enemy: one cluster per impact
+(`explosion: Snake explosive (...) -> lethal r 4.0 m`), damage lines as before. Hand grenade: fireballs where it lands
+in Elden Ring (on the ground, not floating). Sleep grenade: mist renewed every 2.5 s for ~12 s (`explosion: explosion
+kind 1 -> sleep ...` about 5 times; `pr er boom` counts the skipped repeats), enemies inside still fall asleep (our sleep
+build-up). Smoke grenade: clouds for as long as MGSV's smoke lasts. Report: what each looked and sounded like, size vs
+MGSV's blast, any `SpawnBullet(...) refused` line, frame-rate dips during a big cloud.

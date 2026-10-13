@@ -1,0 +1,21 @@
+build/
+*.log
+__pycache__/
+# tools/phantomring: per-launch logs and save backups, and the extracted me3 release (pr install-me3)
+/logs/
+/backups/
+/third_party/me3/
+.claude/
+# tools/package_windows.py output
+/dist/
+# downloaded me3 release archive (pr install-me3 looks here)
+/third_party/downloads/
+# never commit game-derived files: `pr record` captures contain MGSV's assets (Konami), hud_dump writes
+# MGSV's HUD, and Elden Ring saves are your own
+*.prrec
+*.prrec.part
+/hud*.png
+*.sl2
+*.sl2.bak
+# Maintainer notes about publishing (local only)
+docs/PUBLISHING.md

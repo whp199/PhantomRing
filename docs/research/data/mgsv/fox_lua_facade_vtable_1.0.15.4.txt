@@ -1,0 +1,92 @@
+slot+0x000 [0x142305720] 0x140bf2e50: mov rcx, rdx ; mov rdx, r8 ; jmp lua_atpanic
+slot+0x008 [0x142305728] 0x140bf2e60: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_call
+slot+0x010 [0x142305730] 0x140bf2e70: mov rcx, rdx ; mov edx, r8d ; jmp lua_checkstack
+slot+0x018 [0x142305738] 0x140bf2e80: mov rcx, rdx ; mov edx, r8d ; jmp lua_concat
+slot+0x020 [0x142305740] 0x140bf2e90: mov rax, r8 ; mov rcx, rdx ; mov r8, r9 ; mov rdx, rax ; jmp lua_cpcall
+slot+0x028 [0x142305748] 0x140bf2eb0: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_createtable
+slot+0x030 [0x142305750] 0x140bf2ec0: mov rax, r8 ; mov rcx, rdx ; mov r8, r9 ; mov rdx, rax ; jmp lua_dump
+slot+0x038 [0x142305758] 0x140bf2ee0: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_equal
+slot+0x040 [0x142305760] 0x140bf2ef0: mov rcx, rdx ; jmp lua_error
+slot+0x048 [0x142305768] 0x140bf2f00: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_gc
+slot+0x050 [0x142305770] 0x140bf2f10: mov rcx, rdx ; mov edx, r8d ; jmp lua_getfenv
+slot+0x058 [0x142305778] 0x140bf2f20: mov eax, r8d ; mov rcx, rdx ; mov r8, r9 ; mov edx, eax ; jmp lua_getfield
+slot+0x060 [0x142305780] 0x140bf2f30: mov rcx, rdx ; mov edx, 0xffffd8ee ; jmp lua_getfield
+slot+0x068 [0x142305788] 0x140bf2f40: mov rcx, rdx ; mov edx, r8d ; jmp lua_getmetatable
+slot+0x070 [0x142305790] 0x140bf2f50: mov rcx, rdx ; mov edx, r8d ; jmp lua_gettable
+slot+0x078 [0x142305798] 0x140bf2f60: mov rcx, rdx ; jmp lua_gettop
+slot+0x080 [0x1423057a0] 0x140bf2f70: mov rcx, rdx ; mov edx, r8d ; jmp lua_insert
+slot+0x088 [0x1423057a8] 0x140bf2f80: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; cmp eax, 1 ; sete cl ; mov eax, ecx
+slot+0x090 [0x1423057b0] 0x140bf2fa0: mov rcx, rdx ; mov edx, r8d ; jmp lua_iscfunction
+slot+0x098 [0x1423057b8] 0x140bf2fb0: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; cmp eax, 6 ; sete cl ; mov eax, ecx
+slot+0x0a0 [0x1423057c0] 0x140bf2fd0: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; cmp eax, 2 ; sete cl ; mov eax, ecx
+slot+0x0a8 [0x1423057c8] 0x140bf2ff0: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; test eax, eax ; sete cl ; mov eax, ecx
+slot+0x0b0 [0x1423057d0] 0x140bf3010: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; cmp eax, -1 ; sete cl ; mov eax, ecx
+slot+0x0b8 [0x1423057d8] 0x140bf3030: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; test eax, eax ; setle cl ; mov eax, ecx
+slot+0x0c0 [0x1423057e0] 0x140bf3050: mov rcx, rdx ; mov edx, r8d ; jmp lua_isnumber
+slot+0x0c8 [0x1423057e8] 0x140bf3060: mov rcx, rdx ; mov edx, r8d ; jmp lua_isstring
+slot+0x0d0 [0x1423057f0] 0x140bf3070: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; cmp eax, 5 ; sete cl ; mov eax, ecx
+slot+0x0d8 [0x1423057f8] 0x140bf3090: sub rsp, 0x28 ; mov rcx, rdx ; mov edx, r8d ; call lua_type ; xor ecx, ecx ; cmp eax, 8 ; sete cl ; mov eax, ecx
+slot+0x0e0 [0x142305800] 0x140bf30b0: mov rcx, rdx ; mov edx, r8d ; jmp lua_isuserdata
+slot+0x0e8 [0x142305808] 0x140bf30c0: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_lessthan
+slot+0x0f0 [0x142305810] 0x140bf30d0: mov rax, r9 ; mov r9, qword ptr [rsp + 0x28] ; mov r10, r8 ; mov rcx, rdx ; mov r8, rax ; mov rdx, r10 ; jmp lua_load
+slot+0x0f8 [0x142305818] 0x140bf30f0: mov rcx, rdx ; mov rdx, r8 ; jmp lua_newstate
+slot+0x100 [0x142305820] 0x140bf3100: mov rcx, rdx ; xor r8d, r8d ; xor edx, edx ; jmp lua_createtable
+slot+0x108 [0x142305828] 0x140bf3110: mov rcx, rdx ; jmp lua_newthread
+slot+0x110 [0x142305830] 0x140bf3120: mov rcx, rdx ; mov rdx, r8 ; jmp lua_newuserdata
+slot+0x118 [0x142305838] 0x140bf3130: mov rcx, rdx ; mov edx, r8d ; jmp lua_next
+slot+0x120 [0x142305840] 0x140bf3140: mov rcx, rdx ; mov edx, r8d ; jmp lua_objlen
+slot+0x128 [0x142305848] 0x140bf3150: mov eax, r9d ; mov r9d, dword ptr [rsp + 0x28] ; mov r10d, r8d ; mov rcx, rdx ; mov r8d, eax ; mov edx, r10d ; jmp lua_pcall
+slot+0x130 [0x142305850] 0x140bf3170: mov rcx, rdx ; or edx, 0xffffffff ; sub edx, r8d ; jmp lua_settop
+slot+0x138 [0x142305858] 0x140bf3180: mov rcx, rdx ; mov edx, r8d ; jmp lua_pushboolean
+slot+0x140 [0x142305860] 0x140bf3190: mov rax, r8 ; mov rcx, rdx ; mov r8d, r9d ; mov rdx, rax ; jmp lua_pushcclosure
+slot+0x148 [0x142305868] 0x140bf31b0: mov rax, r8 ; mov rcx, rdx ; xor r8d, r8d ; mov rdx, rax ; jmp lua_pushcclosure
+slot+0x150 [0x142305870] 0x140bf31d0: mov qword ptr [rsp + 0x18], r8 ; mov qword ptr [rsp + 0x20], r9 ; sub rsp, 0x28 ; mov r9, r8 ; mov rcx, rdx ; lea r8, [rsp + 0x48] ; mov rdx, r9 ; call lua_pushvfstring
+slot+0x158 [0x142305878] 0x140bf3200: mov rcx, rdx ; mov rdx, r8 ; jmp lua_pushinteger
+slot+0x160 [0x142305880] 0x140bf3210: mov rcx, rdx ; mov rdx, r8 ; jmp lua_pushlightuserdata
+slot+0x168 [0x142305888] 0x140bf3220: mov rax, r8 ; mov rcx, rdx ; mov r8, r9 ; mov rdx, rax ; jmp lua_pushlstring
+slot+0x170 [0x142305890] 0x140bf3240: mov rcx, rdx ; jmp lua_pushnil
+slot+0x178 [0x142305898] 0x140bf3250: movaps xmm1, xmm2 ; mov rcx, rdx ; jmp lua_pushnumber
+slot+0x180 [0x1423058a0] 0x140bf3260: mov rcx, rdx ; mov rdx, r8 ; jmp lua_pushstring
+slot+0x188 [0x1423058a8] 0x140bf3270: mov rcx, rdx ; jmp lua_pushthread
+slot+0x190 [0x1423058b0] 0x140bf3280: mov rcx, rdx ; mov edx, r8d ; jmp lua_pushvalue
+slot+0x198 [0x1423058b8] 0x140bf3290: mov rax, r8 ; mov rcx, rdx ; mov r8, r9 ; mov rdx, rax ; jmp lua_pushvfstring
+slot+0x1a0 [0x1423058c0] 0x140bf32b0: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_rawequal
+slot+0x1a8 [0x1423058c8] 0x140bf32c0: mov rcx, rdx ; mov edx, r8d ; jmp lua_rawget
+slot+0x1b0 [0x1423058d0] 0x140bf32d0: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_rawgeti
+slot+0x1b8 [0x1423058d8] 0x140bf32e0: mov rcx, rdx ; mov edx, r8d ; jmp lua_rawset
+slot+0x1c0 [0x1423058e0] 0x140bf32f0: mov eax, r8d ; mov rcx, rdx ; mov r8d, r9d ; mov edx, eax ; jmp lua_rawseti
+slot+0x1c8 [0x1423058e8] 0x140bf3300: mov rcx, rdx ; mov edx, r8d ; jmp lua_remove
+slot+0x1d0 [0x1423058f0] 0x140bf3310: mov rcx, rdx ; mov edx, r8d ; jmp lua_replace
+slot+0x1d8 [0x1423058f8] 0x140bf3320: mov rcx, rdx ; mov edx, r8d ; jmp 0x141a13320
+slot+0x1e0 [0x142305900] 0x140bf3330: mov rax, r8 ; mov rcx, rdx ; mov r8, r9 ; mov rdx, rax ; jmp lua_setallocf
+slot+0x1e8 [0x142305908] 0x140bf3350: mov rcx, rdx ; mov edx, r8d ; jmp lua_setfenv
+slot+0x1f0 [0x142305910] 0x140bf3360: mov eax, r8d ; mov rcx, rdx ; mov r8, r9 ; mov edx, eax ; jmp lua_setfield
+slot+0x1f8 [0x142305918] 0x140bf3370: mov rcx, rdx ; mov edx, 0xffffd8ee ; jmp lua_setfield
+slot+0x200 [0x142305920] 0x140bf3380: mov rcx, rdx ; mov edx, r8d ; jmp lua_setmetatable
+slot+0x208 [0x142305928] 0x140bf3390: mov rcx, rdx ; mov edx, r8d ; jmp lua_settable
+slot+0x210 [0x142305930] 0x140bf33a0: mov rcx, rdx ; mov edx, r8d ; jmp lua_settop
+slot+0x218 [0x142305938] 0x140bf33b0: mov rcx, rdx ; jmp 0x14095ef80
+slot+0x220 [0x142305940] 0x140bf33c0: mov rcx, rdx ; mov edx, r8d ; jmp lua_toboolean
+slot+0x228 [0x142305948] 0x140bf33d0: mov rcx, rdx ; mov edx, r8d ; jmp lua_tocfunction
+slot+0x230 [0x142305950] 0x140bf33e0: mov rcx, rdx ; mov edx, r8d ; jmp lua_tointeger
+slot+0x238 [0x142305958] 0x140bf33f0: mov eax, r8d ; mov rcx, rdx ; mov r8, r9 ; mov edx, eax ; jmp lua_tolstring
+slot+0x240 [0x142305960] 0x140bf3400: mov rcx, rdx ; mov edx, r8d ; jmp lua_tonumber
+slot+0x248 [0x142305968] 0x140bf3410: mov rcx, rdx ; mov edx, r8d ; jmp lua_topointer
+slot+0x250 [0x142305970] 0x140bf3420: mov eax, r8d ; mov rcx, rdx ; xor r8d, r8d ; mov edx, eax ; jmp lua_tolstring
+slot+0x258 [0x142305978] 0x140bf3430: mov rcx, rdx ; mov edx, r8d ; jmp lua_tothread
+slot+0x260 [0x142305980] 0x140bf3440: mov rcx, rdx ; mov edx, r8d ; jmp lua_touserdata
+slot+0x268 [0x142305988] 0x140bf3450: mov rcx, rdx ; mov edx, r8d ; jmp lua_type
+slot+0x270 [0x142305990] 0x140bf3460: mov rcx, rdx ; mov edx, r8d ; jmp lua_typename
+slot+0x278 [0x142305998] 0x140bf3470: mov rax, r8 ; mov rcx, rdx ; mov r8d, r9d ; mov rdx, rax ; jmp lua_xmove
+slot+0x280 [0x1423059a0] 0x140bf3490: mov rcx, rdx ; mov edx, r8d ; jmp 0x141a13460
+slot+0x288 [0x1423059a8] 0x140bf2810: mov qword ptr [rsp + 8], rbx ; push rdi ; sub rsp, 0x20 ; lea rax, [rdx + 0x218] ; movzx edi, r8b ; mov rbx, rdx ; cmp qword ptr [rdx], rax ; jb 0x140bf2835
+slot+0x290 [0x1423059b0] 0x140bf2850: mov rax, r8 ; mov rcx, rdx ; mov r8, r9 ; mov rdx, rax ; jmp luaL_addlstring
+slot+0x298 [0x1423059b8] 0x140bf2870: add qword ptr [rdx], r8 ; ret 
+slot+0x2a0 [0x1423059c0] 0x140bf2880: mov rcx, rdx ; mov rdx, r8 ; jmp luaL_addstring
+slot+0x2a8 [0x1423059c8] 0x140bf2890: mov rcx, rdx ; jmp luaL_addvalue
+slot+0x2b0 [0x1423059d0] 0x140bf28a0: mov rax, rdx ; test r8d, r8d ; jne 0x140bf28b8 ; mov r8, qword ptr [rsp + 0x28] ; mov edx, r9d ; mov rcx, rax ; jmp luaL_argerror
+slot+0x2b8 [0x1423059d8] 0x140bf28c0: mov eax, r8d ; mov rcx, rdx ; mov r8, r9 ; mov edx, eax ; jmp luaL_argerror
+slot+0x2c0 [0x1423059e0] 0x140bf28d0: mov rcx, rdx ; mov rdx, r8 ; jmp luaL_buffinit
+slot+0x2c8 [0x1423059e8] 0x140bf28e0: mov eax, r8d ; mov rcx, rdx ; mov r8, r9 ; mov edx, eax ; jmp luaL_callmeta
+slot+0x2d0 [0x1423059f0] 0x140bf28f0: mov rcx, rdx ; mov edx, r8d ; jmp luaL_checkany
+slot+0x2d8 [0x1423059f8] 0x140bf2900: mov rcx, rdx ; mov edx, r8d ; jmp luaL_checkinteger

@@ -1,0 +1,4 @@
+#!/bin/sh
+# PhantomRing Linux tools: pr status | watch | lua | er | launch | stop | logs | ... (docs/TOOLS.md)
+here="$(cd -- "$(dirname -- "$0")" && pwd)"
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m phantomring "$@"

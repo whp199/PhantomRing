@@ -1,0 +1,17 @@
+name	raw	td_rva	col_rva	col_offset	vtable_rva	vtable_section	n_vfuncs	vfunc_sections	bases
+<lambda_52d3b787fcbeedda3115b5195165441f>	.?AV<lambda_52d3b787fcbeedda3115b5195165441f>@@	0x29E5FE0					0		
+<lambda_5a2b834868a7ed51c56b5bc39ca8e0c0>	.?AV<lambda_5a2b834868a7ed51c56b5bc39ca8e0c0>@@	0x29E6020					0		
+<lambda_a34d5bbe06a2c6a9187c5f4bf044f63a>	.?AV<lambda_a34d5bbe06a2c6a9187c5f4bf044f63a>@@	0x29E5FA0					0		
+<lambda_b20ef115824caf7ed0ba897bb8a0dcb3>	.?AV<lambda_b20ef115824caf7ed0ba897bb8a0dcb3>@@	0x29E5F20					0		
+<lambda_bb48acc934289691f5e8690c148bfba2>	.?AV<lambda_bb48acc934289691f5e8690c148bfba2>@@	0x29E6060					0		
+<lambda_dda82dafcc9d47d37fb7da2cc6e84ab3>	.?AV<lambda_dda82dafcc9d47d37fb7da2cc6e84ab3>@@	0x29E5F60					0		
+fox::Exception	.?AVException@fox@@	0x29E3C30					0		
+fox::LuaOutsideProtectedEnvErrorException	.?AVLuaOutsideProtectedEnvErrorException@fox@@	0x29E3BF0					0		
+std::_Generic_error_category	.?AV_Generic_error_category@std@@	0x29E3470	0x255D180	0x0	0x20AAD48	.edata	6	.xtext:6	std::error_category@0x0
+std::_Iostream_error_category	.?AV_Iostream_error_category@std@@	0x29E34A8	0x255D200	0x0	0x20AAD80	.edata	6	.xtext:6	std::_Generic_error_category@0x0;std::error_category@0x0
+std::_System_error_category	.?AV_System_error_category@std@@	0x29E34E0	0x255D288	0x0	0x20AADB8	.edata	6	.xtext:6	std::_Generic_error_category@0x0;std::error_category@0x0
+std::bad_alloc	.?AVbad_alloc@std@@	0x29E3110					0		
+std::bad_cast	.?AVbad_cast@std@@	0x29E3D20					0		
+std::error_category	.?AVerror_category@std@@	0x29E3440	0x255D108	0x0	0x20AAD10	.edata	6	.xtext:6	
+std::exception	.?AVexception@std@@	0x29E30E8					0		
+type_info	.?AVtype_info@@	0x2B49348	0x255D310	0x0	0x24B1AF8	.edata	1	.xtext:1	
