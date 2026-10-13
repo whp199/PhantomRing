@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace phantom::guest::state
 {
@@ -35,11 +36,13 @@ namespace phantom::guest::state
 		kLBehind = 1u << 19,
 		kLCbox = 1u << 20,    // PlayerStatus CBOX: inside a cardboard box
 		kLPoster = 1u << 21,  // ...one with a poster on it (vars.cboxPosterIndices of the current item)
+		kLNvg = 1u << 22,     // night-vision goggles on (vars.items[vars.currentItemIndex] == EQP_IT_Nvg)
 	};
 
 	// BuddyType.WALKER_GEAR (VERIFIED from the enum registration at 0x140A46E21, mgsvtpp.exe 1.0.15.4;
 	// 3 is QUIET). LuaView::buddyActive holds whichever buddy is out, not necessarily ours.
 	inline constexpr int kBuddyTypeWalker = 4;
+	inline constexpr int kBuddyTypeHorse = 1;  // BuddyType.HORSE (live 2026-10-13: GetActiveBuddyType 1 with D-Horse out)
 
 	struct LuaView
 	{
@@ -104,6 +107,24 @@ namespace phantom::guest::state
 	void SetLuaTickWork(LuaThreadWork a_work);
 	void RunLuaTickWork(std::uint64_t a_nowMs, bool a_ready);
 
+	// The buddy's own skin (Skeleton.cpp) and D-Horse's whistle (Follow.cpp), registered by Guest.cpp so Pump.cpp stays
+	// testable on its own: no-ops / false until registered.
+	struct BuddyHooks
+	{
+		bool (*pose)(logic::Vec3& a_pos, float& a_yaw){ nullptr };
+		void (*hint)(const logic::Vec3& a_at, float a_radius, std::uint64_t a_forMs){ nullptr };
+		bool (*whistleHorse)(const char* a_why){ nullptr };
+		void (*forget)(const char* a_why){ nullptr };
+	};
+	void SetBuddyHooks(const BuddyHooks& a_hooks);
+	// `!buddy <type>` / the iDroid: deploy another buddy in session (Pump.cpp re-runs its buddy step on MGSV's Lua thread).
+	void RequestBuddy(const std::string& a_type);
+	std::optional<std::string> TakeBuddyRequest();
+	bool BuddyPose(logic::Vec3& a_pos, float& a_yaw);
+	void HintBuddy(const logic::Vec3& a_at, float a_radius, std::uint64_t a_forMs);
+	bool WhistleHorse(const char* a_why);
+	void ForgetBuddy(const char* a_why);
+
 	// One of MGSV's own menus owns the pad (the pause menu, the iDroid, a popup): Menu.cpp sets it, the boot
 	// sequence keeps the sandbox "ready" through it (the pause menu stops the player-camera frames).
 	void SetMenuOpen(bool a_open);
@@ -112,6 +133,11 @@ namespace phantom::guest::state
 	// Frame -> pump: Lua commands for the next Tick ("warp x y z yaw;owarp id x y z yaw").
 	void        QueueCommand(const std::string& a_command);
 	std::string TakeCommands();
+	// Pump -> whoever asked: what PhantomRing.Tick's PR.Run answered for those commands ("warp=ok refill=36/30/0,..."), on
+	// MGSV's Lua thread right after the Tick (Ammo.cpp applies the refill there). Registered by Guest.cpp.
+	using CommandResultSink = void (*)(std::string_view a_results);
+	void SetCommandResultSink(CommandResultSink a_sink);
+	void RunCommandResults(std::string_view a_results);
 
 	void SetBoot(Boot a_boot);
 	Boot CurrentBoot();
@@ -143,6 +169,11 @@ namespace phantom::guest::state
 
 	void SetTreadmillEnabled(bool a_on);
 	bool TreadmillEnabled();
+
+	// "Tarnished mode" (protocol v10 kHEvTarnished): the player plays the Tarnished, Snake parks where he stands -- the pad
+	// is neutral (Pad.cpp), no treadmill warps (Frame.cpp), no follow whistles or steering for the buddy (Follow.cpp).
+	void SetParked(bool a_parked);
+	bool Parked();
 
 	// The configured buddy isn't available in this save (not developed, dead, can't sortie).
 	void SetBuddyMissing(bool a_missing);

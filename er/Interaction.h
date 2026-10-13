@@ -34,6 +34,7 @@ namespace phantom::er
 			std::uint64_t nowMs{ 0 };
 			std::uint64_t minMs{ 1500 };
 			std::uint64_t maxMs{ 0 };          // 0 = no cap
+			bool          abort{ false };      // ends it now (a press-less start whose Tarnished walked away: no screen)
 		};
 
 		// True while the interaction lasts.
@@ -49,5 +50,30 @@ namespace phantom::er
 		bool          active_{ false };
 		bool          sawHidden_{ false };
 		std::uint64_t start_{ 0 };
+	};
+
+	// Elden Ring's HUD on "Auto" (review 2026-10-13; UNVERIFIED whether that clears UI state 7 at all): the press-less starts in
+	// er/Host.cpp (an NPC's dialog, the next screen, the grace's next screen) trust any HUD hide, and the grace's has no time
+	// window -- an auto HUD fading at the grace after a rest (HP/FP full) would start an "interaction" that lasts until the HUD
+	// comes back, Snake on a neutral pad meanwhile. A hide nothing explains (Snake playing in the world: no press, menu,
+	// cutscene, load or death, no prompt or interaction end within the last second, not at a grace, no rest prompt) is an
+	// auto HUD's fade; the kAutoHudHides-th such hide (a one-off stays possible) turns the press-less starts off for the session.
+	class AutoHud
+	{
+	public:
+		static constexpr int kAutoHudHides = 2;
+		struct Input
+		{
+			bool hid{ false };        // the HUD state turned hidden this frame
+			bool explained{ false };  // something above explains it
+		};
+		// True on the frame it is detected.
+		bool Update(const Input& a_in);
+		[[nodiscard]] bool Detected() const { return detected_; }
+		[[nodiscard]] int  Unexplained() const { return unexplained_; }
+
+	private:
+		int  unexplained_{ 0 };
+		bool detected_{ false };
 	};
 }

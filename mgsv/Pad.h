@@ -22,6 +22,8 @@ namespace phantom::guest::pad
 
 	// Snake's death (Death.cpp): the player's pad is cut off (neutral) whatever the source; pulses still go through.
 	void SetBlocked(bool a_blocked);
+	// Tarnished mode (protocol v10 kHEvTarnished): the same, for as long as the player plays the Tarnished.
+	void SetParked(bool a_parked);
 
 	// Boot automation: hold these XInput buttons for a_ms, on top of whatever the source gives.
 	void Pulse(std::uint16_t a_buttons, unsigned a_ms);

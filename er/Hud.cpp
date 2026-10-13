@@ -95,7 +95,10 @@ namespace phantom::er::Hud
 		} else if (live) {
 			failedText_.clear();  // it recovered: a later exit is not that failure
 		}
-		if (live) {
+		if (!a_in.versionText.empty()) {
+			text = a_in.versionText;  // MGSV's plugin speaks another protocol and never attaches (common/Version.h)
+			tone = Tone::kError;
+		} else if (live) {
 			switch (a_in.guestStatus) {
 			case proto::Status::kBooting:
 			case proto::Status::kTitle:
@@ -159,6 +162,7 @@ namespace phantom::er::Hud
 		in.guestAttached = link.AttachCount() > 0 && a_f.guestAlive;
 		in.guestStatus = link.GuestStatus();
 		in.guestText = link.GuestStatusText();
+		in.versionText = link.VersionMismatch();
 		in.attach = link.AttachCount();
 		in.inGame = a_f.inGame;
 		in.menuOpen = a_f.menuOpen;

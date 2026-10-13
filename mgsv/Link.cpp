@@ -3,6 +3,7 @@
 #include "Log.h"
 #include "Mapping.h"
 #include "Platform.h"
+#include "Version.h"
 
 #include <windows.h>
 
@@ -189,9 +190,17 @@ namespace phantom::guest::link
 				const auto magic = Atomic(h->magic).load(std::memory_order_acquire);
 				const auto version = h->version;
 				const auto nonce = Atomic(h->sessionNonce).load(std::memory_order_acquire);
+				// Who we are, even while refusing to attach: the host tells the player (common/Version.h).
+				Atomic(h->guestProtocol).store(kVersion, std::memory_order_release);
+				if (phantom::version::ReadField(h->guestRelease, sizeof(h->guestRelease)) != phantom::version::Release()) {
+					phantom::version::WriteField(h->guestRelease, sizeof(h->guestRelease), phantom::version::Release());
+				}
 				if (magic == kMagic && version != kVersion) {
 					if (!loggedVersion) {
-						Log::Error("link: host speaks protocol v{}, this guest v{} -- not attaching", version, kVersion);
+						Log::Error("link: {} -- not attaching (this guest: {})",
+							phantom::version::MismatchText(phantom::version::ReadField(h->hostRelease, sizeof(h->hostRelease)), version,
+								phantom::version::Release(), kVersion),
+							phantom::version::Describe());
 						loggedVersion = true;
 					}
 				} else if (magic == kMagic && nonce != 0) {

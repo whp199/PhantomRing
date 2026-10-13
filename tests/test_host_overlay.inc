@@ -171,6 +171,16 @@ static void TestOverlay()
 	run(1.0);
 	CHECK(!has("boot failed"));
 	CHECK(has("MGSV is not running"));
+	// MGSV's plugin speaks another protocol (never attaches): the versions, in red, in place of "not running".
+	in.guestAlive = true;
+	in.versionText = "PhantomRing versions differ: Elden Ring plugin v0.2.0-alpha, MGSV plugin v0.1.0 -- reinstall both";
+	run(1.0);
+	CHECK(has("versions differ") && !has("MGSV is not running"));
+	CHECK(b.Out().lines.front().tone == Tone::kError);
+	in.versionText.clear();
+	in.guestAlive = false;
+	run(1.0);
+	CHECK(!has("versions differ"));
 	// Disabled: nothing.
 	cfg.enabled = false;
 	run(1.0);

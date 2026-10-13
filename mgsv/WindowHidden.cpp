@@ -115,6 +115,7 @@ namespace phantom::guest::hidden
 	}
 
 	void SetSavesBlocked(bool a_blocked) { g_savesBlocked.store(a_blocked); }
+	bool SavesBlocked() { return g_savesBlocked.load(); }
 
 	QuitStep NextQuitStep(bool a_savesBlocked, std::int64_t a_nowMs, std::int64_t a_closeAskedMs, int a_graceSec)
 	{

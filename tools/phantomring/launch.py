@@ -420,8 +420,23 @@ def copy_tree_verified(src: Path, dst: Path) -> list[dict]:
 	return entries
 
 
+PRE_RESTORE = "-pre-restore"
+
+
+def fresh_backup_dir(ts: str, backups: Path | None = None) -> Path:
+	"""backups/<ts>, or <ts>-2, -3, ... when a backup of that second already wrote its manifest there (two launches in one
+	second: the second rewrote the first's manifest with only its own sets, and restore-saves lost the first's). A
+	*-pre-restore name keeps that suffix last (<ts>-2-pre-restore), so pruning still recognises it."""
+	backups = backups or BACKUPS
+	base, suffix = (ts[: -len(PRE_RESTORE)], PRE_RESTORE) if ts.endswith(PRE_RESTORE) else (ts, "")
+	d, n = backups / ts, 2
+	while (d / "manifest.json").exists():
+		d, n = backups / f"{base}-{n}{suffix}", n + 1
+	return d
+
+
 def backup_saves(m: Machine, ts: str, er: bool, mgsv: bool, log=print) -> Path:
-	dest = BACKUPS / ts
+	dest = fresh_backup_dir(ts)
 	manifest: dict = {"created": ts, "sets": {}}
 	if er:
 		src = m.er_save_dir()
@@ -459,22 +474,41 @@ def keep_backups_default() -> int:
 		return KEEP_BACKUPS
 
 
+def backup_kinds(dest: Path) -> set[str] | None:
+	"""Which games a backup holds ("er", "mgsv"); None when its manifest can't be read (such a folder is never pruned)."""
+	try:
+		sets = json.loads((dest / "manifest.json").read_text()).get("sets", {})
+	except (OSError, ValueError, AttributeError):
+		return None
+	if not isinstance(sets, dict):
+		return None
+	return {"er" if k == "er" else "mgsv" if k.startswith("mgsv/") else k for k in sets}
+
+
 def prune_backups(keep: int, log=print, backups: Path | None = None) -> list[Path]:
-	"""Delete all but the newest `keep` launch backups under backups/ (keep <= 0: delete nothing). Always kept: the
-	oldest backup (the saves before PhantomRing ever ran), every *-pre-restore backup, and anything that is not a
-	backup with a manifest. Only called after the new backup has verified. Returns what was removed."""
+	"""Delete old launch backups under backups/ (keep <= 0: delete nothing), per game: for Elden Ring and for MGSV each,
+	the oldest backup holding that game (its saves before PhantomRing ever ran) and the newest `keep` holding it survive;
+	a backup goes only when no game protects it. Also always kept: every *-pre-restore backup and anything that is not a
+	backup with a readable manifest. (One pool used to protect only the oldest backup by name: an MGSV-only first backup
+	left the first Elden Ring one unprotected, and MGSV-only relaunches pushed the newest ER backups out.) Only called
+	after the new backup has verified. Returns what was removed."""
 	backups = backups or BACKUPS
 	if keep <= 0 or not backups.is_dir():
 		return []
 	sets = sorted(p for p in backups.iterdir() if p.is_dir() and (p / "manifest.json").is_file())
-	if not sets:
-		return []
-	candidates = [p for p in sets[1:] if not p.name.endswith("-pre-restore")]
-	doomed = candidates[:-keep] if len(candidates) > keep else []
+	kinds = {p: backup_kinds(p) for p in sets}
+	pool = [p for p in sets if kinds[p] is not None and not p.name.endswith(PRE_RESTORE)]
+	groups: dict[str, list[Path]] = {}
+	for p in pool:
+		for kind in kinds[p] or {""}:  # a backup of no game is its own group
+			groups.setdefault(kind, []).append(p)
+	protected = {p for g in groups.values() for p in (g[0], *g[-keep:])}
+	doomed = [p for p in pool if p not in protected]
 	for p in doomed:
 		shutil.rmtree(p)
 	if doomed:
-		log(f"pruned {len(doomed)} old save backup(s) from {backups} (kept the newest {keep}, the oldest {sets[0].name} "
+		firsts = ", ".join(f"{k} {g[0].name}" for k, g in sorted(groups.items()) if k)
+		log(f"pruned {len(doomed)} old save backup(s) from {backups} (kept per game the newest {keep} and the first: {firsts}; "
 			"and every *-pre-restore; --keep-backups 0 keeps all)")
 	return doomed
 
@@ -488,7 +522,27 @@ def backups_summary(backups: Path | None = None) -> str:
 	return f"{len(sets)} in {backups} ({size / 1e9:.1f} GB)"
 
 
-def restore_saves(ts: str, er: bool, mgsv: bool, log=print) -> None:
+def restore_files(info: dict, set_name: str, all_er: bool = False) -> list[dict]:
+	"""The files of a backup set restore-saves puts back. For Elden Ring only PhantomRing's own save
+	(PhantomRing0000.sl2 and Elden Ring's .bak of it) unless all_er: the backup holds the whole save folder (the
+	vanilla ER0000.sl2, a Seamless Co-op .co2, other mods' saves), which PhantomRing never plays and must not roll back."""
+	if set_name != "er" or all_er:
+		return list(info["files"])
+	return [e for e in info["files"] if Path(e["path"]).name.startswith(ER_SAVE_NAME)]
+
+
+def created_after(info: dict, set_name: str) -> list[Path]:
+	"""PhantomRing's own save files (PhantomRing0000.sl2*) in the save folder now that the backup set does not hold: created
+	after it (a first launch's backup is taken before PhantomRing0000.sl2 is seeded). Restoring that backup removes them
+	(they are in the pre-restore safety backup), else the played save stays and the next launch keeps using it."""
+	if set_name != "er":
+		return []
+	target = Path(info["source"])
+	held = {Path(e["path"]).name for e in info["files"] if len(Path(e["path"]).parts) == 1}
+	return sorted(p for p in target.glob(ER_SAVE_NAME + "*") if p.is_file() and p.name not in held)
+
+
+def restore_saves(ts: str, er: bool, mgsv: bool, log=print, all_er: bool = False) -> None:
 	src = BACKUPS / ts
 	if not (src / "manifest.json").exists():
 		raise LaunchError(f"no backup {src}")
@@ -503,16 +557,32 @@ def restore_saves(ts: str, er: bool, mgsv: bool, log=print) -> None:
 	m = Machine()
 	safety = backup_saves(m, f"{timestamp()}-pre-restore", er and "er" in sets, mgsv and any(k.startswith("mgsv/") for k in sets), log)
 	log(f"current saves kept in {safety}")
+	done: list[Path] = []
 	for set_name, info in sets.items():
 		target = Path(info["source"])
-		for e in info["files"]:
+		files = restore_files(info, set_name, all_er)
+		for e in files:
 			s = src / set_name / e["path"]
 			t = target / e["path"]
-			t.parent.mkdir(parents=True, exist_ok=True)
-			shutil.copy2(s, t)
+			try:
+				t.parent.mkdir(parents=True, exist_ok=True)
+				shutil.copy2(s, t)
+			except OSError as ex:
+				raise LaunchError(f"restore stopped at {t}: {ex}; already restored: {[str(p) for p in done] or 'nothing'} "
+					f"(the saves from before are in {safety})") from ex
 			if sha256(t) != e["sha256"]:
 				raise LaunchError(f"restore verify failed: {t}")
-		log(f"restored {len(info['files'])} files -> {target}")
+			done.append(t)
+		removed = []
+		for p in created_after(info, set_name):
+			if not (safety / set_name / p.name).is_file():
+				raise LaunchError(f"{p.name} was created after this backup but is not in the safety backup {safety}: left in place")
+			p.unlink()
+			removed.append(p.name)
+			log(f"removed {p.name}: created after this backup (kept in {safety})")
+		left = len(info["files"]) - len(files)
+		log(f"restored {len(files)} files -> {target}" + (f", removed {len(removed)} created after it" if removed else "")
+			+ (f" ({left} other save files left as they are: --all-er-files)" if left else ""))
 
 
 def seed_save(save_dir: Path, seed: str | None = None) -> Path | None:
@@ -539,9 +609,17 @@ def ensure_er_save(m: Machine, log=print, seed: str | None = None) -> str:
 	if source is None or not source.is_file():
 		raise LaunchError(f"{target} missing and no save to copy it from ({source or d / ER_SAVE_SOURCES[0]} not found): "
 			"start Elden Ring normally once and create or load a character, or name a save with --seed-save / PHANTOMRING_SEED_SAVE")
-	shutil.copy2(source, target)
-	if sha256(source) != sha256(target):
-		raise LaunchError(f"copy of {source} -> {target} did not verify")
+	# Through a temporary file: a copy that fails (disk full, Ctrl-C) or doesn't verify must never be left as
+	# PhantomRing0000.sl2, which the next launch would take for the player's save.
+	tmp = target.with_name(target.name + ".tmp")
+	try:
+		shutil.copy2(source, tmp)
+		if sha256(source) != sha256(tmp):
+			raise LaunchError(f"copy of {source} -> {target} did not verify")
+		os.replace(tmp, target)
+	finally:
+		if tmp.exists():
+			tmp.unlink()
 	log(f"created {target} from {source.name}")
 	return f"created {target}"
 
@@ -560,7 +638,10 @@ def guest_is_ours(path: Path, kind: str) -> bool:
 	digest = sha256(path)
 	recs = guest_records()
 	own = BUILD / ("dinput8.dll" if kind == "dll" else "")
-	return digest in recs.get(kind, []) or (kind == "dll" and own.is_file() and sha256(own) == digest)
+	# Any PhantomRing guest build is ours to replace, also one another checkout or release package installed (its own
+	# logs/guest-install.json): version.is_phantomring_guest knows it by its build tag or its log's name.
+	from .version import is_phantomring_guest
+	return digest in recs.get(kind, []) or (kind == "dll" and ((own.is_file() and sha256(own) == digest) or is_phantomring_guest(path)))
 
 
 def install_guest(mgsv_dir: Path, log=print) -> dict:
@@ -610,7 +691,7 @@ def uninstall_guest(mgsv_dir: Path, log=print) -> None:
 			log(f"{p}: not present")
 			continue
 		digest = sha256(p)
-		ours = digest in recs.get(kind, []) or (kind == "dll" and (BUILD / "dinput8.dll").is_file() and sha256(BUILD / "dinput8.dll") == digest)
+		ours = digest in recs.get(kind, []) or (kind == "dll" and guest_is_ours(p, kind))
 		if not ours:
 			log(f"{p}: sha256 {digest[:16]}... is not one we installed; left alone")
 			continue
@@ -915,9 +996,11 @@ def _descendants(roots: set[int]) -> set[int]:
 
 
 def our_processes(pids: dict) -> set[int]:
-	roots = {v["pid"] for k, v in pids.items() if isinstance(v, dict) and "pid" in v}
-	found = _descendants(roots)
 	launch_id = pids.get("launchId")
+	# A recorded root counts only while it still carries its launch's marker (its pid may be someone else's by now).
+	roots = {v["pid"] for k, v in pids.items() if isinstance(v, dict) and "pid" in v
+		and (not launch_id or environ_of(v["pid"]).get("PHANTOMRING_LAUNCH_ID") == launch_id)}
+	found = _descendants(roots)
 	if launch_id:
 		# wineserver and pressure-vessel helpers may re-parent or setsid; the marker env follows them.
 		for d in Path("/proc").iterdir():
@@ -940,8 +1023,10 @@ def game_processes_launched(only: str) -> set[int]:
 		v = pids.get(only)
 		if not isinstance(v, dict) or "pid" not in v:
 			continue
-		found |= _descendants({v["pid"]})
 		launch_id = pids.get("launchId")
+		# An old record's pid may belong to someone else by now: only a root that still carries its launch's marker.
+		if not launch_id or environ_of(v["pid"]).get("PHANTOMRING_LAUNCH_ID") == launch_id:
+			found |= _descendants({v["pid"]})
 		if launch_id:
 			for d in Path("/proc").iterdir():
 				if d.name.isdigit() and alive(int(d.name)):
@@ -960,12 +1045,19 @@ def stop(timeout: float = 20.0, kill: bool = False, log=print, only: str | None 
 			log(f"no running {only} process from a pr launch")
 			return 0
 	else:
+		# Both games, whichever launch started each: after `pr launch --mgsv-only` (MGSV brought back next to a running Elden
+		# Ring) logs/current holds only MGSV, and a plain `pr stop` used to leave Elden Ring running (live 2026-10-13).
 		f = LOGS / "current/pids.json"
-		if not f.exists():
+		pids = {}
+		if f.exists():
+			try:
+				pids = json.loads(f.read_text())
+			except ValueError:
+				pids = {}
+		procs = our_processes(pids) | game_processes_launched("er") | game_processes_launched("mgsv")
+		if not f.exists() and not procs:
 			log("nothing recorded in logs/current/pids.json (was anything started with pr launch?)")
 			return 1
-		pids = json.loads(f.read_text())
-		procs = our_processes(pids)
 	if not procs:
 		log("none of the launched processes are running")
 		return 0
@@ -995,7 +1087,8 @@ def stop(timeout: float = 20.0, kill: bool = False, log=print, only: str | None 
 		deadline = time.monotonic() + timeout / 2
 		while time.monotonic() < deadline and any(alive(p) for p in group):
 			time.sleep(0.25)
-	left = {p for p in (game_processes_launched(only) if only else our_processes(pids)) if alive(p)}
+	left = {p for p in (game_processes_launched(only) if only else
+		our_processes(pids) | game_processes_launched("er") | game_processes_launched("mgsv")) if alive(p)}
 	if left and kill:
 		for p in left:
 			try:

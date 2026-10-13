@@ -46,9 +46,9 @@ namespace phantom::er
 	// The ER character's facing (unit, horizontal part only matters) from its physics quaternion.
 	inline Vec3 ErForward(const Quat& a_q, const Axes& a_axes) { return Rotate(a_q, { 0.0f, 0.0f, a_axes.erForward }); }
 
-	// The argument ChrIns::SetYaw needs for a wanted ER heading. SetYaw builds q = RotY(yaw) (verified:
-	// 0x461F60 uses yaw*0.5 on the Y axis), which maps +Z to Heading == yaw; if ER's forward is -Z the
-	// character must be turned by an extra pi.
+	// The yaw ChrIns::SetYaw needs for a wanted ER heading. SetYaw builds q = RotY(yaw) from the second of its Euler
+	// angles (0x461F60: each times 0.5, about X, Y, Z; er/Game.cpp passes the yaw there), which maps +Z to Heading ==
+	// yaw; if ER's forward is -Z the character must be turned by an extra pi.
 	inline float ErYawForHeading(float a_heading, const Axes& a_axes)
 	{
 		return WrapPi(a_heading + (a_axes.erForward < 0 ? std::numbers::pi_v<float> : 0.0f));

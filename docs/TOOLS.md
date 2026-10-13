@@ -32,11 +32,24 @@ pr launch [--mgsv-only|--er-only] [-W 1280 -H 720] [--wait] [--proton-debug WINE
 pr er-continue                 # through Elden Ring's title: pad A and keyboard Enter every 4 s until it loads
                                # (with no controller plugged in, first `pr er "input virtualpad on"`: docs/HOST.md)
 pr stop [--er|--mgsv] [--kill] # SIGTERM what pr launch started (games first), --kill SIGKILLs the rest after --timeout;
-                               # --er / --mgsv: only that game, whichever recent launch started it
+                               # both games, whichever recent launch started each (after `launch --mgsv-only` next to a
+                               # running Elden Ring it used to stop MGSV only); --er / --mgsv: only that game. A recorded
+                               # pid counts only while it still carries its launch's PHANTOMRING_LAUNCH_ID (pid reuse)
 pr logs [-n 30] [-f]           # tail logs/current/*.log (gamescope/me3 output, Proton logs) and the plugin logs
 pr backup-saves [--er-only|--mgsv-only]
-pr restore-saves <timestamp> [--er-only|--mgsv-only] --yes   # without --yes: shows what it would do
-pr uninstall-guest             # removes MGS_TPP/dinput8.dll (+ PhantomRingGuest.ini) only if its sha256 is one we installed
+pr restore-saves <timestamp> [--er-only|--mgsv-only] [--all-er-files] --yes
+                               # without --yes: lists every file it would overwrite. Elden Ring: only PhantomRing0000.sl2
+                               # (+ its .bak) unless --all-er-files (the backup holds the whole save folder: ER0000.sl2, .co2, ...);
+                               # a PhantomRing0000.sl2* the backup doesn't hold (created after it: a first launch's backup) is
+                               # removed (it is in the pre-restore safety backup); the dry run lists it ("removes ...")
+pr uninstall-guest             # removes MGS_TPP/dinput8.dll (+ PhantomRingGuest.ini) only if it is ours: a sha256 we installed,
+                               # or any PhantomRing guest build (its build tag); another mod's dinput8.dll is left alone
+pr --version                   # the tools' version (VERSION + commit, -dirty for uncommitted changes) and both built DLLs'
+pr doctor                      # read-only machine check, one [ok]/[warn]/[FAIL]/[info] line each with the fix: Steam, both
+                               # games' exact versions, Proton/SLR, gamescope, me3 + profile, the build vs the tools, the guest
+                               # in MGS_TPP, saves, backup size, /dev/shm, MGSV offline (region/ToS), D-Walker (last run's log)
+pr collect-logs [-o F.zip]     # logs/phantomring-logs-<time>.zip for a bug report: plugin + launch logs (tails), inis,
+                               # versions, doctor, status; home/user/host/Steam ids redacted; never saves or game files
 pr screenshot [-o file.png] [--mode full|active|monitor]     # spectacle -b -n -f -o <file>; prints the path
 pr install-me3 [--archive me3-linux-amd64.tar.gz]          # extracts the verified me3 0.13.0 into third_party/me3 (launch does it on demand)
 pr fake-er [...] / pr fake-mgsv [...]                         # run a stand-in peer (see below)
@@ -70,8 +83,9 @@ and the game runs it when it next serves its console.
    - ER: `compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing/<steamid64>/` is copied to `backups/<ts>/er/`.
    - MGSV: `~/.local/share/Steam/userdata/<account>/311340/remote` is copied to `backups/<ts>/mgsv/311340-remote/`, and `.../287700` to `backups/<ts>/mgsv/287700/`.
    - Every file is re-hashed on both sides, and `manifest.json` is written and then verified. Each ER backup is about 140 MB.
-   - Old backups are pruned only when asked (`--keep-backups N`, `$PHANTOMRING_KEEP_BACKUPS`; default 0 = keep all): then the newest N are kept, and so are the oldest one (your saves before PhantomRing first ran) and every `*-pre-restore` one.
-3. **ER save.** If `PhantomRing0000.sl2` doesn't exist, it is created as a verified copy of the seed save (`--seed-save`, `$PHANTOMRING_SEED_SAVE`, else `ER0000.sl2`). The seed is never modified, and an existing `PhantomRing0000.sl2` is never replaced.
+   - Old backups are pruned only when asked (`--keep-backups N`, `$PHANTOMRING_KEEP_BACKUPS`; default 0 = keep all): then, for Elden Ring and for MGSV each, the newest N backups holding that game are kept and so is the oldest one holding it (its saves before PhantomRing first ran); a backup goes only when neither game keeps it. Every `*-pre-restore` one and any folder whose manifest can't be read are kept too.
+   - Two backups in the same second get their own folders (`<ts>-2`, `<ts>-2-pre-restore`): the second used to rewrite the first's manifest.
+3. **ER save.** If `PhantomRing0000.sl2` doesn't exist, it is created as a verified copy of the seed save (`--seed-save`, `$PHANTOMRING_SEED_SAVE`, else `ER0000.sl2`), through `PhantomRing0000.sl2.tmp` (renamed only once its sha256 matches; a failed copy leaves no save behind). The seed is never modified, and an existing `PhantomRing0000.sl2` is never replaced.
 4. **me3.** If it isn't there yet, the official `me3-linux-amd64.tar.gz` of [me3 v0.13.0](https://github.com/garyttierney/me3/releases/tag/v0.13.0) is extracted to `third_party/me3/`. It is looked for at `pr install-me3 --archive PATH`, `$PHANTOMRING_ME3_ARCHIVE`, `third_party/downloads/` and `~/Downloads/`. Its sha256 must equal the release's published digest (`f31579de…e93fc1`, `ME3_SHA256` in `launch.py`), and it is unpacked with `tarfile` `filter="data"`.
 5. **Mapping.** `/dev/shm/phantomring_v1` is created (mode 0600), truncated to 0, and sized to `kMappingBytes`. This leaves it all zero.
 6. **Guest.**
@@ -163,6 +177,12 @@ cmake --build build --target check_windows   # Windows players (docs/WINDOWS.md)
                                              # both link codes over Local\PhantomRing_v1 + the launcher end to end, the hidden
                                              # window, DLL imports (tools/check_imports.py)
 python3 -I tools/package_windows.py          # dist/PhantomRing-<version>-windows.zip (me3 profile, both DLLs, inis, README-WINDOWS.md)
+python3 -I tools/package_linux.py            # dist/PhantomRing-<version>-linux.tar.gz (the checkout's layout: build/ DLLs, inis, tools/pr)
+                                             # both: reproducible, BUILD.txt (version, commit, protocol, game versions, sha256
+                                             # of every file) inside, <archive>.sha256 next to it; refuse DLLs of another commit
+python3 tools/phantomring/test_release.py    # versions/tags, mismatch wording, both packages twice (byte-identical), pr doctor
+                                             # on an empty fake machine, collect-logs redaction (needs build/ for the packages)
+python3 tools/phantomring/test_replay.py     # pr record / pr replay between the stand-ins (27 checks)
 ```
 
 `test_layout.py` runs wine in `$PHANTOMRING_WINEPREFIX`, else `$WINEPREFIX`, else wine's default prefix. A throwaway prefix keeps the tests off your own: `PHANTOMRING_WINEPREFIX=$(mktemp -d)`. It rebuilds `layout_dump` through cmake, and if the build tree can't regenerate it compiles `tests/layout_dump.cpp` directly.
@@ -173,6 +193,8 @@ What each check needs, on a fresh clone:
 |---|---|---|
 | `test_launcher.py` | Python only | - |
 | `test_fakes.py` | Python only | - |
+| `test_replay.py` | Python only | - |
+| `test_release.py` | `build/` for the package checks, MinGW objdump | package checks skipped |
 | `test_layout.py`, `test_plugins.py` | `build/` (MinGW), wine | fails |
 | `check_host`, `check_guest`, `check_windows` | `build/`, wine (`WINEPREFIX=$(mktemp -d)` keeps them off your prefix; `xvfb-run` on a machine with no display) | fails |
 | `check_guest`'s `test_guest_pump` | `-DPHANTOM_LUA51_SRC=<lua-5.1.5>/src` (the stock Lua 5.1.5 sources) | skipped, with a message |

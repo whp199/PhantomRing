@@ -10,7 +10,9 @@
 #include "Mapping.h"
 #include "Offline.h"
 #include "Pad.h"
+#include "SaveGuard.h"
 #include "State.h"
+#include "WindowHidden.h"
 
 #include <windows.h>
 #include <xinput.h>
@@ -70,6 +72,11 @@ namespace phantom::guest::pump
 			ULONGLONG   buddyGoneSince{ 0 };  // kReady: the deployed buddy's object is gone (destroyed in MGSV's world)
 			ULONGLONG   buddyRetryAt{ 0 };
 			int         buddyRevivals{ 0 };
+			ULONGLONG   buddyWhistledAt{ 0 };
+			int         adoptedType{ -1 };   // MGSV's active BuddyType the guest knows as its own (-1: not seen yet)
+			ULONGLONG   otherSince{ 0 };     // ...another one has been active since then
+			bool        switching{ false };  // the buddy step runs for an in-session switch (Snake keeps the pad meanwhile)
+			ULONGLONG   switchStarted{ 0 };
 		} g_boot;
 
 		std::mutex  g_describeLock;
@@ -312,8 +319,21 @@ namespace phantom::guest::pump
 				v.buddyYawValid = std::isfinite(v.buddyYaw);
 			}
 			v.ridden = a_ctx.Type(first + 9) == addr::kLuaTNumber ? static_cast<std::uint16_t>(a_ctx.Number(first + 9)) : kNullId;
+			// D-Horse (and D-Dog, Quiet) answer no GetPosition (live: TppHorse2 returned nothing): its own skin's root instead.
+			if (!v.buddyPosValid && v.buddyId != kNullId) {
+				logic::Vec3 p;
+				float       yaw = 0.0f;
+				if (state::BuddyPose(p, yaw)) {
+					v.buddyPos = p;
+					v.buddyPosValid = true;
+					v.buddyYaw = yaw;
+					v.buddyYawValid = true;
+				}
+			}
 			if (!commands.empty()) {
-				Log::Debug("lua: {} -> {}", commands, a_ctx.String(first + 10));
+				const auto results = a_ctx.String(first + 10);
+				Log::Debug("lua: {} -> {}", commands, results);
+				state::RunCommandResults(results);
 			}
 			a_ctx.SetTop(top);
 			state::SetLua(v);
@@ -417,6 +437,46 @@ namespace phantom::guest::pump
 			g_boot.boxWait = a_now + 300;
 		}
 
+		// kReady: the player deployed another buddy through MGSV's iDroid (Buddy Support > "Request deployment of D-Horse",
+		// live 2026-10-13: the walker went, D-Horse came): follow that choice -- the buddy type every buddy path keys on
+		// becomes the new one (until the next boot, which deploys the ini's again), its skin is learned anew.
+		void AdoptBuddy(const lua::Ctx& a_ctx, ULONGLONG a_now, const state::LuaView& a_lua)
+		{
+			auto& c = MutableCfg();
+			if (c.buddy == "none" || a_lua.buddyActive < 0 || a_lua.buddyActive == g_boot.adoptedType) {
+				g_boot.otherSince = 0;
+				return;
+			}
+			if (!g_boot.otherSince) {
+				g_boot.otherSince = a_now;
+				return;
+			}
+			if (a_now - g_boot.otherSince < 2000) {
+				return;
+			}
+			// Asked once it has been active 2 s (right after the change MGSV can still report it half-loaded: live, nil).
+			const auto kind = Call(a_ctx, "return PhantomRing.ActiveBuddyKind()");
+			if (kind == c.buddy) {
+				g_boot.adoptedType = a_lua.buddyActive;  // the configured one: nothing to adopt
+				g_boot.otherSince = 0;
+				return;
+			}
+			if (kind != "walker" && kind != "horse" && kind != "dog" && kind != "quiet") {
+				g_boot.otherSince = a_now;  // not known (yet): asked again in 2 s
+				return;
+			}
+			g_boot.otherSince = 0;
+			g_boot.adoptedType = a_lua.buddyActive;
+			Log::Info("boot: the player deployed {} from the iDroid (was {}) -- following that choice", BuddyName(kind), BuddyName(c.buddy));
+			c.buddy = kind;
+			state::ForgetBuddy("another buddy (iDroid)");
+			state::SetBuddyMissing(false);
+			g_boot.buddyStatus = "active (iDroid)";
+			if (kind == "horse") {
+				state::WhistleHorse("deployed from the iDroid");  // it gallops over; its skin is learned beside Snake
+			}
+		}
+
 		// kReady: the deployed buddy's object went away while Snake plays -- MGSV destroyed it in its own world (live: a rocket fired
 		// with D-Walker in MGSV's line of fire; `buddy: D-Walker gone`, then `D-Walker: missing: dead` at the next boot). Elden Ring
 		// has no repair, so after 10 s it is revived and called next to Snake ([Buddy] Revive), retried every second for a minute.
@@ -462,13 +522,12 @@ namespace phantom::guest::pump
 			const bool  title = lua.valid && (lua.flags & state::kLTitle);
 			const bool  inGame = lua.InGame() && fr.valid && a_now - fr.tickMs < 1000;
 			const auto  since = a_now - g_boot.entered;
-			const char* buddy = BuddyName(c.buddy);
 			const char* place = MissionName(c.autoBoot ? c.mission : lua.mission);
 			const auto  readyText = [&] {
 				const bool buddyOk = c.buddy == "none" || g_boot.buddyStatus.starts_with("active");
 				return c.buddy == "none" ? std::format("MGSV: ready ({})", place)
-				       : buddyOk         ? std::format("MGSV: ready ({}, {} deployed)", place, buddy)
-				                         : std::format("MGSV: ready ({}; {}: {})", place, buddy, g_boot.buddyStatus);
+				       : buddyOk         ? std::format("MGSV: ready ({}, {} deployed)", place, BuddyName(c.buddy))
+				                         : std::format("MGSV: ready ({}; {}: {})", place, BuddyName(c.buddy), g_boot.buddyStatus);
 			};
 
 			// The player's pad reaches MGSV once the sandbox is ready (boot pulses go through either way).
@@ -493,6 +552,62 @@ namespace phantom::guest::pump
 				g_boot.requested = 0;
 				// Same mission: just redo the setup (warp to the new spot, new centre); else load it once.
 				Enter(sameMission && lua.InGame() ? Boot::kSetup : Boot::kWaitGame, a_now);
+			}
+			// The buddy's deployment step (boot, or an in-session switch while ready); true = done (deployed, missing or given up).
+			const auto deployBuddy = [&](ULONGLONG a_since) {
+				// Beside and ahead of Snake, facing the same way: never behind him, where the camera is (MGSV fades
+				// objects near its own camera; Elden Ring's renderer doesn't, a walker there fills the screen).
+				// At boot the configured sandbox spot, not the frame's root: right after the setup warp the frame can still
+				// report where Snake was before it (VERIFIED live: D-Walker ended up at the mission's start point, 1.2 km away).
+				const bool  spot = c.hasPosition && !g_boot.switching;
+				const float yaw = spot ? c.rotYDeg * std::numbers::pi_v<float> / 180.0f : fr.yaw;
+				const float rx = spot ? c.position[0] : fr.root.x;
+				const float ry = spot ? c.position[1] : fr.root.y;
+				const float rz = spot ? c.position[2] : fr.root.z;
+				// forward = (sin yaw, 0, cos yaw); right = (-cos yaw, 0, sin yaw) (VERIFIED live: Snake facing +x has +z on
+				// the screen's right).
+				const float x = rx + std::sin(yaw) * c.buddyAhead - std::cos(yaw) * c.buddySide;
+				const float z = rz + std::cos(yaw) * c.buddyAhead + std::sin(yaw) * c.buddySide;
+				const char* who = BuddyName(c.buddy);
+				auto        r = Call(a_ctx, std::format("return PhantomRing.Buddy('{}', {}, {}, {}, {}, {})", c.buddy, x, ry, z, yaw, c.buddyRevive));
+				if (r.starts_with("called")) {
+					state::HintBuddy({ x, ry, z }, 6.0f, 10000);  // where MGSV puts it, for its skin (no GetPosition)
+				}
+				if (r.starts_with("spawned") && lua.buddyPosValid) {
+					r = std::format("active (its skin at {:.1f},{:.1f},{:.1f})", lua.buddyPos.x, lua.buddyPos.y, lua.buddyPos.z);
+				} else if (r.starts_with("spawned") && c.buddy == "horse" && a_since > 8000 && a_now - g_boot.buddyWhistledAt > 15000) {
+					// Not where it was called: MGSV's own call brings it (it gallops over; the skin is learned beside Snake).
+					g_boot.buddyWhistledAt = a_now;
+					Log::Info("boot: {} not seen where it was called -- whistling it over: {}", who,
+						state::WhistleHorse("boot: not where it was called") ? "ok" : "refused (byte checks)");
+				}
+				if (r != g_boot.buddyStatus) {
+					Log::Info("boot: {}: {}", who, r);
+					g_boot.buddyStatus = r;
+				}
+				if (!g_boot.switching) {
+					link::SetStatus(proto::Status::kLoading, std::format("MGSV: deploying {} ({})", who, r));
+				}
+				state::SetBuddyMissing(r.starts_with("missing"));
+				const bool done = r.starts_with("active") || r.starts_with("missing") || r.starts_with("unavailable") || r == "none" || a_since > 60000;
+				if (done && a_since > 60000 && !r.starts_with("active")) {
+					Log::Warn("boot: {} not deployed after 60 s ({})", who, r);
+				}
+				return done;
+			};
+			if (const auto req = state::TakeBuddyRequest()) {
+				// Another buddy in session (`!buddy`, docs/GUEST.md 8): the buddy step again, next to where Snake is now, then
+				// straight back to ready (no box sequence, the centre kept).
+				auto& m = MutableCfg();
+				Log::Info("boot: buddy {} -> {} (in session)", m.buddy, *req);
+				m.buddy = *req;
+				state::ForgetBuddy("another buddy");
+				state::SetBuddyMissing(false);
+				g_boot.buddyStatus.clear();
+				if (g_boot.state == Boot::kReady && m.buddy != "none") {
+					g_boot.switching = true;
+					g_boot.switchStarted = a_now;
+				}
 			}
 			switch (g_boot.state) {
 			case Boot::kWaitLua:
@@ -595,6 +710,15 @@ namespace phantom::guest::pump
 					Log::Info("boot: audio (music {}, ambience {}, radio {}): {}", onOff(c.music == MusicMode::kKeep), onOff(c.ambience), onOff(c.radio),
 						Call(a_ctx, std::format("return PhantomRing.Audio('{}', '{}', '{}')", onOff(c.music == MusicMode::kKeep), onOff(c.ambience), onOff(c.radio))));
 					Log::Info("boot: menus: {}", Call(a_ctx, std::format("return PhantomRing.Menus({}, {})", c.safePauseMenu, c.blockMissions)));
+					// MGSV's Auto-Aim Correction ([Boot] AutoAim): never changed while MGSV could save it -- [Saves] Block alone is
+					// not enough (review): the file guards may be incomplete (InstallFileGuards) or the Steam swap incomplete
+					// (PollSteam kIncomplete), and the guest carries on with saves live. Both guards must really be in place.
+					if (!c.autoAim) {
+						const bool guarded = c.blockSaves && hidden::SavesBlocked() && saves::SteamGuarded();
+						Log::Info("boot: auto-aim correction: {}", guarded ? Call(a_ctx, "return PhantomRing.AutoAim(false)") :
+							!c.blockSaves ? std::string("left as it is ([Saves] Block = false: it would be saved)") :
+							                std::string("left as it is (the save guards are incomplete: it could be saved)"));
+					}
 					// [Loadout] weapons the loaded mission doesn't have: into the sortie loadout and the sandbox once more, so MGSV
 					// loads their models (a weapon given mid-mission can't be drawn). Once per boot.
 					if (LoadoutWeapons()) {
@@ -619,39 +743,10 @@ namespace phantom::guest::pump
 				}
 
 			case Boot::kBuddy:
-				{
-					if (since < 1500) {
-						break;  // let the setup warp land first: the buddy is called next to where Snake ends up
-					}
-					// Beside and ahead of Snake, facing the same way: never behind him, where the camera is (MGSV fades
-					// objects near its own camera; Elden Ring's renderer doesn't, a walker there fills the screen).
-					// The configured sandbox spot, not the frame's root: right after
-					// the setup warp the frame can still report where Snake was before it (VERIFIED live: D-Walker
-					// ended up at the mission's start point, 1.2 km away).
-					const bool  spot = c.hasPosition;
-					const float yaw = spot ? c.rotYDeg * std::numbers::pi_v<float> / 180.0f : fr.yaw;
-					const float rx = spot ? c.position[0] : fr.root.x;
-					const float ry = spot ? c.position[1] : fr.root.y;
-					const float rz = spot ? c.position[2] : fr.root.z;
-					// forward = (sin yaw, 0, cos yaw); right = (-cos yaw, 0, sin yaw) (VERIFIED live: Snake facing +x has +z on
-					// the screen's right).
-					const float x = rx + std::sin(yaw) * c.buddyAhead - std::cos(yaw) * c.buddySide;
-					const float z = rz + std::cos(yaw) * c.buddyAhead + std::sin(yaw) * c.buddySide;
-					const auto  r = Call(a_ctx, std::format("return PhantomRing.Buddy('{}', {}, {}, {}, {}, {})", c.buddy, x, ry, z, yaw, c.buddyRevive));
-					if (r != g_boot.buddyStatus) {
-						Log::Info("boot: {}: {}", buddy, r);
-						g_boot.buddyStatus = r;
-					}
-					link::SetStatus(proto::Status::kLoading, std::format("MGSV: deploying {} ({})", buddy, r));
-					state::SetBuddyMissing(r.starts_with("missing"));
-					if (r.starts_with("active") || r.starts_with("missing") || r.starts_with("unavailable") || r == "none" || since > 60000) {
-						if (since > 60000 && !r.starts_with("active")) {
-							Log::Warn("boot: {} not deployed after 60 s ({})", buddy, r);
-						}
-						Enter(Boot::kBox, a_now);
-					}
-					break;
+				if (since >= 1500 && deployBuddy(since)) {  // 1.5 s: let the setup warp land first (it is called next to Snake)
+					Enter(Boot::kBox, a_now);
 				}
+				break;
 
 			case Boot::kBox:
 				BoxStep(a_ctx, a_now, since);
@@ -700,6 +795,15 @@ namespace phantom::guest::pump
 							break;
 						}
 						g_boot.notInGameSince = 0;
+						if (g_boot.switching) {
+							if (deployBuddy(a_now - g_boot.switchStarted)) {
+								g_boot.switching = false;
+								Log::Info("boot: in-session buddy switch done ({})", g_boot.buddyStatus);
+								link::SetStatus(proto::Status::kReady, readyText());
+							}
+							break;
+						}
+						AdoptBuddy(a_ctx, a_now, lua);
 						ReviveBuddy(a_ctx, a_now, lua, fr);
 						if (c.clearMarkersSec > 0 && a_now - g_boot.markersClearedAt >= static_cast<ULONGLONG>(c.clearMarkersSec) * 1000) {
 							// D-Walker's Search Mode and Snake's own looking mark MGSV soldiers again: kept off.

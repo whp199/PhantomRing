@@ -66,14 +66,18 @@ The puppet stops, and everything it changed is restored, the same frame any of t
 - a load starts;
 - the player dies;
 - the player object changes;
+- the player takes the Tarnished (Tarnished mode, below), or Elden Ring walks him through a mist (the step-aside, below);
 - the console says `puppet off`.
+
+Each reason that keeps the puppet off is its own `Puppet::Hold` (console, Tarnished mode, step-aside); it runs again when
+none is left (`puppet auto` clears the console's and a step-aside).
 
 Elden Ring has the controller back on that frame.
 
 **Menus**: the primary signal is CSMenuMan+0x798 (non-zero while a blocking menu is open; re-backlog
 E4, code-verified, coverage checked live; every change is logged as `ER blocking menu open/closed`).
-`er/MenuWatch.cpp` stays as the fallback and OR'ed in: after a Start or View press, a latch (1.5 s)
-treats an ER menu as open. Meanwhile CSMenuMan UI states that turn visible after
+`er/MenuWatch.cpp` stays as the fallback and OR'ed in: after a Start or View press (or a keyboard menu key, below), a latch
+(1.5 s) treats an ER menu as open. Meanwhile CSMenuMan UI states that turn visible after
 the press, and are still visible when the latch ends, are *learned* as menu states. The log says
 `learned ER menu UI state 0x..`; pin those values in `[Input] menu_ui_states`. Entries learned or armed together form a
 group; an entry also seen as Elden Ring's HUD (turned visible with no press and no menu open, or already up when the press
@@ -82,7 +86,35 @@ that came up inside the latch no longer hands the pad back to MGSV inside a menu
 group open. While an ER menu is open,
 ER gets the whole pad and MGSV gets `kPadNeutral`. The same holds while an **ER cutscene** plays
 (`[[CSRemo]+8]+0x14C` bit 0, E4; logged as `ER cutscene playing/over`, `kHostCutscene` set, puppet motion
-paused).
+paused). A press during a cutscene, or within 500 ms after it (the skip's fade: `MenuWatch::SwallowPress`), never latches
+or learns, and whatever turns visible within 4 s after it is HUD and never arms or teaches a menu, even inside a latch
+(`WindowArm`, tested): skipping Margit's intro with Start once learned his health bar as a menu and Elden Ring kept the pad
+for the fight (e226ea5). A later press in those 4 s still latches (it used to be swallowed, leaving MGSV the pad inside a
+menu opened right after a cutscene), and nothing is un-learned inside a latch. Re-checked 2026-10-13 without the cutscene (it plays only the first time): through the mist, Margit's bar came
+up and the menu watch stayed closed (`menu closed`, the bar's entries `HUD too`), the pad Snake's for the whole fight.
+
+**Full-screen menus** (`MenuWatch::FullScreenMenu`, tested; found live 2026-10-13 with both games): Start -> Inventory (or
+Equipment, Status, the map) hides the main menu's own entries (0x1c, 0x17) and, a frame later, Elden Ring's in-game HUD (UI
+state 7, `interaction_hud_state`); the inventory's entries (0x1f, 0x20; the equipment's 0x1d) come up in between. The main
+menu's group closed, the new entries were taken for HUD, and A/B/D-pad went to MGSV inside the inventory (D-pad right switched
+Snake's weapon; only Start got out). Now: the HUD hiding while a menu is open, or was within `kSubmenuGapMs` (500 ms), makes
+it a full-screen menu, open until the HUD is back (`menu watch: Elden Ring's HUD hid inside its menu ...` / `... is back`);
+entries that come up in the frame their menu's group closes arm a group of their own and are learned (`learned ER menu UI
+state 0x1f (a submenu replacing its menu)`), so the menu never reads closed for a frame -- that one frame had Elden Ring's pad
+lose the A still held and see it pressed again: one A opened the inventory *and* the first item's context menu, one A in
+Equipment opened the right-hand list (live; with the fix: the equipment overview and the inventory grid, B back to the main
+menu, B closed, MGSV's HUD layer hidden throughout, VERIFIED live). The HUD state itself is never learned as a menu entry
+(a close press used to learn it as the HUD came back). Such a submenu group needs one entry that is not also Elden Ring's HUD
+(`MenuWatch::SubmenuGroup`, review 2026-10-13): closing the map during Margit with his bar (0x12, HUD too) coming back in the
+same frame would otherwise arm a group of the bar alone, held "open" for the whole fight (and learn 0x12 as a menu).
+
+**Keyboard menus** (`[Input] menu_keys` 0x1B Esc, 0x47 G = its map; roadmap 1.8): Elden Ring opened its menu from Esc and
+nothing noticed it -- MGSV's HUD layer and the throw markers stayed over it, and its UI entries, coming up "without a
+press", were even taken for HUD. Each frame `MenuWatch` reads those keys (`GetAsyncKeyState`: the down edge, or the
+"pressed since the last call" bit for a tap shorter than a frame), only while Elden Ring's window is in front, and counts a
+press like the pad's Start. VERIFIED live 2026-10-13 (`input keydown/keyup 0x1B`): `menu watch: key 0x1b (Esc: its menu)
+pressed in Elden Ring's window` -> `learned ER menu UI state 0x1c/0x17`, `menu OPEN`, the MGSV HUD layer at 0; Esc again
+closed it and Snake's HUD came back.
 
 **Interaction prompts** (re-backlog E6): while `CSActionButtonMan+0x20` holds the on-screen prompt
 (logged with its ActionButtonParam id), a *fresh* press of `[Input] prompt_button` goes to Elden
@@ -98,17 +130,152 @@ playing, `01` hidden): hidden 2.3-2.9 s after resting at a grace, while talking 
 cutscenes, in "Choose revival location". The grace menu is no "blocking" menu (CSMenuMan+0x798 stays 0) and not a
 state Start/View learning finds, so before this it got the masked pad and could not be left. The HUD is used only when
 it was up at the press and was seen visible since the last load: a hidden HUD is not a menu signal by itself (ER's
-"auto" HUD setting may hide it while you just play -- UNVERIFIED which state that hides). Live: Y at the Gatefront
+"auto" HUD setting may hide it while you just play -- UNVERIFIED which state that hides). The press-less starts (an NPC's
+dialog, the next screen, the grace's next screen) trust a HUD hide, so `AutoHud` (er/Interaction.h, review 2026-10-13) counts
+the hides nothing explains (Snake playing in the world: no press, menu, cutscene, load or death, no prompt or interaction end
+within 1 s, not at a grace, no rest prompt): at the second it logs `Elden Ring's HUD looks set to "Auto"` and turns those
+starts off for the session (the Tarnished-mode gate then uses "at a grace" instead of the HUD); and a press-less start whose
+Tarnished walks 2 m away ends at once (no screen keeps him moving). Not seen live (the player's HUD is "On"). Live: Y at the Gatefront
 grace -> its menu, B -> Snake plays on; Y at a bloodstain -> runes back; a pickup -> Snake back after 3.5 s. Until the HUD has
 hidden, Elden Ring gets only the face buttons, D-pad, Start and View (`InputBridge::SetButtonsOnly`; an Elden Ring menu
 opened meanwhile gets everything): with the whole pad the stick, bumpers and triggers walked, rolled and swung the hidden
 Tarnished for the rest of the 3.5 s after a 1 s pickup, and Snake then jumped there (UNVERIFIED live).
 
+**The mist** (`[Input] release_prompts` 10000 "Traverse the mist", `release_ms` 4500): Elden Ring walks the Tarnished
+through a fog wall itself, and refused to while the puppet held him (the player's session). The prompt press turns the
+puppet off for `release_ms` (`Puppet::Hold::kStepAside`), then Snake takes over where Elden Ring left him. VERIFIED live
+2026-10-13 at Margit's fog, kinematic and root motion: `puppet steps aside for 4500 ms` -> the Tarnished walked through
+(screenshot: inside the arena, Margit's bar up) -> `puppet back after Elden Ring's walk`, `puppet ON ... ER feet (-14.03,
+0.96, -12.09)` inside, 2.2 m past the wall. Before the SetYaw fix (Motion below) the prompt never even showed while Snake
+played: it checks the player's facing, and the puppet was pitched.
+
+**NPC dialogs that come up by themselves**: live, resting at the Castleward Tunnel grace brought Melina, who talked and
+then asked "Go to the Roundtable Hold" (A/B) with no press of ours: the interaction (3.5 s, HUD still up) was over and the
+pad was MGSV's, so nothing could answer her (Tarnished mode did). Now Elden Ring's HUD hiding while (or within 1 s after)
+an interaction prompt was on screen, with no press, no menu and no cutscene, starts an interaction too (`ER dialog: its
+HUD hid as the prompt (ActionButtonParam 6001) went, with no press`): Elden Ring has the pad until its HUD is back. One of
+its screens right after another continues it: answered, her question gives way to the grace menu with the HUD back for
+~120 ms in between, and an interaction past its minimum time ended there (Snake had the pad inside the grace menu); the HUD
+hiding again within 1 s of an interaction's end now continues it (`ER interaction continues: its HUD hid again 116 ms
+after (the next screen)`). VERIFIED live 2026-10-13 (the session-start save restored three times to bring Melina back,
+fake MGSV, Snake resting with Y): her talk, `ER dialog ... 6001`, B as Snake declined her, the grace menu followed (chained
+after an 8 s wait in the dialog), B left it, Snake had the pad again; MGSV saw no press of it.
+
+**Sitting at a grace** (`g_atGrace` in `er/Host.cpp`): from a rest until the player is 2 m from where he rested (or a load,
+a death), Elden Ring's HUD hiding is always one of the grace's screens and continues the interaction, however long the HUD
+was back. Live with both games 2026-10-13: "Pass time" -> "Until nightfall" showed the HUD for 4.7 s through its fade and then
+the grace menu again; the 1 s chain above missed it, Snake had the pad inside the grace menu (B reloaded his rifle, nothing
+could close the menu). Now `ER interaction continues: its HUD hid again 4682 ms after, Snake still at the grace (its next
+screen)` -> ER has the pad -> B, B -> `ER: left the grace (2.0 m from where he rested)` (VERIFIED live, real MGSV).
+
+**Resting** (`kHEvRested`, protocol v10; `[Input] rest_prompts` 6101 "Rest at site of grace", from the player's log: the
+HUD hid ~3 s after it, the grace menu): Elden Ring refills the flasks when the player rests, so the guest refills Snake's
+ammo. `a = 0` for a rest: Snake's prompt press on a rest prompt, the Tarnished's own Y on one (Tarnished mode: the bridge
+still sees the real pad), or Elden Ring's HUD hiding within 6 s of the rest prompt (a keyboard rest; not when one of its
+menus hid it -- live, the map hides it too); `a = 1` with every respawn, next to `kHEvRespawn`. VERIFIED live 2026-10-13:
+`ER: rested at a grace (Snake's Y on its rest prompt ...) -> kHEvRested 0` -> fake MGSV `ammo 12+120 -> 30+120`; in
+Tarnished mode `(its HUD hid 2.7 s after the rest prompt)`; after Margit killed Snake `ER player respawned (18.9 s after the
+death, after the load) -> kHEvRespawn, kHEvRested 1`.
+
 **View: Elden Ring's map or MGSV's iDroid** (`[Input] view_hold_ms`, 400): while Snake plays, a View *tap* still opens
 Elden Ring's map, but Elden Ring only gets it once it is released (a 120 ms synthesized press), so a View *held* 400 ms
 goes to MGSV instead (its iDroid) and Elden Ring never sees it (MenuWatch's Start/View latch only counts the presses
 Elden Ring got). Logged as `input: View held 400 ms -> MGSV (its iDroid; N so far)`. VERIFIED live with fake_mgsv: tap ->
-ER's map, MGSV no Back; 700 ms hold -> MGSV's Back, no ER menu.
+ER's map, MGSV no Back; 700 ms hold -> MGSV's Back, no ER menu. Re-verified 2026-10-13 with the gate below (tap: map, its
+UI state 0x3d learned; 700 ms: `View held 400 ms -> MGSV Start held 1200 ms`, fake `Start pressed`, no Elden Ring menu).
+
+**Start, View and Tarnished mode** (`er/Chord.h` `PadGate`, pure, `tests/test_host_chord.inc`; roadmap 1.1). Everything
+Snake can't do yet -- a flask, the Spirit Calling Bell, Margit's Shackle, Torrent's whistle, jumps, ladders, an NPC's
+question -- the player now does as the Tarnished, without leaving the game: **View + Start held together `[Input]
+chord_ms` (1000)** hands the controller to the Tarnished (`Puppet::Hold::kTarnished`: the puppet stops through its usual
+path, he shows with his weapon, Snake's draws and MGSV's HUD layer go), `kHEvTarnished 1` parks the guest (neutral pad, no
+follow whistles), and the corner says "Tarnished mode -- View+Start to return to Snake". The same chord gives Snake back:
+the puppet starts again where the Tarnished stands (its start anchors him there; D-Walker is anchor-relative and comes
+along), `kHEvTarnished 0`, "Snake is in control". A guest that attaches meanwhile hears `kHEvTarnished 1` again. What the
+Tarnished went through is Snake's too: the HP bar's net change between the two toggles goes to the guest as `kHEvHeal` or
+`kHEvHurt` (the bar is Snake's life again from the next frame on). Console: `tarnished [on|off|toggle]`.
+- Start and View pass through one gate on every poll of the pad. **kSnake** (Snake plays, no menu): View as above; Start
+  reaches Elden Ring `[Input] start_wait_ms` (150) after it went down, or at its release if that comes first (a tap: a
+  synthesized 120 ms press). **kTarnished** (Tarnished mode, no Elden Ring menu, cutscene or hidden HUD -- not at a grace,
+  where Snake must never take over): Start and View both like that Start (no iDroid). **kGuestMenu** (MGSV's menu): neither
+  reaches Elden Ring, even when the menu closes while the button is still held (it used to: a Start that closed the iDroid
+  could have opened Elden Ring's menu). **kOff** (an Elden Ring menu, a load, death, Snake not playing): both as they are.
+- The chord: Start and View both down before either reached anyone. Neither reaches Elden Ring or MGSV (a View hold under
+  way stops short of the iDroid); held `chord_ms` together it fires once; let go early, nothing. Both stay out of every pad
+  until released, whatever the mode is by then, so Elden Ring's menu never opens or closes from it. A press still undecided
+  when a menu comes up is dropped the same way.
+- When the unmasked pad (Tarnished mode) carries Start/View other than the real ones, Elden Ring gets packet numbers of our
+  own range (0x20000000+), moved whenever the real packet or what it may see changes (it only re-reads a pad whose packet
+  number changed).
+- VERIFIED live 2026-10-13 (fake MGSV, Castleward Tunnel and Margit's arena, `press start+back 1250`): 20 toggles in two
+  sessions, 0 warnings, Elden Ring's menu never opened (`menu closed`), MGSV saw no Start/Back (`pad: Back 0 Start 0`); the
+  Tarnished drank a Flask of Crimson Tears (HP 286 -> 536 of 572) and back as Snake: `HP bar 50% -> 94%: healed 250 HP as
+  the Tarnished -> Snake +2620 life (kHEvHeal 655)`, fake `life 3000 -> 5620`; Margit's hit on the Tarnished (`100% ->
+  9%: lost 523 HP ... -> kHEvHurt 1372`); Melina's question answered with B as the Tarnished. Screenshots: the corner
+  message, the Tarnished with his weapon, Snake back where he stood. The test save has no Torrent (no Spectral Steed
+  Whistle among the quick items), so the whistle is UNVERIFIED.
+- Snake takes over only on foot: on Torrent or on a ladder the chord is refused with "Tarnished mode: get off Torrent first,
+  then View+Start" (`game::PlayerMounted`: modules+0xE8 `CS::CSChrRideModule` +0x162/+0x163 is_mounting/is_mounted,
+  modules+0x78 `CS::CSPlayerLadderModule` +0x18 state, -1 none; each module's RTTI name checked before it is read;
+  `pr er status` shows "the Tarnished on foot / on Torrent / on a ladder"). VERIFIED live 2026-10-13 (Stormhill, the
+  player's Spectral Steed Whistle used from the inventory in Tarnished mode): +0x163 = 1 riding, the chord refused, Torrent
+  ridden 12 m, dismounted, the chord -> Snake back in the grass where the Tarnished stood. The ladder state reads -1 on foot;
+  on a ladder the chord is refused too (VERIFIED live 2026-10-13, Fort Haight: "Ladders" below).
+
+**Ladders** (`er/Ladder.h`, `[Input] ladder_prompts` 5000 "Climb" / 5010 "Descend", `ladder_press_delay_ms` 100, `ladder_wait_ms`
+1500, `ladder_settle_ms` 300; roadmap 1.7). Snake can't climb, so a ladder is an automatic, temporary Tarnished mode, like the
+mist's step-aside but lasting as long as Elden Ring's own ladder state: `CSPlayerLadderModule` (modules+0x78, RTTI checked)
++0x18, fromsoftware-rs `LadderState`: -1 none, 0 StartBottom, 1 StartTop, 2/3 up, 4/5 down, 6 EndTop, 7 EndBottom, 8/9 idle on
+it (`game::LadderState`, every change logged as `ER ladder state a -> b (Name)`).
+- Snake's Y on a ladder prompt steps the puppet aside (`Puppet::Hold::kLadder`): the Tarnished shows, Elden Ring has the whole
+  pad (the left stick climbs, B/X as Elden Ring has them) and its own camera; the corner says "Ladder: the Tarnished climbs (left
+  stick) -- Snake is back at the end". No interaction is started for it (its 3.5 s "menu" would only have kept the chord away).
+- **The press reaches Elden Ring only after the step-aside** (`InputBridge::SetPrompt(.., deferred)` + `PressForEr`): the
+  bridge keeps the real Y out of both games, and Elden Ring alone gets a 150 ms Y `ladder_press_delay_ms` later, with the
+  Tarnished in its hands. Found live: pressed while the puppet still held him, "Descend" at the top never started (the prompt
+  went, no ladder state for 1.5 s; alone the Tarnished starts StartTop 0.5 s after his Y), while "Climb" at the bottom did.
+- On the ladder Start/View go through the Tarnished-mode gate (`PadGate` kTarnished): View + Start there is the chord (Tarnished
+  mode from then on, counted from the ladder for the HP carried over), never Elden Ring's menu and map together (found live: the
+  chord on a ladder opened Elden Ring's main menu). Tarnished mode's own chord back to Snake is refused on a ladder ("get off the
+  ladder first").
+- Off the ladder for `ladder_settle_ms` (EndTop/EndBottom then none), Snake takes over where the Tarnished stands (the puppet's
+  start anchors him there); what the Tarnished went through on it (an arrow, a fall) goes to Snake as in Tarnished mode (`CarryHp`,
+  `kHEvHeal` / `kHEvHurt`). **The stick that climbed doesn't run Snake on** (`InputBridge::HoldLeftStickUntilReleased`): it stays
+  out of MGSV's pad until it is let go. Found live: holding the stick up through the end, Snake ran off the tower's landing and
+  fell 19 m down the ladder's shaft (92% of his life).
+- **Snake starts on ground** (`kinematic::SupportedStart`, kinematic motion, any puppet start): Elden Ring's capsule can stand on
+  a rim with its centre over a drop, the kinematic body can't (one ray under its centre). Live, a climb's end left the Tarnished
+  on the shaft's rim -> `puppet: no ground under the Tarnished's centre at (3.06, 3.25, -1.54) (a rim, a ladder's top) -> Snake
+  starts 0.60 m away on ground`; that first point was the ladder's own top, so the body's four radius points must stand on
+  ground too now (unit-tested; the rim end didn't come again in three more climbs: those ended 1.5-2.7 m from the shaft).
+  Holding the stick up through the end of a climb (one 6 s push): the Tarnished walked 2.7 m off the ladder, Snake took over
+  and moved 0.11 m in the 4 s the stick stayed pushed (latched).
+- A press Elden Ring never turns into a climb (`ladder_wait_ms`) gives Snake the pad back (`ladder: no climb ...`); a load or a
+  death on the way ends it. A ladder state while Snake plays (a press we didn't see, e.g. Elden Ring's keyboard) starts the
+  hand-over too. With the ladder module not the verified one: `ladders: ... the ladder hand-over is off` (Tarnished mode climbs).
+- `pr er status`: `ladder idle|waiting for the climb|climbing|stepping off (state N Name; C climbs, R without a climb)`;
+  `geom ladders [radius]` lists the ladder assets of the loaded blocks (AssetEnvironmentGeometryParam +0x3C bit 0 `isLadder`,
+  168 rows in this regulation; nameless entries of the instance arrays are not ladders).
+- VERIFIED live 2026-10-13 morning **with the real MGSV** (combined run, Fort Haight's tower again, reached the same way with
+  the puppet off): Y on "Climb" (prompt 5000 shown walking up to it) -> `the press goes to Elden Ring now, 100 ms after it` ->
+  `StartBottom` 500 ms after the press -> `the Tarnished is off it after 17.6 s, +19.1 m up` -> `puppet ON`, "Snake is in control"
+  (screenshot), three times. Down: "Descend" (5010) showed once Snake faced the hole from where the Tarnished got off (turned in
+  place with MGSV's own Warp rotation for the script; a person turns him with the stick) -> `StartTop` 501 ms after the press ->
+  `EndBottom` -> `off it after 17.9 s, -18.8 m` -> Snake at the bottom. Twice the script's stick walked Snake on into the hole
+  from the top (no prompt on the way): a 19.2 m/s landing, 92% of his life, as the Tarnished would fall -- README tells players
+  to face the hole and press Y instead.
+- VERIFIED live 2026-10-13 (fake MGSV, Fort Haight's tower, ladder AEG030_902_2001, 19 m: around the five graces the save has
+  near the route -- Castleward Tunnel, Stormhill Shack, Gatefront, Church of Elleh, Agheel Lake North -- `geom ladders` found no
+  ladder; reached with `call setpos` hops east from Gatefront): Snake's Y on "Climb" -> `ladder: the press goes to Elden Ring
+  now, 101 ms after it` -> `StartBottom` 484 ms after the press -> up (2/3, idle 9 between) -> `EndTop` -> none -> `the Tarnished
+  is off it after 17.5 s, +18.9 m up` -> `puppet ON` at the top, the stick held up 3 s more: Snake didn't move; "Descend" at the
+  top -> `StartTop` 501 ms after the press -> down (4/5) -> `EndBottom` -> Snake at the bottom (screenshots: the Tarnished on the
+  ladder with the corner message, climbing down). The re-backlog's ChrCtrl flags: +0xE8..+0xEE read `60 00 00 00 00 00 00` on foot and
+  all through two of Elden Ring's climbs (sampled every 1.5 s; +0xEF was 0x3f in one climb and 0 in the other and on foot): none
+  of +0xE9 (fromsoftware-rs `disable_move`), +0xEB, +0xEC, +0xED marks a ladder in this build -- and with the puppet off on a
+  ladder they matter to neither motion. Tarnished mode on a ladder (the second run): the chord mid-climb -> `Tarnished mode ON
+  (View+Start on a ladder)`, no Elden Ring menu; the chord again on the ladder -> refused, "Tarnished mode: get off the ladder
+  first, then View+Start" (screenshot); off at the top -> `Tarnished mode keeps him`; the chord on foot -> Snake back.
 
 **MGSV's own menu** (`[Input] guest_menu_owns_pad`): while GuestState `kGuestInMenu` is set (iDroid, pause) MGSV gets the
 whole pad -- Start, View and Y included, to work the menu and close it -- and Elden Ring a neutral one (no map, no menu,
@@ -143,18 +310,22 @@ when the puppet starts (the puppet keeps its facing). `M` is the optional X mirr
 (`[Axes] mirror_x`). Two Elden Ring conventions are *voted* from the game while the player still drives
 the Tarnished:
 
-- the character's forward axis (run direction vs `quat·(0,0,1)`);
+- the character's forward axis (run direction vs `quat·(0,0,1)`): -Z in every session (0/40 votes; 2026-10-13, Elden
+  Ring's own control in four stick directions: the physics quaternion's +Z 180 deg from the run each time), so -1 is
+  also the value until it is learned (it was +1: harmless while SetYaw pitched the puppet, Motion below; with the yaw fixed
+  it turned the hidden puppet backwards against Snake's motion -- live, with -1 it faces where Snake goes);
 - the camera `+0x30` row sign (camera → player vs that row), plus the row handedness.
 
 The ini can pin each of them.
 
-### Motion and hits: the two RE-backlog hooks (root motion the default since 2026-10-12; hit_hook on since phase 3)
+### Motion and hits: the two RE-backlog hooks (kinematic motion is the default; hit_hook on since phase 3)
 
 Both are **instance-vtable swaps** (`er/VptrSwap.h`): the one game object gets a private copy of its
 vtable with one slot replaced; no code or `.rdata` is written. Both are installed when the puppet starts
 and restored when it stops (only on the same, live object).
 
-- `[Puppet] motion = root_motion` (**the default**; re-backlog E1, `er/RootMotion.cpp`): PlayerCtrl vfunc 12
+- `[Puppet] motion = root_motion` (off by default since the player's first session, 2026-10-12 evening: "invisible walls
+  everywhere"; re-backlog E1, `er/RootMotion.cpp`): PlayerCtrl vfunc 12
   (`0x3DE610`, verified against the vtable slot and the `call [rax+0x60]` site at `0x3CC85C`) runs the
   original, then replaces the root-motion translation with Snake's displacement (Havok world → character
   local with conj(phys+0x50)). ER's own proxy then moves the puppet with collision, slopes and gravity: Snake is pushed
@@ -170,13 +341,72 @@ and restored when it stops (only on the same, live object).
   `root motion, moved X of Y m asked, catch-up owed Z m`. VERIFIED live 2026-10-12 (fake_mgsv `!move`, Limgrave camp):
   99-109% of the asked distance on open ground per walk, 35.4 of 41.6 m on a walk ending against an ornate carriage
   (stopped at it, not in it); the ER camera and compass unchanged. `puppet motion kinematic|root_motion` switches live.
+  **Likely cause of the invisible walls, fixed 2026-10-13:** `ChrIns::SetYaw` takes *Euler angles* about Elden Ring's X,
+  Y and Z axes (`0x461F60` multiplies `[0]`, `[1]`, `[2]` by 0.5 and rotates about the unit vectors at `0x1448062A0` /
+  `0x1448062D0` / `0x1448064E0`, read live: (1,0,0), (0,1,0), (0,0,1)); `game::SetYaw` passed the yaw in `[0]`, so the
+  puppet was *pitched* by Snake's heading (live: physics quaternion (0.47, 0, 0, 0.88) for a 56 deg "yaw", Elden Ring's own
+  (0, 0.47, 0, 0.88)). Root motion turns Snake's displacement into character-local space with that quaternion, so it was
+  tilted into the ground or the air by an amount that changed with the heading -- the "60-95% of what it is handed" above.
+  With the yaw in `[1]` (live, fake_mgsv, Castleward Tunnel to Margit's fog wall up two flights of stairs): 23.01 of
+  22.94 m asked, six flat walks in six directions 100% (two ending at a wall 74-82%), the mist's wall stopping it; down and
+  up the stairs again at up to 4 m/s 39.41 of 39.17 m, never stuck; the mist step-aside and Tarnished-mode toggles with it
+  installed/removed the hook cleanly. **With the real MGSV** (2026-10-13, combined run; the same 8-leg loop grace -> stairs ->
+  mist -> back, twice each, Snake run by the pad's stick toward each point): root motion 88.1 of 87.9 m asked (100%), 16/16
+  legs arrived, 0 unstucks; kinematic 71.6 of 96.2 m (74%: it stops at the tunnel walls and stair edges the straight legs
+  graze), 14/16 arrived. Not yet played by a person, so `kinematic` stays the default; the player can try
+  `pr er "puppet motion root_motion"` (and `kinematic` to go back), live.
+  **The 10-minute comparison** (2026-10-13 night, roadmap 2.15; fake MGSV with its stick camera-relative like MGSV's, 5 m/s at
+  full stick, the virtual pad's stick steering it at 300 ms steps straight at each point; 12 points around the Stormhill Shack
+  grace, re-read against the shack every step since Elden Ring shifts its origin mid-walk: through the shack's ruins twice, past
+  its crates and palisade, along the ledge south of it, up the north slope, down the west one; each run 10 minutes from the
+  grace; a leg is "stuck" after 1.8 s without moving; counters from `pr er status`, reset by `puppet motion`):
+
+  | | kinematic | root_motion |
+  |---|---|---|
+  | legs arrived | 72 of 125 (58%) | 80 of 103 (78%) |
+  | legs stuck / timed out | 53 / 0 | 22 / 1 |
+  | longest run of legs without arriving | 13 (trapped ~35 s) | 5 |
+  | distance moved of asked | 1543 of 2258 m (68.4%) | 1728 of 2288 m (75.5%) |
+  | the leg past the shack's corner | 2 of 10 arrived | 8 of 8 |
+  | unsticks | 2 | 0 (not used) |
+  | wall contacts (onsets / blocked frames) | 576 / 10347 | 1005 / 8664 (the proxy's "moved < 30%" test is noisier) |
+  | object-only breakers sent at bumps | 542 | 0 (Elden Ring's proxy breaks what it runs into) |
+  | falls, re-anchors, root-motion fallbacks | 0, 0, - | 0, 0, 0 |
+  | warnings | 2 (`odometer jumped 8.8 / 13.1 m`: the Python fake stalled) | 0 |
+
+  Both fail the same two legs through the shack's walls (from the grace into its ruins and back): a straight line into a wall
+  stops either; root motion slides round corners and edges where the kinematic capsule catches (the shack's corner, the
+  palisade). The number of legs differs because a stuck leg ends in ~2.5 s and an arrival takes ~5.5 s. Before the SetYaw fix
+  root motion lost 5-40% of every step; now it moves more of what Snake asks on rough ground too. **Recommendation: root_motion
+  as the default** -- not changed: the player played kinematic and liked it, and root motion hasn't been played by a person
+  since the fix (it was "invisible walls everywhere" before it); try `pr er "puppet motion root_motion"` for a session first.
+  Kinematic stays the fallback (it needs no hook and is what fall damage was tuned on).
+  **With the real MGSV** (2026-10-13 morning, combined run; the same script and loop, 4 minutes each, MGSV's own Snake run by the
+  virtual pad): kinematic 19 of 30 legs arrived (63%), 438.6 of 598.4 m (73.3%), 11 stuck, 0 unsticks, 103 wall onsets; root
+  motion 16 of 25 (64%), 403.7 of 616.1 m (65.5%), 3 stuck + 6 timed out, 371 wall onsets, 0 breakers; 0 warnings, 0 falls, 0
+  root-motion fallbacks in both. With MGSV's real acceleration and turning neither is clearly ahead on this loop (the fake's 78%
+  vs 58% doesn't carry over), so **kinematic stays the default**; root motion remains the one to try.
 - `[Puppet] motion = kinematic` (the old way, `er/Kinematic.cpp`): our own capsule against `cs_phys_world_cast_ray`. It
   now probes walls at knee, waist (0.9 m) and head (1.6 m) height as well as the chest, and **unsticks**
   (`[Puppet] unstick`, `unstick_seconds` 0.5): every third frame `Enclosed()` counts which of 8 directions meet geometry
   within the body's radius + 0.3 m; boxed in (7-8) for `unstick_seconds`, the puppet goes back to the newest place it
   stood free (kept every 0.25 s, the last 2 s, at least 0.5 m away; `kinematic::Unstick`, tested). Its body bumping into
-  something (a blocked step) also sends the object-only breaker there (below), at most every 400 ms. UNVERIFIED live
-  (root motion is the default).
+  something (a blocked step) also sends the object-only breaker there (below), at most every 400 ms. **The default**
+  (`motion = kinematic`): it plays well (the player's 2026-10-12 evening session).
+- **Fall watchdog** (`[Puppet] fall_watch_seconds` 4, `fall_watch_drop` 60 m; `kinematic::FallWatch`, both motions): with
+  NoDead set, a chasm whose death is Elden Ring's kill volume rather than a landing can't kill the puppet, and kinematic
+  gravity would let Snake fall for ever (`fall_lethal_speed` only fires on a landing). A fall with no landing that lasts
+  `fall_watch_seconds` or goes `fall_watch_drop` metres down is his death: a lethal `kHEvHurt` (fall) and `ChrIns::Kill`,
+  as a lethal landing (`puppet: falling 3.6 s, 60 m with no landing ... -> Snake dies of the fall`). Origin shifts and
+  re-anchors restart it. With root motion "falling" is the proxy going down faster than 3 m/s *with no ground within 2 m
+  under it* (3 m riding; review 2026-10-13): a downhill gallop or a lift going down is no fall, and the flat at its bottom no
+  landing. Tested offline (`tests/test_host_chord.inc` `TestFallWatch`: off a ledge into a chasm with no
+  ground at all it fires once at 60 m, ~3.5 s; the 5 m pit lands and never fires it). VERIFIED live 2026-10-13 (no chasm
+  on the way to Margit: the puppet set 150 m above his arena with `call setpos`): `puppet: falling 3.5 s, 61 m with no
+  landing ... -> Snake dies of the fall (fall #1)` -> `killed the ER player`, YOU DIED, respawn at the grace 12.7 s later
+  (again with the real MGSV, 150 m up from the Castleward Tunnel grace: `falling 3.5 s, 60 m with no landing` -> `guest:
+  Snake died` -> respawn 13.0 s later, `kHEvRested 1`, life and ammo full)
+  with `kHEvRested 1`; two of Elden Ring's origin shifts during the fall (-144 m, +32 m in y) moved the watch with it.
 - `[Puppet] hit_hook = true` (re-backlog E2, `er/HitHook.cpp`): CSPlayerDamageModule vfunc 7
   `ReceiveDamage` (`0x44D050`) on `[ChrIns+0x190]+0x98`. While the puppet is active the original is
   skipped (no HP loss, no stagger) and the hit (amount `+0x228`, direction `-(+0x1C0)`, attacker
@@ -227,6 +457,8 @@ asset's centre drop from its top to the ground, `breaktest.py` in the session sc
   behaviour); AEG003_058_1025 (defence 0) broke neither for our breaker nor for Elden Ring's own flying pot.
 - **Touch-breakable pots** (bits_3b bit 0, e.g. AEG430): none were loaded near the test spot. With root motion Elden
   Ring's proxy moves the Tarnished's body into them; whether that counts as the player's body breaking them is UNVERIFIED.
+- **Walking into breakables** (kinematic, the body-bump breaker): the player confirmed it in real play (2026-10-12
+  evening): breakables break when Snake walks into them, and when he shoots them.
 
 ### Explosive rounds in flight (`er/Rounds.cpp`, `[Combat] round_flight`, `round_speed_rocket` 20, `round_speed_grenade` 80)
 
@@ -323,9 +555,29 @@ The Tarnished's render flag hides his body and armour, not his weapons (`CSParts
 - It maps the buddy through the anchor and snaps it to ER ground with a ray. `GroundOffset()` is for the phase 4 renderer.
 - It draws it (cyan) with CSEzDraw.
 
-Riding (`kGuestOnVehicle` or `kBuddyRidden`) switches the puppet to `max_speed_vehicle`,
-`step_up_vehicle` and `eye_height_vehicle`, so the puppet follows D-Walker's dash and hover through ER
-collision. `kGEvBuddyFire` is ray-traced like Snake's own shots: it is logged, drawn red and names the
+Riding (`kGuestOnVehicle` or `kBuddyRidden`) switches the puppet to the ridden buddy's values, so it follows D-Walker's dash
+and hover or D-Horse's gallop through Elden Ring's collision (roadmap 2.3): the buddy type says which (MGSV runs one buddy, and
+the sandbox has no other vehicle):
+
+| ridden | speed limit (m/s a frame's step) | kinematic step-up | kinematic body radius | camera eye height (collision rays) |
+|---|---|---|---|---|
+| on foot | `max_speed` 12 | `step_up` 0.5 | `radius` 0.35 | up to `eye_height` 1.6 (lower crouched/prone) |
+| D-Walker (or any vehicle) | `max_speed_vehicle` 32 | `step_up_vehicle` 0.8 | `radius_vehicle` 0.35 | `eye_height_vehicle` 2.2 |
+| D-Horse (`buddyType` 1) | `max_speed_horse` 32 | `step_up_horse` 0.8 | `radius_horse` 0.45 (head and tail) | `eye_height_horse` 2.4 |
+
+The mount is logged with them (`puppet: Snake mounted (vehicle id 0x403, buddy type 1: D-Horse) -> max 32 m/s, step-up 0.80 m,
+radius 0.45 m`); `pr er status` says `riding D-Horse` / `riding a vehicle`. While not ridden the horse is placed like D-Walker
+(the guest's buddy pose through the anchor, ground-snapped; `RenderScene` grounds its draws by the same offset), and MGSV's own
+follow brings it along. VERIFIED live 2026-10-13 with fake MGSV (`--buddy horse`, `!ride on`, the stick at its 13 m/s gallop,
+Stormhill Shack): the mount line above, `buddy D-Horse (1) ... Snake RIDING`, 37.6 m asked in 3 s on the stick, 22.6 moved (the
+rocks east of the grace), 8 legs of a 30 m loop at the gallop: 4 arrived, 4 stopped at rocks/cliffs, 0 unstucks; dismounted:
+`placed from guest pose ... ground offset 0.02`. **With the real MGSV's ride** (`pr replay horse_ride.prrec`, the guest's recording:
+mount at t 5.6, a 14-15.7 m/s gallop, dismount at 27.5; Agheel Lake North): `puppet: Snake mounted (vehicle id 0x1a00, buddy
+type 1: D-Horse) -> max 32 m/s, step-up 0.80 m, radius 0.45 m`, 117.9 of 117.9 m asked moved by t 15 on open ground; Snake on
+the horse drawn galloping through the grass and standing on the ground at a cliff (screenshots); the gallop then went over the
+lake's cliff (`landed at 23.3 m/s -> fall damage 100%`: a fall a horse doesn't survive either) and into its wall (30 of 92 m);
+`Snake dismounted`, the horse placed from the guest's pose again (`Snake on foot, placed from guest pose`) and MGSV's own
+prompt to mount it on the HUD once it came back beside him. 0 warnings. `kGEvBuddyFire` is ray-traced like Snake's own shots: it is logged, drawn red and names the
 character it would hit. Damage: docs/COMBAT.md.
 
 **D-Walker's orders made visible** (`er/BuddyOrders.*`, protocol v7 `kGEvBuddyOrder`). Player report: "it does not react
@@ -520,6 +772,9 @@ through `input virtualpad` + `press`):
 - **Out:**
   - `kHEvHurt`: HP loss on the puppet, sent as the share of the Tarnished's max HP it took, in units of Snake's life / guest life scale (`[Combat] hurt_share`, docs/COMBAT.md; the hit hook measures the hit at full HP). `v0` is the unit direction from Snake toward the attacker (`last_hit_by`), in MGSV world. The kind is melee if the attacker is under 4 m away, projectile if further, fall after a hard landing, and other when the attacker is unknown.
   - `kHEvRespawn`: dead → alive.
+  - `kHEvRested` (v10): `a = 0` a rest at a grace, `a = 1` a respawn (with `kHEvRespawn`): the guest refills Snake's ammo
+    (Control hand-over, "Resting").
+  - `kHEvTarnished` (v10): `a = 1` the player took the Tarnished (Tarnished mode), `a = 0` Snake is back.
   - `kHEvWarped`: ER moved the player more than `resync_distance` by itself.
   - `kHEvDetonate` (v5): an Elden Ring enemy within a placed explosive's trigger radius (`b` = placed id), once.
 - **HP bar = Snake's life** (`mirror_life`): every frame HP = max(1, round(max HP × life / lifeMax)) (`combat::MirrorHp`); while
@@ -555,7 +810,8 @@ status | cam | calib | buddy | ui | ez
 call setpos x y z | setyaw rad | ray x y z dx dy dz | kill yes
 flag [name [on|off]]         render dead nodead nodamage nohit noattack nomove nogravity
 puppet auto|off   menu auto|open|closed   debug on|off
-puppet motion kinematic|root_motion   switch [Puppet] motion live
+tarnished [on|off|toggle]    Tarnished mode, as View + Start held 1 s toggles it
+puppet motion kinematic|root_motion   switch [Puppet] motion live (and zero the moved/asked, walls and breakers counters)
 render [status | keys | set <key> <value> | probe]
 hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value>]
 draw [skeleton|buddy|tracers on|off]
@@ -581,12 +837,14 @@ combat shoot <rifle|handgun|sniper|buck|stun|tranq|rocket|grenade|flame> x y z [
                              Elden Ring point, as a kGEvFire from his muzzle would be (share: MGSV's v8 damage share)
 combat strike x y z | aimat x y z | self <id> [off]   a CQC strike there; the MGSV yaw/pitch/camera phase that aims at
                              it (for fake_mgsv `!cam`); the Tarnished's own SpEffect <id> on/off
+combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|boss_lives|boss_from|big_from|share_mult <v>
 boom [status | lethal|stun|sleep|smoke|flame|breaker|shrapnel [radius] | mode ... | restore | pool]   looks 5 m ahead;
                              `pool`: Elden Ring's bullet/emitter counts and ours alive
 boom look <kind> <bullet> [sfx] | set <key> <value> | raw <bullet> x y z   change a look live, tune the breakers, fly
                              an unmodified Elden Ring bullet from the Tarnished's chest (what does Elden Ring break?)
 stealth [hide on|off | speffect <id>]   the cardboard box (er/Stealth.h)
-geom [learn [use] | offset <hex> | near|all [radius [filter|-filter]] | dump <ins>]   destructible assets (er/GeomProbe.h)
+geom [learn [use] | offset <hex> | near|all [radius [filter|-filter]] | ladders [radius] | dump <ins>]   map assets (er/GeomProbe.h)
+progression [off|level|weapon|both]   the Tarnished's level and right-hand armament, Snake's damage factor (docs/COMBAT.md)
 cam set sync_compass 0|1     the compass write at 122
 cam set collision_radius|collision_ease_out|collision_margin|vertical_smoothing <v>   camera collision / height easing
 pacing [set smooth|draws on|off | set delay auto|<steps> | set extrapolate <steps> | set motion <frames>]   frame pacing
@@ -749,6 +1007,41 @@ view_constants|near_fade*|occluder_*|alpha_*|metal_scale|gloss_*|albedo_scale|de
 - **Head:** before the winding fix the head showed its inside (and every normal faced away: Snake looked
   black); fixed.
 - **Cost:** 0.09-0.12 ms CPU per frame (both submissions, shadows included), 60 fps.
+
+#### Night vision (`er/RenderNvg.cpp`, `[Render] nvg_*`, protocol v10 `kGuestNvg`)
+
+MGSV's goggles only tint its own hidden picture (and darkened the HUD layer it hands over; the guest now leaves its full-screen
+NVG overlay out of that layer, docs/GUEST.md). While GuestState `kGuestNvg` is set and Snake plays (not in a cutscene, a
+load or death), Elden Ring's own picture becomes MGSV's night vision: at the composite point stage B and the world markers
+use -- after Snake (stage C: he is in the scene already; stage B: drawn just before) and the throw arc, before Elden Ring's
+HUD -- the tone-mapped RGBA8 scene colour is copied (`CopyResource` into a texture of ours, kept in COPY_DEST) and drawn back
+through one full-screen triangle: linear luminance (the texels are sRGB-encoded, decoded) to the power `nvg_curve` (0.6:
+the dark lifted more than the light, like a tube's automatic gain) x `nvg_gain` (5) with a soft roll-off `1 - exp(-gain
+L^curve)` (highlights never clip hard), `nvg_floor` (0.025) black lift, coloured
+`nvg_tint` (0.30, 1.0, 0.40 linear), per-pixel grain changing every frame (`nvg_grain` 0.07, strongest in the dark),
+`nvg_vignette` (0.35) and optional `nvg_scanlines` (0); faded in and out over `nvg_fade_ms` (250) like the goggles. The
+renderer's own root signature: the copy in the t6 table, the parameters in the 16 root constants of b1. Any failure (copy
+texture, shader, pipeline) turns it off for the session, logged; frames with no composite point (stage A) get none. `render
+set nvg|nvg_gain|nvg_floor|nvg_tint r,g,b|nvg_grain|nvg_vignette|nvg_scanlines|nvg_fade_ms <v>` live; `render` shows `night
+vision: on (N frames drawn, copy WxH)`.
+
+VERIFIED live 2026-10-13 (fake MGSV `!nvg on`, 4K): `render: night vision: copy of Elden Ring's scene colour 3840x2160
+R8G8B8A8_UNORM` -> `night vision drawn over Elden Ring's scene before its HUD`; screenshots in the Castleward Tunnel (its dark
+corridor turned bright green, the fake Snake and walker in it, the grace's prompt and compass untouched) and in Margit's
+arena at 23:12 (`time+0x2C/0x30/0x28` pokes) with and without: the night scene green and readable, Margit, Snake, the trees
+and sky in it, Elden Ring's HP, boss bar and quick items untinted on top. Cost: one 4K copy and one full-screen pass.
+**With the real guest's HUD layer** (`pr replay` of the MGSV agent's recordings of real MGSV with the goggles toggled, Castleward
+Tunnel): `nvg2.prrec` (the guest leaves MGSV's goggle overlay out of the layer) -- Snake (his goggles on his head) and the
+tunnel in green, MGSV's NVG item box and weapon box clean on top, no darkening; off again 7 s later, the same frame dark as
+before. `nvg.prrec` (the first take, the overlay still in the layer, 100% of it covered) shows what the fix removed: noise
+and a dark veil over the whole picture, our night vision included.
+**With the real MGSV** (2026-10-13, combined run): the goggles picked in MGSV's item wheel (D-pad left held, right stick down)
+go on as they are picked, a short D-pad-left tap (<= 120 ms; MGSV takes a longer press for the start of a hold) takes them off
+and on: `render: night vision on/off (MGSV's goggles on/off)`, they go off with a death and on again at the respawn. Elden
+Ring's menu (Esc) opened over them stays untinted. The first curve (linear x 7) left the Castleward Tunnel nearly black (Snake
+a dark silhouette); `nvg_curve` 0.6 x 5: the tunnel's mean brightness 8 -> 81 (of 255) with the goggles, Margit's arena at
+20:00 41 -> 131, the sky not washed out (the pair of screenshots each). Nothing gets darker: MGSV's own overlay is left out
+of the HUD layer (the guest), the layer showed only the weapon and NVG boxes.
 
 #### Not done yet / next
 
@@ -915,7 +1208,8 @@ The ER clock can be moved live for tests: write `WorldAreaTime` +0x2C minute and
 
 ### Keyboard and mouse
 
-These are left to Elden Ring for now. Phase 5 forwards them to MGSV's raw-input handler.
+These are left to Elden Ring for now; its keyboard menu keys (Esc, G) are noticed like the pad's Start ("Keyboard menus"
+above). Driving Snake from them: roadmap 2.14.
 
 ### Offline verification
 
@@ -925,6 +1219,9 @@ These are left to Elden Ring for now. Phase 5 forwards them to MGSV's raw-input 
   - the kinematic controller against a synthetic world (flat walk, wall stop at radius, slide, 0.3 m step, 1 m block, ledge fall + landing at ~9.9 m/s, no drift), `Enclosed()` and the unsticking (back to where it stood free, across an origin shift);
   - the link against a scratch mapping (attach/alive/foreign nonce, GuestState, events);
   - the console with no game (peek/poke of own memory; game symbols answer "unavailable").
+- `tests/test_host_chord.inc` (included by test_host): Start/View and the Tarnished-mode chord (`PadGate`: taps, holds, the
+  iDroid hold, the chord in either order, early release, mode changes under held buttons, MGSV's menu, `chord_ms` 0), and
+  the fall watchdog against the synthetic world.
 - `tests/test_host_overlay.inc` (included by test_host): every overlay rule (status/boot/failed/absent
   lines, messages, HUD fade on menu/death/guest loss, reticle auto/on), the reticle picture and a GDI text
   panel under wine (`PHANTOM_DUMP_OVERLAY=<dir>` writes them as raw RGBA for a look).
@@ -933,7 +1230,7 @@ These are left to Elden Ring for now. Phase 5 forwards them to MGSV's raw-input 
   regulation: the flying Fire Pot's own attack is object-only, ours become so), `Stealth::BoxHidden`, `Rounds::FlightOf`.
 - `tests/test_host_load.cpp` loads the DLL into a non-Elden Ring process. It must log `exe mismatch` and do nothing else.
 - `tests/test_render.cpp` (wine): every renderer shader (VS per layout, `PSMain`, `PSGbuffer`, `PSVelocity`,
-  `PSShadow`) compiles with Wine's d3dcompiler and its `FrameCB`/`DrawCB` sizes (D3DReflect) equal the C++
+  `PSShadow`, the night vision's `VSNvg`/`PSNvg`) compiles with Wine's d3dcompiler and its `FrameCB`/`DrawCB` sizes (D3DReflect) equal the C++
   structs; the pipeline-stream parser and vkd3d-proton's shader hash; mesh winding detection and the
   front-face rule; near-camera, owner and occluder fades; stage C's finite reversed-Z mapping (depth 1 at the
   near plane, 0 at the far one) and the light-set default.

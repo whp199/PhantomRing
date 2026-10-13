@@ -53,6 +53,7 @@ namespace phantom::er
 		bool                           tarnishedVisible{ false };
 		float                          tarnishedNdc[2]{};
 		std::vector<Marker>            markers;       // er/RenderMarkers.h: throw arc, grenades, mines (ER world)
+		float                          nvg{ 0 };      // MGSV's night vision on Elden Ring's frame (er/RenderNvg.h): 0 off .. 1 full
 		std::vector<proto::DrawRecord> draws;
 		std::vector<float>             matrices;      // 12 floats each
 		// The previous Elden Ring frame, for velocity (stage C): its camera and anchor, and each draw's
@@ -73,6 +74,7 @@ namespace phantom::er
 		// Cheap (no lock): the newest snapshot carries world markers (er/RenderMarkers.h). The renderer splits Elden
 		// Ring's composite batch for them only when there are some.
 		bool                                  HasMarkers();
+		bool                                  HasNvg();  // ... and night vision (the same split of the composite batch)
 		std::string                           Describe();
 	}
 }

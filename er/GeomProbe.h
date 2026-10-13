@@ -28,5 +28,8 @@ namespace phantom::er::GeomProbe
 	// Every asset of the loaded blocks (a_breakableOnly: hp > 0) within a_radius of a_centre whose position is known.
 	std::vector<Asset> Near(const Vec3& a_centre, float a_radius, bool a_breakableOnly);
 
+	// Every ladder asset (its param's is_ladder bit) of the loaded blocks within a_radius of a_centre (console `geom ladders`).
+	std::vector<Asset> Ladders(const Vec3& a_centre, float a_radius);
+
 	std::string Command(const std::vector<std::string>& a_words, const Frame& a_frame);
 }

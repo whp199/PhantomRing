@@ -34,6 +34,11 @@ namespace phantom::er::game
 	// modules
 	inline constexpr std::uint32_t kModData = 0x0;
 	inline constexpr std::uint32_t kModPhysics = 0x68;
+	inline constexpr std::uint32_t kModLadder = 0x78;         // CS::CSPlayerLadderModule (RTTI checked) [V live]
+	inline constexpr std::uint32_t kModRide = 0xE8;           // CS::CSChrRideModule (RTTI checked) [V live]
+	inline constexpr std::uint32_t kLadderState = 0x18;       // i8, -1 = not on a ladder (fromsoftware-rs LadderState) [V live: -1 on foot]
+	inline constexpr std::uint32_t kRideMounting = 0x162;     // bool is_mounting (fromsoftware-rs) [V-src]
+	inline constexpr std::uint32_t kRideMounted = 0x163;      // bool is_mounted (fromsoftware-rs) [V-src; 0 on foot live]
 	// CSChrPhysicsModule
 	inline constexpr std::uint32_t kPhysOrientation = 0x50;   // hkQuaternion xyzw [V]
 	inline constexpr std::uint32_t kPhysPosition = 0x70;      // hkVector4 [V]
@@ -140,6 +145,20 @@ namespace phantom::er::game
 
 	// Feet position of any validated character (ChrIns*), e.g. a hit's attacker.
 	std::optional<Vec3> ChrPosition(const std::uint8_t* a_chr);
+
+	// What the player is on (Tarnished mode: Snake must not take over on Torrent or a ladder): each module is read only once its
+	// RTTI name is the expected one; kUnknown when it isn't (logged once by the caller).
+	enum class Mounted
+	{
+		kNone,
+		kTorrent,
+		kLadder,
+		kUnknown
+	};
+	Mounted PlayerMounted(const Player& a_player);
+	// The player's CSPlayerLadderModule state (+0x18, fromsoftware-rs LadderState: -1 not on a ladder, 0 StartBottom, 1 StartTop,
+	// 2..5 climbing up/down, 6 EndTop, 7 EndBottom, 8/9 idle on it, ...); nullopt when the module isn't the verified one.
+	std::optional<int> LadderState(const Player& a_player);
 
 	// Elden Ring clock (hours, 0..24) or NaN.
 	float TimeOfDay();

@@ -23,6 +23,9 @@ namespace phantom::guest::vars
 		std::uint32_t inventorySlot{ 0 };
 		std::array<std::uint16_t, 16> supportWeapons{};  // equip ids of the support items
 		std::uint32_t supportIndex{ 0 };                  // the selected one (vars.currentSupportWeaponIndex)
+		std::array<std::uint16_t, 23> stockCounts{};     // vars.ammoStockCounts: 0/2/4 weapon slots 0-2 (+1 their sub), 5 hand,
+		                                                  // 6-13 support items, 14-21 items (Ammo.cpp)
+		std::uint32_t itemIndex{ 0 };                     // vars.currentItemIndex: the item slot in use (0 none)
 		std::uint8_t  buddyType{ 0 };
 		std::uint16_t buddyGearAmmo[2]{};
 		std::uint8_t  buddyGearMainWp{ 0 };
@@ -40,4 +43,8 @@ namespace phantom::guest::vars
 	bool WriteLife(std::uint16_t a_life);
 	int  PendingLife();       // -1: nothing queued
 	void ApplyPendingLife();  // link worker thread
+	// The ammo copies after Ammo.cpp refilled MGSV's ammo component: vars.ammoInWeapons[slot] (0xFFFF = leave) and
+	// vars.ammoStockCounts[] -- MGSV writes them itself at Snake's next shot or throw; until then GuestState would show the old
+	// counts. False if either var isn't verified.
+	bool WriteAmmoCopies(const std::array<std::uint16_t, 3>& a_magazines, const std::array<std::uint16_t, 23>& a_counts);
 }

@@ -135,13 +135,58 @@ namespace phantom::er
 		return r;
 	}
 
+	std::optional<Vec3> SupportedStart(const Vec3& a_feet, const KinematicParams& a_params, const RayFn& a_ray)
+	{
+		const float top = a_params.stepUp + 0.05f;
+		auto        ground = [&](const Vec3& a_at, Vec3& a_hit) { return a_ray(a_at + Vec3{ 0.0f, top, 0.0f }, Vec3{ 0.0f, -(top + a_params.snapDown), 0.0f }, a_hit); };
+		Vec3        hit;
+		if (ground(a_feet, hit)) {
+			return std::nullopt;
+		}
+		constexpr int kDirections = 16;
+		for (float r = 0.15f; r <= 1.2f + 1e-4f; r += 0.15f) {
+			std::optional<Vec3> best;
+			for (int i = 0; i < kDirections; ++i) {
+				const float a = static_cast<float>(i) * (6.2831853f / kDirections);
+				const Vec3  dir{ std::sin(a), 0.0f, std::cos(a) };
+				const Vec3  at = a_feet + dir * r;
+				if (!ground(at, hit) || std::fabs(hit.y - a_feet.y) > a_params.stepUp) {
+					continue;
+				}
+				// The whole body on ground, not another rim (live: the first point found was the ladder's own top, 0.1 m down).
+				bool body = true;
+				for (int k = 0; k < 4 && body; ++k) {
+					const float b = static_cast<float>(k) * 1.5707963f;
+					Vec3        under;
+					body = ground(at + Vec3{ std::sin(b), 0.0f, std::cos(b) } * a_params.radius, under) && std::fabs(under.y - hit.y) <= a_params.stepUp;
+				}
+				if (!body) {
+					continue;
+				}
+				if (WallClearance(a_feet, dir, r, a_params, a_ray, nullptr) < r - 1e-3f) {
+					continue;  // behind a wall
+				}
+				if (!best || std::fabs(hit.y - a_feet.y) < std::fabs(best->y - a_feet.y)) {
+					best = Vec3{ at.x, hit.y, at.z };
+				}
+			}
+			if (best) {
+				return best;
+			}
+		}
+		return std::nullopt;
+	}
+
 	int Enclosed(const Vec3& a_feet, float a_reach, const KinematicParams& a_params, const RayFn& a_ray)
 	{
 		int blocked = 0;
 		for (int i = 0; i < 8; ++i) {
 			const float a = static_cast<float>(i) * 0.7853982f;
 			const Vec3  dir{ std::sin(a), 0.0f, std::cos(a) };
-			for (const float h : { a_params.stepUp + 0.05f, a_params.chestHeight }) {
+			// The same heights the move's wall probes use (WallClearance): live 2026-10-13, Snake ended up with only his waist ray
+			// blocked all round (inside a table-high plank at the Stormhill Shack: knee 2 of 8, chest 2 of 8, waist 8 of 8): every
+			// move was refused and, counting knee and chest only, he never read as boxed in -- stuck for good.
+			for (const float h : { a_params.stepUp + 0.05f, std::max(a_params.stepUp + 0.1f, a_params.waistHeight), a_params.chestHeight, a_params.headHeight }) {
 				Vec3 hit;
 				if (a_ray(a_feet + Vec3{ 0.0f, h, 0.0f }, dir * a_reach, hit)) {
 					++blocked;
@@ -150,6 +195,25 @@ namespace phantom::er
 			}
 		}
 		return blocked;
+	}
+
+	bool FallWatch::Update(bool a_grounded, float a_feetY, float a_dt, float a_seconds, float a_drop)
+	{
+		if (a_grounded || !std::isfinite(a_feetY)) {
+			*this = FallWatch();
+			return false;
+		}
+		if (!falling_) {
+			falling_ = true;
+			startY_ = a_feetY;
+		}
+		seconds_ += std::max(0.0f, a_dt);
+		drop_ = std::max(drop_, startY_ - a_feetY);
+		if (!fired_ && ((a_seconds > 0.0f && seconds_ >= a_seconds) || (a_drop > 0.0f && drop_ >= a_drop))) {
+			fired_ = true;
+			return true;
+		}
+		return false;
 	}
 
 	std::optional<Vec3> Unstick::Update(const Vec3& a_feet, int a_enclosed, bool a_grounded, double a_nowS, float a_seconds)

@@ -1,6 +1,8 @@
 #include "Logic.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cstdlib>
 
 namespace phantom::guest::logic
 {
@@ -167,6 +169,14 @@ namespace phantom::guest::logic
 		return out;
 	}
 
+	bool LifeWriteLost(int a_before, int a_written, int a_now)
+	{
+		if (a_before < 0 || a_written < 0 || std::abs(a_written - a_before) < 400) {
+			return false;
+		}
+		return std::abs(a_now - a_before) < std::abs(a_now - a_written);
+	}
+
 	LifeResult ApplyHurt(std::uint16_t a_life, float a_erDamage, float a_scale)
 	{
 		LifeResult out{ a_life, false };
@@ -182,6 +192,19 @@ namespace phantom::guest::logic
 			out.life = static_cast<std::uint16_t>(left);
 		}
 		return out;
+	}
+
+	float RegenCap(float a_base, double a_since, float a_delay, float a_ramp, float a_rate)
+	{
+		const double s = a_since - std::max(0.0f, a_delay);
+		if (!(s > 0.0) || !(a_rate > 0.0f)) {
+			return a_base;
+		}
+		const double ramp = std::max(0.0f, a_ramp);
+		if (s < ramp) {
+			return static_cast<float>(a_base + 0.5 * a_rate / ramp * s * s);
+		}
+		return static_cast<float>(a_base + 0.5 * a_rate * ramp + a_rate * (s - ramp));
 	}
 
 	HurtFeedback FeedbackFor(std::uint16_t a_lifeLost, std::uint16_t a_lifeMax, std::uint32_t a_kind, const Vec3& a_root, const Vec3& a_from)
@@ -423,5 +446,28 @@ namespace phantom::guest::logic
 		ammo_ = a_ammo;
 		primed_ = true;
 		return best;
+	}
+
+	bool ParseMagazines(std::string_view a_text, std::array<SlotMagazine, 3>& a_out)
+	{
+		for (std::size_t i = 0; i < a_out.size(); ++i) {
+			std::uint32_t v[3]{};
+			for (int k = 0; k < 3; ++k) {
+				const auto [p, ec] = std::from_chars(a_text.data(), a_text.data() + a_text.size(), v[k]);
+				if (ec != std::errc{}) {
+					return false;
+				}
+				a_text.remove_prefix(static_cast<std::size_t>(p - a_text.data()));
+				const char want = k < 2 ? '/' : (i + 1 < a_out.size() ? ',' : '\0');
+				if (want) {
+					if (a_text.empty() || a_text.front() != want) {
+						return false;
+					}
+					a_text.remove_prefix(1);
+				}
+			}
+			a_out[i] = { v[0], v[1], v[2] };
+		}
+		return a_text.empty();
 	}
 }

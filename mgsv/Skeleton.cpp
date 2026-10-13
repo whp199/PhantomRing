@@ -10,6 +10,9 @@
 #include <windows.h>
 
 #include <atomic>
+#include <cmath>
+#include <format>
+#include <string>
 #include <cstring>
 #include <mutex>
 
@@ -42,6 +45,132 @@ namespace phantom::guest::skeleton
 			}
 			return v.has_value();
 		}
+
+		// ---- the buddy's skin (D-Horse, D-Dog, Quiet: their GameObjects answer no GetPosition; live 2026-10-13, TppHorse2
+		// returned nothing) -------------------------------------------------------------------------------------------
+		// SkinPublish runs for every skinned model with its (driver, binding); the binding's first 64 bytes are the model's
+		// root matrix (the horse's: translation = where it stands, live: model 0x..980 +0xD0 followed it). The buddy's pair is
+		// learned from where it must be (a hint: Snake's root while he rides it, where boot called it, beside Snake after a
+		// whistle): the nearest other skin with a full skeleton (53+ bones, not Snake's 178) within the hint's radius. After that
+		// every publication of that pair is the buddy's position and heading; a pair not published for 3 s is forgotten.
+		constexpr std::uint32_t kSnakeBones = 178;
+		struct M16
+		{
+			float v[16];
+		};
+		std::mutex              g_buddyLock;
+		struct BuddyHint
+		{
+			float         pos[3]{};
+			float         radius{ 0 };
+			std::uint64_t untilMs{ 0 };
+			bool          horizontal{ true };
+		} g_hint;
+		std::uintptr_t g_buddyDriver{ 0 };
+		std::uintptr_t g_buddyBinding{ 0 };
+		std::uint32_t  g_buddyBones{ 0 };
+		std::uint32_t  g_buddyBonesLearned{ 0 };  // the count of the last one learned: a re-learn wants the same kind
+		float          g_buddyRoot[16]{};
+		std::uint64_t  g_buddyTick{ 0 };
+		std::uint64_t  g_buddyLearnedAt{ 0 };
+		std::uint32_t  g_buddyLearns{ 0 };
+		std::uintptr_t g_candDriver{ 0 }, g_candBinding{ 0 };
+		float          g_candDist{ 0 };
+		std::uint32_t  g_candBones{ 0 };
+		std::uint64_t  g_candTick{ 0 };
+		std::atomic<bool> g_hinting{ false };
+
+		std::uint32_t BonesOf(std::uintptr_t a_driver)
+		{
+			std::uintptr_t skeleton = 0;
+			std::uint16_t  count = 0;
+			std::int16_t   zero16 = -1;
+			if (!Read(a_driver + 0x10, skeleton) || !skeleton || !Read(skeleton + 0x48, count) || !Read(skeleton + 0x4A, zero16) || zero16 != 0) {
+				return 0;
+			}
+			return count;
+		}
+
+		void ObserveBuddySkin(std::uintptr_t a_driver, std::uintptr_t a_binding)
+		{
+			const auto now = ::GetTickCount64();
+			if (a_driver == g_buddyDriver && a_binding == g_buddyBinding) {
+				M16 mm;
+				if (!Read(a_binding, mm) || !logic::MatrixTranslation(mm.v).Finite()) {
+					return;
+				}
+				const float* m = mm.v;
+				std::scoped_lock lock(g_buddyLock);
+				if (a_driver == g_buddyDriver) {
+					std::memcpy(g_buddyRoot, m, sizeof(g_buddyRoot));
+					g_buddyTick = now;
+				}
+				return;
+			}
+			if (!g_hinting.load(std::memory_order_relaxed)) {
+				return;
+			}
+			M16 mm;
+			if (!Read(a_binding, mm)) {
+				return;
+			}
+			const float* m = mm.v;
+			BuddyHint h;
+			{
+				std::scoped_lock lock(g_buddyLock);
+				h = g_hint;
+			}
+			if (now > h.untilMs) {
+				g_hinting.store(false, std::memory_order_relaxed);
+				return;
+			}
+			const float dx = m[12] - h.pos[0], dy = m[13] - h.pos[1], dz = m[14] - h.pos[2];
+			const float d = h.horizontal ? std::sqrt(dx * dx + dz * dz) : std::sqrt(dx * dx + dy * dy + dz * dz);
+			if (!std::isfinite(d) || d > h.radius || std::fabs(dy) > 3.0f) {
+				return;
+			}
+			// Snake's own other skins (head, arm, gear: 64 bones and fewer) stand exactly on his root (live: one of 64 bones was
+			// learned as the horse once): never the buddy. A horse can stand 0.4 m from it (live, dispatched from the iDroid).
+			if (const auto snake = g_model.load(std::memory_order_acquire)) {
+				M16 sm;
+				if (Read(snake + addr::kModelBinding, sm)) {
+					const float sx = m[12] - sm.v[12], sy = m[13] - sm.v[13], sz = m[14] - sm.v[14];
+					if (sx * sx + sy * sy + sz * sz < 0.05f * 0.05f) {
+						return;
+					}
+				}
+			}
+			const auto bones = BonesOf(a_driver);
+			if (bones < 53 || bones > proto::kMaxPoseBones || bones == kSnakeBones || (g_buddyBonesLearned && bones != g_buddyBonesLearned)) {
+				return;
+			}
+			std::scoped_lock lock(g_buddyLock);
+			// The nearest within the hint's window; taken once the same pair stayed the nearest for 10 publications (~1/6 s).
+			if (g_candDriver == a_driver && g_candBinding == a_binding) {
+				g_candDist = d;
+				if (++g_candTick >= 10) {
+					g_buddyDriver = a_driver;
+					g_buddyBinding = a_binding;
+					g_buddyBones = bones;
+					g_buddyBonesLearned = bones;
+					std::memcpy(g_buddyRoot, m, sizeof(g_buddyRoot));
+					g_buddyTick = g_buddyLearnedAt = now;
+					++g_buddyLearns;
+					g_candDriver = g_candBinding = 0;
+					g_hint.untilMs = 0;
+					g_hinting.store(false, std::memory_order_relaxed);
+					Log::Info("skeleton: buddy skin learned: driver {:#x} binding {:#x} ({} bones) at {:.2f},{:.2f},{:.2f}, {:.2f} m from the hint",
+						a_driver, a_binding, bones, m[12], m[13], m[14], d);
+				}
+			} else if (!g_candDriver || d < g_candDist - 0.05f) {
+				g_candDriver = a_driver;
+				g_candBinding = a_binding;
+				g_candDist = d;
+				g_candBones = bones;
+				g_candTick = 1;
+			}
+		}
+
 
 		bool Resolve(std::uintptr_t a_owner, std::uintptr_t& a_driver, std::uintptr_t& a_model)
 		{
@@ -121,6 +250,12 @@ namespace phantom::guest::skeleton
 			const auto driver = g_driver.load(std::memory_order_acquire);
 			const auto model = g_model.load(std::memory_order_acquire);
 			if (!driver || reinterpret_cast<std::uintptr_t>(a_driver) != driver || reinterpret_cast<std::uintptr_t>(a_binding) != model + addr::kModelBinding) {
+				if (reinterpret_cast<std::uintptr_t>(a_driver) != driver) {
+					try {
+						ObserveBuddySkin(reinterpret_cast<std::uintptr_t>(a_driver), reinterpret_cast<std::uintptr_t>(a_binding));
+					} catch (...) {
+					}
+				}
 				return;
 			}
 			try {
@@ -174,4 +309,64 @@ namespace phantom::guest::skeleton
 	}
 
 	std::uint64_t PublishedFrames() { return g_published.load(); }
+
+	void HintBuddy(const logic::Vec3& a_at, float a_radius, std::uint64_t a_forMs, bool a_horizontal)
+	{
+		std::scoped_lock lock(g_buddyLock);
+		if (g_buddyDriver && ::GetTickCount64() - g_buddyTick < 3000) {
+			return;  // tracked and fresh: nothing to learn
+		}
+		if (g_buddyDriver) {
+			Log::Info("skeleton: buddy skin {:#x} not published for {} ms -- learning it again", g_buddyDriver, ::GetTickCount64() - g_buddyTick);
+			g_buddyDriver = g_buddyBinding = 0;
+		}
+		const bool was = g_hint.untilMs > ::GetTickCount64();
+		g_hint.pos[0] = a_at.x;
+		g_hint.pos[1] = a_at.y;
+		g_hint.pos[2] = a_at.z;
+		g_hint.radius = a_radius;
+		g_hint.horizontal = a_horizontal;
+		g_hint.untilMs = ::GetTickCount64() + a_forMs;
+		if (!was) {
+			g_candDriver = g_candBinding = 0;
+		}
+		g_hinting.store(true, std::memory_order_relaxed);
+	}
+
+	void ForgetBuddy(const char* a_why)
+	{
+		std::scoped_lock lock(g_buddyLock);
+		if (g_buddyDriver) {
+			Log::Info("skeleton: buddy skin {:#x} forgotten ({})", g_buddyDriver, a_why);
+		}
+		g_buddyDriver = g_buddyBinding = 0;
+		g_buddyBonesLearned = 0;
+		g_hint.untilMs = 0;
+		g_candDriver = g_candBinding = 0;
+	}
+
+	bool BuddyPose(logic::Vec3& a_pos, float& a_yaw, std::uint64_t a_maxAgeMs)
+	{
+		std::scoped_lock lock(g_buddyLock);
+		if (!g_buddyDriver || ::GetTickCount64() - g_buddyTick > a_maxAgeMs) {
+			return false;
+		}
+		a_pos = logic::MatrixTranslation(g_buddyRoot);
+		a_yaw = logic::MatrixYaw(g_buddyRoot);
+		return a_pos.Finite() && std::isfinite(a_yaw);
+	}
+
+	std::string DescribeBuddy()
+	{
+		std::scoped_lock lock(g_buddyLock);
+		const auto now = ::GetTickCount64();
+		if (!g_buddyDriver) {
+			return std::format("buddy skin: not known ({} learned so far; {})", g_buddyLearns,
+				g_hint.untilMs > now ? std::format("learning near {:.1f},{:.1f},{:.1f} r {:.1f}", g_hint.pos[0], g_hint.pos[1], g_hint.pos[2], g_hint.radius)
+				                     : std::string("no hint"));
+		}
+		const auto p = logic::MatrixTranslation(g_buddyRoot);
+		return std::format("buddy skin: driver {:#x} ({} bones) at {:.2f},{:.2f},{:.2f} yaw {:.1f}, {} ms ago, learned {} s ago ({} learns)", g_buddyDriver,
+			g_buddyBones, p.x, p.y, p.z, logic::MatrixYaw(g_buddyRoot) * 57.2958f, now - g_buddyTick, (now - g_buddyLearnedAt) / 1000, g_buddyLearns);
+	}
 }

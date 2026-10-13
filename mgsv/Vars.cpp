@@ -39,6 +39,8 @@ namespace phantom::guest::vars
 			kPhase,
 			kSupport,
 			kSupportIndex,
+			kStockCounts,
+			kItemIndex,
 			kCount
 		};
 
@@ -46,7 +48,7 @@ namespace phantom::guest::vars
 			&addr::kVarPlayerPosY, &addr::kVarPlayerPosZ, &addr::kVarPlayerLifeMax, &addr::kVarPlayerRotY, &addr::kVarVehicleId,
 			&addr::kVarPlayerLife, &addr::kVarPlayerStamina, &addr::kVarWeapons, &addr::kVarAmmoInWeapons, &addr::kVarHandEquip,
 			&addr::kVarInventorySlot, &addr::kVarBuddyType, &addr::kVarBuddyGearAmmo, &addr::kVarBuddyGearMainWp, &addr::kVarPlayerPhase,
-			&addr::kVarSupportWeapons, &addr::kVarSupportIndex };
+			&addr::kVarSupportWeapons, &addr::kVarSupportIndex, &addr::kVarAmmoStockCounts, &addr::kVarCurrentItemIndex };
 
 		bool g_ok[kCount]{};
 		bool g_buttonsOk{ false };
@@ -110,8 +112,8 @@ namespace phantom::guest::vars
 		s.life = Get<std::uint16_t>(player, kBase, kLife);
 		s.stamina = Get<std::uint16_t>(player, kBase, kStamina);
 
-		// 0x548..0x67C: weapons, ammo, support items, hand equip, inventory slot, selected support item
-		std::uint8_t equip[0x67C - 0x548];
+		// 0x548..0x680: weapons, ammo, support items, ammo stocks, hand equip, inventory slot, selected support item, item in use
+		std::uint8_t equip[0x680 - 0x548];
 		if (::ReadProcessMemory(::GetCurrentProcess(), block + 0x548, equip, sizeof(equip), &got) && got == sizeof(equip)) {
 			constexpr std::uint32_t kEquip = 0x548;
 			if (g_ok[kWeapons]) {
@@ -126,6 +128,10 @@ namespace phantom::guest::vars
 				std::memcpy(s.supportWeapons.data(), equip + (addr::kVarSupportWeapons.offset - kEquip), sizeof(s.supportWeapons));
 			}
 			s.supportIndex = Get<std::uint32_t>(equip, kEquip, kSupportIndex);
+			s.itemIndex = Get<std::uint32_t>(equip, kEquip, kItemIndex);
+			if (g_ok[kStockCounts]) {
+				std::memcpy(s.stockCounts.data(), equip + (addr::kVarAmmoStockCounts.offset - kEquip), sizeof(s.stockCounts));
+			}
 		}
 
 		// 0x2D68..0x2E7C: buddy type, D-Walker gear, alert phase
@@ -190,5 +196,21 @@ namespace phantom::guest::vars
 			::WriteProcessMemory(::GetCurrentProcess(), native, &a_life, sizeof(a_life), &put);
 		}
 		::WriteProcessMemory(::GetCurrentProcess(), block + addr::kVarPlayerLife.offset, &a_life, sizeof(a_life), &put);
+	}
+
+	bool WriteAmmoCopies(const std::array<std::uint16_t, 3>& a_magazines, const std::array<std::uint16_t, 23>& a_counts)
+	{
+		auto* block = g_ok[kAmmo] && g_ok[kStockCounts] ? Block() : nullptr;
+		if (!block) {
+			return false;
+		}
+		SIZE_T put = 0;
+		for (std::size_t i = 0; i < a_magazines.size(); ++i) {
+			if (a_magazines[i] != 0xFFFF) {
+				::WriteProcessMemory(::GetCurrentProcess(), block + addr::kVarAmmoInWeapons.offset + i * 2, &a_magazines[i], 2, &put);
+			}
+		}
+		::WriteProcessMemory(::GetCurrentProcess(), block + addr::kVarAmmoStockCounts.offset, a_counts.data(), sizeof(a_counts), &put);
+		return true;
 	}
 }

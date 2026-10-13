@@ -60,9 +60,35 @@ namespace phantom::er
 	// the wall's horizontal normal when one was hit (estimated from two side rays).
 	float WallClearance(const Vec3& a_feet, const Vec3& a_dir, float a_maxDist, const KinematicParams& a_params, const RayFn& a_ray, Vec3* a_normal);
 
+	// Where Snake can start standing (the puppet's start, kinematic): nullopt when the ground is under a_feet (within snap_down),
+	// else the nearest point within 1.2 m where the body stands on ground (its centre and four points at its radius, within
+	// step_up of the feet) and that it can reach without a wall -- nullopt again when there is none (a real drop: he falls). Live: off a ladder at the top of Fort
+	// Haight's tower Elden Ring's capsule stood on the shaft's rim with its centre over the hole, and Snake fell 19 m down it.
+	std::optional<Vec3> SupportedStart(const Vec3& a_feet, const KinematicParams& a_params, const RayFn& a_ray);
+
 	// How boxed in the body is: of 8 horizontal directions, how many meet geometry within a_reach of the body's axis at knee
 	// or chest height (a flat wall: ~3, a corner ~4-5, inside a cart or a rock: 7-8).
 	int Enclosed(const Vec3& a_feet, float a_reach, const KinematicParams& a_params, const RayFn& a_ray);
+
+	// A fall that never lands (roadmap 1.3, pure): with NoDead set, a chasm whose death is Elden Ring's kill volume (not a
+	// landing) can't kill the puppet, and kinematic gravity would let Snake fall for ever. Update() is true once, the frame
+	// a fall has lasted a_seconds or gone a_drop metres below where it began (0 = that check off); a landing re-arms it.
+	class FallWatch
+	{
+	public:
+		bool                Update(bool a_grounded, float a_feetY, float a_dt, float a_seconds, float a_drop);
+		void                Reset() { *this = FallWatch(); }
+		void                Shift(float a_dy) { startY_ += a_dy; }  // Elden Ring moved its world origin
+		[[nodiscard]] float Seconds() const { return seconds_; }
+		[[nodiscard]] float Drop() const { return drop_; }
+
+	private:
+		bool  falling_{ false };
+		bool  fired_{ false };
+		float seconds_{ 0 };
+		float startY_{ 0 };
+		float drop_{ 0 };
+	};
 
 	// Unsticking (pure): a puppet boxed in (Enclosed >= 7) for a_seconds goes back to the last place it stood free.
 	class Unstick

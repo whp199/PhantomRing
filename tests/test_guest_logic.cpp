@@ -183,6 +183,22 @@ static void TestLife()
 	CHECK(r.life == 1 && r.died);
 	r = ApplyHurt(3000, 0.0f, 4.0f);  // no damage
 	CHECK(r.life == 3000 && !r.died);
+	// MGSV's post-hit regeneration curve (live: 2651 held ~2.4 s, +339 2.3 s into the ramp, +1560 at 5 s, full 7801 ~12.5 s on)
+	CHECK(RegenCap(2651.0f, 1.0, 2.4f, 6.25f, 750.0f) == 2651.0f);
+	CHECK(RegenCap(2651.0f, 2.4, 2.4f, 6.25f, 750.0f) == 2651.0f);
+	CHECK(std::fabs(RegenCap(2651.0f, 4.7, 2.4f, 6.25f, 750.0f) - (2651.0f + 60.0f * 2.3f * 2.3f)) < 0.5f);
+	CHECK(std::fabs(RegenCap(2651.0f, 8.65, 2.4f, 6.25f, 750.0f) - (2651.0f + 2343.75f)) < 0.5f);
+	CHECK(std::fabs(RegenCap(2651.0f, 10.65, 2.4f, 6.25f, 750.0f) - (2651.0f + 2343.75f + 1500.0f)) < 0.5f);
+	CHECK(RegenCap(2651.0f, 13.0, 2.4f, 6.25f, 750.0f) >= 7801.0f && RegenCap(2651.0f, 11.9, 2.4f, 6.25f, 750.0f) < 7801.0f);
+	CHECK(RegenCap(100.0f, 50.0, 2.4f, 0.0f, 0.0f) == 100.0f);  // no rate: held
+	// The stickiness check (live 2026-10-13: a Margit hit 6942 -> 6641 regenerated to 6942 within 8 frames and was called lost).
+	CHECK(!LifeWriteLost(7801, 4609, 4720));   // 8 frames of MGSV's regeneration: kept
+	CHECK(LifeWriteLost(7801, 4609, 7801));    // never applied: lost
+	CHECK(!LifeWriteLost(6942, 6641, 6942));   // too small to judge (regeneration alone brings it back)
+	CHECK(LifeWriteLost(2000, 7801, 2050));    // a refill that fell back
+	CHECK(!LifeWriteLost(2000, 7801, 7801));
+	CHECK(!LifeWriteLost(5000, 4900, 5000));   // too small to judge
+	CHECK(!LifeWriteLost(-1, 4900, 5000));
 	r = ApplyHurt(3000, -5.0f, 4.0f);
 	CHECK(r.life == 3000 && !r.died);
 	r = ApplyHurt(3000, NAN, 4.0f);
@@ -236,6 +252,10 @@ static void TestCombat()
 
 static void TestAmmo()
 {
+	std::array<SlotMagazine, 3> mags{};
+	CHECK(ParseMagazines("36/30/0,54/1/0,7/7/2", mags) && mags[0].equip == 36 && mags[0].rounds == 30 && mags[1].rounds == 1 && mags[2].sub == 2);
+	CHECK(!ParseMagazines("36/30/0,54/1/0", mags) && !ParseMagazines("36/30/0,54/1/0,7/7/0 x", mags) && !ParseMagazines("error: x", mags));
+
 	AmmoWatch                      w;
 	std::array<std::uint16_t, 6> weapons{ 0x1001, 0x2002, 0x3003, 0, 0, 0 };
 	std::array<std::uint16_t, 6> ammo{ 30, 15, 8, 0, 0, 0 };

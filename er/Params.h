@@ -69,6 +69,9 @@ namespace phantom::er::params
 	inline constexpr Spec kAtkParamPc{ L"AtkParam_Pc", "ATK_PARAM_ST", 0x1C8, 8 };
 	inline constexpr Spec kBullet{ L"Bullet", "BULLET_PARAM_ST", 0x110, 10 };
 	inline constexpr Spec kSpEffect{ L"SpEffectParam", "SP_EFFECT_PARAM_ST", 0x390, 15 };
+	// Read only ([Progression] weapon: a weapon's reinforce type and its levels; fromsoftware-rs SoloParam indices 0 and 4).
+	inline constexpr Spec kEquipParamWeapon{ L"EquipParamWeapon", "EQUIP_PARAM_WEAPON_ST", 0x298, 0 };
+	inline constexpr Spec kReinforceParamWeapon{ L"ReinforceParamWeapon", "REINFORCE_PARAM_WEAPON_ST", 0x80, 4 };
 
 	class Table
 	{
@@ -170,6 +173,10 @@ namespace phantom::er::params
 		inline constexpr std::uint32_t kSeIdBullet2 = 0xDC;
 		inline constexpr std::uint32_t kSeIdHit = 0xE0;
 		inline constexpr std::uint32_t kSeIdFlick = 0xE4;
+	}
+	namespace weapon
+	{
+		inline constexpr std::uint32_t kReinforceTypeId = 0xDA;     // i16 EQUIP_PARAM_WEAPON_ST reinforce_type_id (ReinforceParamWeapon base row)
 	}
 	namespace speffect
 	{

@@ -1,4 +1,4 @@
-# Status (2026-10-12)
+# Status (2026-10-13, 0.2.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,86 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## Combined run, 2026-10-13 morning (real MGSV + Elden Ring, both on the default mapping; release 0.2.0-alpha)
+
+Two launches (`pr launch --er-headless 3840x2160`, the virtual pad; the second with `PHANTOMRING_BUDDY=horse`), ~50 minutes;
+the player's save at the Castleward Tunnel grace, then Gatefront, Fort Haight and the Stormhill Shack. Logs and screenshots were
+looked at for every item; the save was put back afterwards (sha256 equal to this session's first backup).
+
+- **Versions**: both logs' first lines `PhantomRingHost v0.2.0-alpha (commit ..., protocol 11)` / `PhantomRing guest (dinput8.dll)
+  v0.2.0-alpha (...)`; a stand-in guest naming protocol 12 / v0.3.0 -> Elden Ring's corner in red "PhantomRing versions differ:
+  Elden Ring plugin v0.2.0-alpha, MGSV plugin v0.3.0 -- reinstall both"; one naming nothing -> "... MGSV plugin from before
+  v0.2.0-alpha ..." after 15 s; both gone when it stopped. `pr doctor`: 19 ok, 1 warning (backups 23.7 GB), 0 failures.
+- **Regeneration** (MGSV's post-hit curve, `[Combat] RegenGate`): an 18% fall held ~3 s, then MGSV's ramp, full 7.25 s after
+  the hit (gate off: 2.0 s). Margit, Snake standing still: gate on, dead after 5 hits in 12 s (again ~17 s); gate off, 22 hits
+  in 75 s and alive. Life may tick up 50-140 for a moment before the curve's first write (GUEST.md 18.15).
+- **Ladders** with the real MGSV (Fort Haight's tower): up three times (+19.1 m, Snake in control at the top), down once
+  ("Descend" when he faces the hole, -18.8 m). Walking on into the hole from the top dropped him down the shaft twice (92%).
+- **D-Horse** (`PHANTOMRING_BUDDY=horse`): deployed and drawn beside Snake, whistled over by itself, mounted with the horse's
+  values; on Stormhill's open slope 98.3 of 98.3 m asked in 8 s at a 15-16 m/s gallop; into the shack's ruins: blocked and one
+  unstick; off a 13 m ledge: 55% fall damage; `!buddy walker` back to D-Walker in 1 s. 0 warnings in that session.
+- **Progression** (live switch between shots at one soldier): off 35, level 31, weapon 35, both 31; back to off.
+- **Root motion vs kinematic**, 4 minutes each on the Stormhill loop: kinematic 63% of legs / 73.3% of the distance, root motion
+  64% / 65.5%, 0 warnings each: kinematic stays the default.
+- **10 minutes of continuous play** (Stormhill Shack; scripted: 20 walks, 15 stance changes, 10 dives, 10 grenades, 10 NVG round
+  trips, 10 D-Walker whistles, 9 weapon switches, 9 maps, 7 Elden Ring menus into Equipment/Inventory, 7 boxes, 6 iDroids, 6
+  Tarnished-mode round trips, 3 bursts with reloads): 0 problems in the script's checks, **0 warnings and 0 errors in both logs**.
+  A rest afterwards: `kHEvRested 0` -> `stocks ... 1->8` (Melina sat down instead of the grace menu, as before).
+- **Found and fixed live**: in that play Snake walked into the shack and was stuck for good -- only the waist ray was blocked
+  all round, and the boxed-in check looked at the knee and chest only; it now counts every probe height (seen working in the
+  D-Horse session: `boxed in ... back to where it stood free`).
+- Whole run: the host logged only the two deliberate version-mismatch errors; the guest one warning, during the gate-off A/B at
+  Margit (a life write that did not stick).
+
+## Combined run, 2026-10-13 (night; real MGSV + Elden Ring, the player's save at Margit)
+
+Both games on the default mapping (`pr launch --er-headless 3840x2160`, the virtual pad), ~1 h, two launches plus an
+MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots were looked at for every item.
+
+- **Tarnished mode** (View + Start held 1 s): 28 toggles, Elden Ring's menu never opened, MGSV's iDroid never opened, the guest
+  parked and back each time (`tarnished mode: on -- Snake parked` / `off -- Snake has the pad again`); the Tarnished walked
+  3.5 m and Snake took over there; mid-fight the Tarnished drank a flask (74% -> 100%) -> `Snake +2044 life (kHEvHeal 511)`.
+- **Refill**: rest -> `kHEvRested 0` -> `magazines 36:17->30; stocks 197->210`; every respawn -> `kHEvRested 1` -> life 7801 and
+  `36:4->30; 184->210`.
+- **Fall watchdog**: 150 m above the grace -> `falling 3.5 s, 60 m with no landing -> Snake dies of the fall` -> respawn.
+- **Margit**: "Traverse the mist" shows while Snake plays; Y -> `puppet steps aside for 4500 ms` -> through -> `puppet back`,
+  Snake inside, his bar up and `menu closed` (its entries `HUD too`), three times. 26 rounds 12.7%, 30 rounds 14.4% of his
+  4174 HP; his hits 11-45% of Snake's life (29 hits); deaths -> the grace -> fog again with full ammo. Never below 85%.
+  The intro cutscene doesn't play again on this save: the skip fix is unit-tested only.
+- **Night vision**: the goggles from MGSV's item wheel -> green night vision over the world and Snake, under Elden Ring's HUD
+  and menu; with `nvg_curve` (new) the dark tunnel's mean brightness 8 -> 81 of 255, the night arena 41 -> 131.
+- **Aim assist**: `boot: auto-aim correction: off (was on)`; 50 aim directions, no snap (<= 5.7 deg, parallax).
+- **Esc**: `menu OPEN` / closed with Esc, MGSV's HUD layer hidden meanwhile.
+- **Found and fixed live**: after the grace's "Pass time" Elden Ring showed the grace menu again 4.7 s later with Snake holding
+  the pad (B reloaded, the menu could not be closed): sitting at a grace now keeps Elden Ring's screens Elden Ring's; the guest
+  warned that a life write "did not stick" on Margit's hits that had (MGSV's regeneration): the check fixed (0 in 11 hits).
+- **How to play pass**: A crouch/stand, A held prone, X dive (7.2 m), B reload, D-pad down/up/right (handgun, primary,
+  grenade), RB first person while aiming, Start menu, View map (and fast travel: Snake back 5 s after the load), View held
+  iDroid (Start closes it), LB order (`D-Walker: Whistle`), Y mounts D-Walker first try, riding, Y held dismounts, the box,
+  a sleep grenade thrown at Margit, a CQC strike (standing; crouched RT does nothing), a rocket fired and exploding.
+- **10 minutes of continuous play** (scripted: 24 walks/runs, 21 pans, 14 stance changes, 11 dives, 10 bursts with reloads,
+  10 weapon switches, 20 grenades, 11 NVG toggles, 13 D-Walker whistles, 14 Tarnished-mode round trips, one rest): 0
+  warnings and 0 errors in both logs (the guest's one false life-write warning came 7 minutes earlier, in the Margit fight).
+- **Root motion** with the real MGSV: 100% of the asked distance on the same loop where kinematic gave 74%.
+- **Found and fixed live, second part**: Start -> Inventory (or Equipment) gave A/B/D-pad to MGSV inside the inventory (D-pad
+  right switched Snake's weapon, only Start got out), and one A acted twice (the inventory and an item's context menu; in
+  Equipment it opened the right-hand list): Elden Ring's HUD hiding inside a menu now keeps the menu open and a submenu
+  replacing its menu arms at once -- the equipment overview, the inventory grid, B back, B closed, MGSV's HUD hidden throughout.
+  Tarnished mode now refuses to give Snake back on Torrent ("get off Torrent first"; the player's whistle at Stormhill).
+- **10 more minutes with the final build** (Stormhill Shack, daylight; scripted: 22 walks, 17 stance changes, 12 dives, 11
+  grenades, 10 box entries, 12 NVG round trips, 11 D-Walker whistles, 9 Tarnished-mode round trips, 8 Elden Ring menu round
+  trips into Equipment or Inventory, 10 maps, 8 iDroids, a rest at the grace with its menu closed by B): every menu open
+  while up and closed after (0 problems), the rest refilled the grenades (3 -> 8); 0 warnings and 0 errors in both logs
+  (the guest's covering the whole second MGSV session, the second Margit fight included).
+
+## Elden Ring side, 2026-10-13 early morning (fake MGSV and the real MGSV's D-Horse recording; details in HOST.md / COMBAT.md)
+
+- **Ladders**: Snake's Y on "Climb"/"Descend" -> the Tarnished climbs (whole pad, Elden Ring's camera) -> Snake back where he
+  gets off, up and down Fort Haight's 19 m tower ladder; the chord on a ladder is Tarnished mode, refused back to Snake there.
+- **D-Horse**: the real ride replayed at Agheel Lake: mounted with the horse's values, 118 of 118 m of gallop, drawn on the horse.
+- **Progression** (off by default): level 15 / Halberd +0 read and cross-checked; a body hit 35 -> 31 with `level`.
+- **Root motion vs kinematic**, 10 minutes each around the Stormhill Shack: legs arrived 78% vs 58%, distance 75.5% vs 68.4%.
 
 ## What you can do now
 
@@ -98,9 +178,6 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 - Getting on D-Walker with the test pad: in the 10-minute play, Y right after walking up to it (1.4-1.6 m) never mounted
   it (11 tries); on their own, the same walk and press mounted it (twice, one after the play). Not understood yet.
-- MGSV's aim assist still knows its own airport soldiers (disabled, never drawn): aiming near where one stands in MGSV,
-  the aim snaps toward him and off the Elden Ring enemy you aim at (seen with the launchers and the test pad's aiming).
-  Their markers are now cleared every 5 s (`[Boot] ClearMarkersSec`); the snap isn't.
 - Elden Ring's grass is drawn over Snake's models even where it stands behind them (seen on the box in tall grass).
 - D-Walker's footsteps are loud: -21 dBFS (peaks near clipping) vs Elden Ring's -35. MGSV's Wwise is found, but
   per-object volume, sends and attenuation calls have no audible effect so far ([docs/GUEST.md](GUEST.md) 18.2).
@@ -121,18 +198,20 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 - Long clouds (a smoke grenade's ~60 s): when Elden Ring's effect pool is full and refuses our spawns (a session 4 smoke
   cloud lost its effect that way for a minute), refreshes now wait up to 10 s instead of piling on, and the log warns;
   clouds also follow Elden Ring's origin shifts. Not re-tested live (the evening pass couldn't throw).
-- An Elden Ring menu opened from the keyboard (Esc) isn't noticed: MGSV's HUD layer and the throw markers stay on top of
-  it (the pad's Start is).
 - Snake and D-Walker are lit with Elden Ring's world light set (0) since its character sets (3, 4) light nothing while no
   Elden Ring character is on screen (they turned pitch black); the world set lacks a character's rim light, so they look
   a little flatter than the Tarnished ([docs/HOST.md](HOST.md)).
 - Elden Ring's own frame times show a single 36-40 ms frame one to six times per 10 s in the open world (the pacing probe,
   both games running); each is a small visible step in a pan. The evening pan also had two one-frame yaw steps of 0.85
   and 1.6 deg (frames of ~19 ms) and one 2 m camera pull-in by collision. Not investigated yet.
-- A boss's hits were not re-tested after the control fix: ordinary enemies' hits drain Snake's life (27 hits, then YOU
-  DIED, live), and the player's session 3 shows a boss killing Snake.
-- Elden Ring heals (resting at a grace, regenerating talismans) are sent to MGSV (`kHEvHeal`); the MGSV plugin now
-  applies them to Snake's life (not yet tried with both games). Flasks can't be drunk while Snake plays.
+- Regeneration after Elden Ring's hits now follows MGSV's own curve (fixed; Margit kills a Snake who stands still in ~12 s);
+  life can tick up by up to ~2% for a moment before the curve's first write after a hit.
+- D-Horse: no treadmill while riding (nothing found moves the horse in MGSV), so MGSV's own map limits a ride, and after a
+  far dismount the horse jumps back in Elden Ring and gallops in. Galloping off a ledge hurts as a fall. D-Dog, Quiet: untested.
+- Ladders: walking on into the hole at a ladder's top drops Snake down the shaft (face it and press Y on "Descend").
+- Flasks, spirit ashes, Torrent and jumps need Tarnished mode (ladders: Snake's Y hands the climb to Elden Ring).
+- Skipping a boss's intro cutscene: fixed (e226ea5, 6b6ac58) and unit-tested, not re-tried live (Margit's plays once).
+- MGSV's goggles on Snake's head are drawn with a noisy texture on their lenses.
 - MGSV advances its game one fixed step per frame and still drops to ~54 frames/s while the camera turns: Snake's game
   then runs ~10% slow (60 when it doesn't). Snake's root moves in whole animation keys (2 or 3 per frame running, MGSV's own view steps the same);
   the puppet's motion is smoothed over them, his limbs are not.

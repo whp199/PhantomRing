@@ -8,6 +8,12 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <format>
+#include <mutex>
+#include <optional>
+#include <tuple>
+#include <utility>
+#include <string>
 
 namespace phantom::guest::hold
 {
@@ -33,13 +39,21 @@ namespace phantom::guest::hold
 			}
 		}
 
-		// Replays the resolution in Player2SystemImpl::Warp for the local player; 0 on any mismatch.
-		std::uintptr_t ResolveLoc()
+		struct Resolved
+		{
+			std::uintptr_t mgr{ 0 };
+			std::uintptr_t getLoc{ 0 };
+			std::uint16_t  obj{ 0xFFFF };
+			std::uint8_t   slot{ 0xFF };
+		};
+
+		// Replays the resolution in Player2SystemImpl::Warp for the local player: its location manager and GameObject id.
+		bool ResolveMgr(Resolved& a_out)
 		{
 			const auto impl = Get<std::uintptr_t>(addr::kPlayer2System + 8);
 			if (!impl || !*impl || Get<std::uintptr_t>(*impl) != addr::kPlayer2ImplVtable) {
 				Fail("Player2System impl vtable");
-				return 0;
+				return false;
 			}
 			const auto p = *impl;
 			const auto idx = Get<std::uint32_t>(p + 0x214);
@@ -48,12 +62,12 @@ namespace phantom::guest::hold
 			const auto insts = Get<std::uintptr_t>(p + 0x378);
 			if (!idx || *idx >= 16 || !slots || !objs || !insts || !*insts) {
 				Fail("player tables");
-				return 0;
+				return false;
 			}
 			const auto slot = Get<std::uint8_t>(*slots + *idx);
 			const auto obj = Get<std::uint16_t>(*objs + 2 * *idx);
 			if (!slot || *slot == 0xFF || !obj || *obj == 0xFFFF) {
-				return 0;  // no player instance right now (loading)
+				return false;  // no player instance right now (loading)
 			}
 			const auto inst = *insts + static_cast<std::uintptr_t>(*slot) * 0x6A8;
 			const auto a = Get<std::uintptr_t>(inst + 0x78);
@@ -62,20 +76,50 @@ namespace phantom::guest::hold
 			const auto getLoc = mgrVt && InImage(*mgrVt) ? Get<std::uintptr_t>(*mgrVt + 0x388) : std::nullopt;
 			if (!getLoc || !InImage(*getLoc)) {
 				Fail("location manager");
+				return false;
+			}
+			a_out = { *mgr, *getLoc, *obj, *slot };
+			return true;
+		}
+
+		std::uintptr_t LocOf(const Resolved& a_r, std::uint16_t a_id)
+		{
+			using GetLocFn = std::uintptr_t (*)(std::uintptr_t, std::uint32_t);
+			const auto loc = reinterpret_cast<GetLocFn>(a_r.getLoc)(a_r.mgr, a_id);
+			const auto locVt = loc ? Get<std::uintptr_t>(loc) : std::nullopt;
+			return locVt && InImage(*locVt) ? loc : 0;
+		}
+
+		std::uintptr_t ResolveLoc()
+		{
+			Resolved r;
+			if (!ResolveMgr(r)) {
 				return 0;
 			}
-			using GetLocFn = std::uintptr_t (*)(std::uintptr_t, std::uint32_t);
-			const auto loc = reinterpret_cast<GetLocFn>(*getLoc)(*mgr, *obj);
-			const auto locVt = loc ? Get<std::uintptr_t>(loc) : std::nullopt;
-			if (!locVt || !InImage(*locVt)) {
+			const auto loc = LocOf(r, r.obj);
+			if (!loc) {
 				Fail("location object");
 				return 0;
 			}
 			if (loc != g_lastLoc) {
 				g_lastLoc = loc;
-				Log::Info("hold: player location object {:#x} (vtable {:#x}, mgr {:#x}, obj {}, slot {})", loc, *locVt, *mgr, *obj, *slot);
+				Log::Info("hold: player location object {:#x} (vtable {:#x}, mgr {:#x}, obj {}, slot {})", loc, *Get<std::uintptr_t>(loc), r.mgr, r.obj, r.slot);
 			}
 			return loc;
+		}
+
+		bool SetLoc(std::uintptr_t a_loc, const logic::Vec3& a_pos, const std::array<float, 4>& a_rot)
+		{
+			const auto vt = a_loc ? Get<std::uintptr_t>(a_loc) : std::nullopt;
+			const auto set = vt ? Get<std::uintptr_t>(*vt + 0x68) : std::nullopt;
+			if (!set || !InImage(*set)) {
+				return false;
+			}
+			alignas(16) float pos[4] = { a_pos.x, a_pos.y, a_pos.z, 0.0f };
+			alignas(16) float rot[4] = { a_rot[0], a_rot[1], a_rot[2], a_rot[3] };
+			using SetFn = void (*)(std::uintptr_t, const float*, const float*);
+			reinterpret_cast<SetFn>(*set)(a_loc, pos, rot);
+			return true;
 		}
 	}
 
@@ -97,16 +141,85 @@ namespace phantom::guest::hold
 		if (!g_ok || !a_pos.Finite()) {
 			return false;
 		}
-		const auto loc = ResolveLoc();
-		const auto vt = loc ? Get<std::uintptr_t>(loc) : std::nullopt;
-		const auto set = vt ? Get<std::uintptr_t>(*vt + 0x68) : std::nullopt;
-		if (!set || !InImage(*set)) {
+		return SetLoc(ResolveLoc(), a_pos, a_rot);
+	}
+
+	std::uintptr_t LocationOf(std::uint16_t a_id)
+	{
+		Resolved r;
+		if (!g_ok || a_id == 0xFFFF || !ResolveMgr(r)) {
+			return 0;
+		}
+		return LocOf(r, a_id);
+	}
+
+	bool PlaceObject(std::uint16_t a_id, const logic::Vec3& a_pos, const std::array<float, 4>& a_rot)
+	{
+		if (!g_ok || !a_pos.Finite()) {
 			return false;
 		}
-		alignas(16) float pos[4] = { a_pos.x, a_pos.y, a_pos.z, 0.0f };
-		alignas(16) float rot[4] = { a_rot[0], a_rot[1], a_rot[2], a_rot[3] };
-		using SetFn = void (*)(std::uintptr_t, const float*, const float*);
-		reinterpret_cast<SetFn>(*set)(loc, pos, rot);
-		return true;
+		return SetLoc(LocationOf(a_id), a_pos, a_rot);
 	}
+
+	namespace
+	{
+		std::mutex                g_reqLock;
+		std::optional<std::tuple<std::uint16_t, logic::Vec3, float>> g_req;
+		std::string               g_reqResult{ "none" };
+	}
+
+	void RequestPlaceObject(std::uint16_t a_id, const logic::Vec3& a_pos, float a_yaw)
+	{
+		std::scoped_lock lock(g_reqLock);
+		g_req = std::make_tuple(a_id, a_pos, a_yaw);
+	}
+
+	void ServicePending()
+	{
+		std::optional<std::tuple<std::uint16_t, logic::Vec3, float>> req;
+		{
+			std::scoped_lock lock(g_reqLock);
+			req = std::exchange(g_req, std::nullopt);
+		}
+		if (!req) {
+			return;
+		}
+		const auto [id, pos, yaw] = *req;
+		const bool ok = PlaceObject(id, pos, logic::YawQuat(yaw));
+		Log::Info("hold: placed object {:#x} at {:.2f},{:.2f},{:.2f}: {}", id, pos.x, pos.y, pos.z, ok);
+		std::scoped_lock lock(g_reqLock);
+		g_reqResult = std::format("{:#x} -> {:.2f},{:.2f},{:.2f}: {}", id, pos.x, pos.y, pos.z, ok);
+	}
+
+	std::string LastPlaceResult()
+	{
+		std::scoped_lock lock(g_reqLock);
+		return g_reqResult;
+	}
+
+	std::string DescribeLocation(std::uint16_t a_id)
+	{
+		const auto loc = LocationOf(a_id);
+		if (!loc) {
+			return std::format("location of {:#x}: none", a_id);
+		}
+		std::string out = std::format("location of {:#x}: {:#x} vtable {:#x}\n", a_id, loc, *Get<std::uintptr_t>(loc));
+		for (std::uintptr_t o = 0; o < 0x100; o += 16) {
+			out += std::format("  +{:03x}:", o);
+			for (std::uintptr_t k = 0; k < 16; k += 4) {
+				const auto f = Get<float>(loc + o + k);
+				const auto u = Get<std::uint32_t>(loc + o + k);
+				out += f && u ? std::format(" {:08x}({:.3g})", *u, *f) : std::string(" ????????");
+			}
+			out += "\n";
+		}
+		const auto vt = *Get<std::uintptr_t>(loc);
+		out += "  vtable:";
+		for (std::uintptr_t k = 0; k < 0x100; k += 8) {
+			const auto f = Get<std::uintptr_t>(vt + k);
+			out += f ? std::format(" {:x}", *f) : std::string(" ?");
+		}
+		return out;
+	}
+
 }

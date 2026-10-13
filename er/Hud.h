@@ -62,6 +62,7 @@ namespace phantom::er
 			bool          guestAlive{ false };
 			proto::Status guestStatus{ proto::Status::kAbsent };
 			std::string   guestText;
+			std::string   versionText;  // Link::VersionMismatch(): shown instead of MGSV's status while it is set
 			std::uint32_t attach{ 0 };
 			bool          inGame{ false };
 			bool          menuOpen{ false };

@@ -1,0 +1,184 @@
+<!-- Written 2026-10-12 after the first public release (github.com/whp199/PhantomRing, MIT). Section 6.1-6.4 (licence,
+notices, personal paths, content check) is DONE in that release. Added from the evening play session: night vision (MGSV's
+NVG only darkens the picture: recreate it on Elden Ring's frame from the guest's NVG state and drop its tint from the HUD
+layer); an option for Elden Ring levels / weapons to scale Snake's damage (2.12); the mist step-aside and the boss-bar-after-
+cutscene fix (both UNVERIFIED live); never build while the player plays (builds dropped Elden Ring to ~10 fps). -->
+
+# PhantomRing next-steps roadmap (as of 2026-10-12, HEAD `654c760`)
+
+Everything below comes from README (Status, Known issues, How to play), docs/DESIGN.md (§12–14c), HOST.md, GUEST.md, COMBAT.md, WINDOWS.md, docs/research/re-backlog.md, the code (`er/`, `mgsv/`, `protocol/`) and the git log. I worked read-only and did not touch the games, `build/` or `/dev/shm`.
+
+**What the player has confirmed, to fold into the README now:**
+- Mounting D-Walker with Y works. The "11 failed mounts" in Known issues happened only with the test pad, so mark it test-pad-only.
+- Movement is good with `motion = kinematic`, the default again since `654c760`.
+- Walking into breakables breaks them. Remove the "UNVERIFIED for Snake" note in README/HOST.md.
+- The box is fun.
+- HOST.md still says "root motion the default since 2026-10-12" (its Motion section heading, the `motion = root_motion` bullet, and the kinematic bullet's "UNVERIFIED live (root motion is the default)"). This is now wrong: kinematic is the default again.
+
+Effort: **S** ≤ 1 day, **M** 2–5 days, **L** 1–3 weeks (agent work plus the live passes it needs).
+
+---
+
+## 1. Must-fix: what the player will hit on the way to Margit (P0)
+
+The route to Margit runs Church of Elleh → Gatefront (Melina gives Torrent at the third grace) → Stormhill → Stormgate or Castleward Tunnel → fog wall → Margit.
+
+**Status 2026-10-13 (step 1 done; combined live run with the real MGSV and Elden Ring, the player's save, Castleward Tunnel
+and Margit's arena; details in docs/STATUS.md):**
+
+| # | Status | Evidence (live, both games) |
+|---|---|---|
+| 1.1 Tarnished mode | **DONE** | View + Start 1 s, 28 toggles in one session, 0 Elden Ring menus, 0 iDroids; a Flask of Crimson Tears as the Tarnished (74% -> 100%) -> Snake +2044 life; Snake back where the Tarnished stood. Torrent: the player's whistle (it is in Tools, not in a quick slot) summoned him at Stormhill, the chord refused while riding ("get off Torrent first"), Snake back after the dismount |
+| 1.2 Resupply | **DONE** | rest: `magazines 36:17->30; stocks 197->210`; respawn: `36:4->30; 184->210`, life 7801 (real MGSV's ammo component) |
+| 1.3 Fall watchdog | **DONE** | `falling 3.5 s, 60 m with no landing -> Snake dies of the fall`, respawn 13 s later |
+| 1.4 Margit pass | **DONE** except the intro skip | Y at the mist -> step aside 4.5 s -> through -> Snake back inside, three times; his bar is HUD, Snake keeps the pad; 30 rounds = 14.4% of his HP; his hits 11-45% of Snake's life; death -> grace -> retry with full ammo. The intro cutscene plays once per save (the player's has seen it): the skip fix is unit-tested only |
+| 1.5 Grace heal | **DONE** | `kHEvHeal` from the Tarnished's flask; a rest refills Snake's life with the ammo (`kHEvRested 0`) |
+| 1.6 Aim assist | **DONE** | MGSV's own "Auto-Aim Correction" turned off in memory in the sandbox (`boot: auto-aim correction: off (was on)`); 50 aim directions, LT never turned the camera more than 5.7 deg (the over-the-shoulder parallax in a tunnel), no direction it snapped to |
+| 1.7 Ladders | **DONE** (real MGSV, 2026-10-13 morning) | Snake's Y on "Climb"/"Descend" -> the puppet steps aside, Elden Ring climbs with the Tarnished (whole pad), Snake back where he gets off; with the real MGSV at Fort Haight's tower (no ladder near the save's graces): up three times (`+19.1 m up`, `puppet ON`, "Snake is in control"), down once ("Descend" shows when Snake faces the hole; `-18.8 m`); walking on into the hole from the top drops Snake down the shaft (92% of his life, twice by the script): README says to face it and press Y. The chord on a ladder is Tarnished mode (HOST.md "Ladders") |
+| (2.3) D-Horse | **DONE** (real MGSV + Elden Ring, 2026-10-13 morning) | booted with `[Buddy] Type = horse` (`PHANTOMRING_BUDDY=horse`): "MGSV: ready (Africa, D-Horse deployed)", drawn beside Snake at the Stormhill Shack grace, whistled over by itself (`whistled #3 (7.7 m from Snake after a treadmill jump)`); mounted with the horse's values (`max 32 m/s, step-up 0.80 m, radius 0.45 m`); open Stormhill slope: **98.3 of 98.3 m** asked in 8 s at MGSV's 15-16 m/s gallop, 0 walls; into the shack's ruins: blocked, one unstick; off a 13 m ledge at a gallop: `landed at 16.5 m/s -> 55%`; Y dismounts; `!buddy walker` back to D-Walker in 1 s; 0 warnings. Open: no treadmill while riding (MGSV's own map limits a ride; the horse jumps after a far dismount), D-Dog and Quiet |
+| (2.12) Progression | **DONE**, off by default | `[Progression] damage_scaling = level\|weapon\|both` (COMBAT.md "Progression"); with the real MGSV, one soldier, the mode switched live between shots: off 35, level 31 (x0.87 at rune level 15), weapon 35 (+0), both 31; Vigor already counts through `hurt_share` |
+| Regen balance | **DONE** (real MGSV + Elden Ring) | MGSV's own post-hit curve for Elden Ring's hits (`[Combat] RegenGate`, GUEST.md 18.15): an 18% fall held ~3 s, full 7.25 s after (gate off: 2.0 s); Margit, Snake standing still: dead after 5 hits in 12 s (gate off: 22 hits in 75 s, alive) |
+| 1.8 Esc menu | **DONE** | `key 0x1b (Esc: its menu) pressed` -> `menu OPEN`, MGSV's HUD layer gone; Esc again closes it |
+| 1.9 Docs | **DONE** | README How to play / Known issues, HOST, GUEST, COMBAT, STATUS |
+| Night vision | **DONE** | MGSV's goggles -> green night vision on Elden Ring's picture, nothing darker; `nvg_curve` lifts a dark tunnel from mean 8 to 81 (of 255) |
+| Grace screens | **fixed** | Pass time's next grace screen kept the pad with Snake (found live): now Elden Ring's while Snake sits at the grace |
+| Full-screen menus | **fixed** | Start -> Inventory/Equipment handed A/B/D-pad to MGSV, and one A acted twice (found live): its HUD hiding inside a menu keeps the menu open, a submenu replacing its menu arms at once |
+| (2.15) Root motion | **ready to try**; kinematic stays the default | with SetYaw fixed: the tunnel's 16-leg loop, real MGSV, root motion 100% / 16 of 16 legs, kinematic 74% / 14 of 16; 10 minutes each around the Stormhill Shack with fake MGSV: legs 78% vs 58%, distance 75.5% vs 68.4%; **the same Stormhill loop with the real MGSV, 4 minutes each: kinematic 63% of legs / 73.3% of the distance, root motion 64% / 65.5%**, 0 warnings either way -- neither clearly ahead with MGSV's real acceleration (HOST.md "Motion"). Found there: a kinematic Snake stuck for good inside a table-high plank (only the waist probe blocked all round): `Enclosed()` now counts every probe height, so the unstick frees him (live in the D-Horse run: `boxed in ... back to where it stood free`) |
+| Review fixes (2026-10-13) | **done**, unit-tested | a boss bar can no longer hold a submenu "open" (MenuWatch), auto-aim written only with the save guards really in place, Elden Ring's "Auto" HUD turns the press-less screens off (detected, logged), root-motion descents with ground under them are no fall, a lost refill is asked again, `!ammo drain` on the Lua thread, `restore-saves` removes a save created after the backup, the ini prose line |
+
+| # | Item | Why (grounded) | Effort | Deps | Risk | How to verify |
+|---|---|---|---|---|---|---|
+| 1.1 | **"Tarnished mode" escape hatch**: a pad chord (proposal: View + Start held 1 s) that runs the existing `puppet off` / on path | Everything Snake can't do yet is blocked: flasks ("can't be drunk while Snake plays"), the Spirit Calling Bell, Margit's Shackle, the Spectral Steed Whistle (Torrent), jumps, ladders. The puppet stop/restore and the re-anchor code ("ER moved the player by itself") already exist; the toggle only adds a trigger and a corner message. MGSV keeps running on a neutral pad, so switching back is instant | S | none | Low. Snake re-anchors where the Tarnished stands; D-Walker comes with him (it is anchor-relative) | Toggle 10× at Gatefront: Tarnished visible with his weapon, a flask drunk, Torrent summoned, toggle back: "Snake is in control", 0 warnings. Unit test for the chord rule next to `Hint` in `tests/test_host.cpp` |
+| 1.2 | **Resupply on respawn and on grace rest** | `mgsv/Frame.cpp` refills only life on `kHEvRespawn`. Nothing refills ammo. A Margit attempt loop (the boss counts as many soldiers: ~10–20 % of his HP per AR magazine, computed in COMBAT §7) drains ammo with no refill except iDroid supply drops. ER refills flasks on grace rest and respawn; MGSV ammo should follow the same rule | S–M | needs a "rested" signal: grace rest is visible as the HUD-hidden interaction (HOST.md), and `kHEvHeal` already fires; add a v10 `kHEvRested` or reuse respawn | Low–medium: need the Lua call for a full resupply (MGSV's own supply-drop refill path) | Empty a magazine, rest: ammo full, logged. Die to a soldier: full ammo after respawn. Offline: fake_er event drives the guest |
+| 1.3 | **Bottomless-fall watchdog** | Kinematic gravity with NoDead set: if Snake falls into a chasm whose death comes from a kill volume rather than a landing, `LandingDamage` never runs and he can fall forever. `fall_lethal_speed` (19.8 m/s) only fires on a landing | S | none | Low | Unit test in `test_host` with the synthetic world: no ground under a ledge → after N s of falling (or below ER's map floor) `kGEvDied` path → YOU DIED. Live: cliff at Stormhill or the Stormveil ramparts |
+| 1.4 | **Margit / boss-fight pass** (verification plus tuning) | Several boss paths are implemented but not checked live: cutscene detection (`[[CSRemo]+8]+0x14C`, intended for Margit's intro in LIVE_TEST_P01 E4); fog-wall traversal ("Y: Traverse the mist" through the interaction hand-over, then re-anchor); "boss hits not re-tested after the control fix"; boss damage share ("computed, not yet tried on one"); boss bar as HUD-only (fixed, `256746b`); Stake revival (live) | S (pass) + S (tuning) | 1.1 for spirit ash and Shackle, 1.2 for ammo | Medium: boss damage could be too high or too low (`ref HP` up to 70 lives) | A checklist run at Margit with logs: `ER cutscene playing/over`; fog traversal followed by `re-anchoring`, not stuck; Margit's hits logged as `kHEvHurt` share; % of his bar per magazine; death → Stake → retry with full ammo. Tune `[Combat]` boss constants from the log, record the numbers in COMBAT §8 |
+| 1.5 | **Grace heal on Snake** | `kHEvHeal` is applied by the guest now but "not yet tried with both games" | S | none | Low | Take hits, rest: `life: heal` in the guest log, the HP bar is full |
+| 1.6 | **Aim assist snapping to the airport soldiers** | Known issue: disabled MGSV soldiers still pull the aim off the ER target (it moved a rocket launcher's aim 30° off target), and `ClearMarkersSec` doesn't stop the snap. Bosses make this worse because you aim at one big target for a long time | S–M | none (or 2.1 replaces it) | Medium: the soldiers must stay disabled for D-Walker and the box | Options, cheapest first: (a) MGSV's own aim-assist setting off, if the build has one (check its Options menu); (b) move or park the disabled soldiers far from the apron at setup; (c) see 2.1, which turns the snap into a feature. Verify: aim near their old positions, then `pr record` the aim yaw: no snap |
+| 1.7 | **Ladders** | The prompt hand-over gives ER only buttons until its HUD hides, and the pad goes back to MGSV after 3.5 s. A ladder needs the left stick for the whole climb, and kinematic `SetPosition` fights the ladder state (re-backlog: `ChrCtrl+0xEB/+0xEC/+0xED` "ladder/locked states"). Limgrave ruins and towers have ladders | M | probe the ChrCtrl flags live (console `peek`) | Medium | While the ladder flag is set: the Tarnished gets the full pad and is shown, Snake is hidden, the puppet's motion is paused; on release, re-anchor. Live: one ladder up and down, 0 stuck. Until this lands, 1.1 is the workaround |
+| 1.8 | **Esc (keyboard) menu not noticed** | Known issue: MGSV's HUD and the throw markers stay over ER's menu. Friends on KB/M hit this at once | S | none | Low | Feed ER's DirectInput Esc into the MenuWatch latch (the same path as Start). Verify: Esc → `ER blocking menu open`, HUD gone |
+| 1.9 | **Docs truth pass** | See the top of this roadmap (mount, breakables, kinematic default) | S | none | none | Read-through. The ini-equals-defaults test already guards `er/PhantomRingHost.ini` |
+
+**P0 order:** 1.1 → 1.2 → 1.4 (with the player's own Margit run as the test) → 1.3 → 1.5 → 1.6 → 1.8 → 1.7 → 1.9. Items 1.1 and 1.2 alone unblock the boss attempt loop.
+
+**Lower-risk notes for the same trip:**
+- **Lifts:** not on the route to Margit. In kinematic mode, step-up and ground snap should ride them. Verify at the first lift (Stormveil) and fall back to 1.1.
+- **Water:** no swimming in ER. Shallow water: Snake runs through it with dry-ground sounds. Cosmetic.
+- **NPC talk** (Melina's Torrent offer, Roderika, Kalé): uses the HUD-hidden interaction path (verified at a grace). A multiple-choice dialogue is UNVERIFIED; check it at the Gatefront grace.
+- **Stakes:** verified.
+- **DLSS:** ER has none built in. Third-party upscaler mods hook D3D12 and change the internal resolution and jitter; mark them unsupported in the README.
+- **HDR:** `er/Renderer.cpp` handles HDR10 PQ and scRGB back buffers for the overlay, but only "4K SDR" was verified. One S pass with HDR on: the HUD has the right brightness, Snake is lit.
+
+---
+
+## 2. Feature work (P1/P2)
+
+| # | Item | Why | Effort | Deps | Risk | How to verify |
+|---|---|---|---|---|---|---|
+| 2.1 | **ActorProxy v0: the disabled airport soldiers become inert position proxies of nearby ER enemies** (DESIGN §8.1 "later", phase 6) | It unlocks most MGSV-native features. The known issue shows that disabled soldiers are still aim-assist targets. The host already publishes an `ActorTable` with `kActorHostile` (`er/Actors.cpp`), which the guest doesn't use ("Unused so far", GUEST §4). Map the nearest N hostiles through the inverse anchor onto the sandbox plane and move the proxies there each frame. The result: aim assist snaps onto ER enemies, MGSV markers and binocular marking work, D-Walker's Search Mode marks, D-Dog and Quiet get targets. The host keeps damage authority | L | `ActorTable` (exists); a soldier position write (Lua `SetPosition`/warp command, or the native write the way `Hold.cpp` does it for Snake) | High: proxies must not collide with Snake in the sandbox, must be excluded from capture (only Snake and buddy draws pass now: check), and Snake's rounds hitting them in MGSV must not double-count (`ShotSolver` stays the source; MGSV's own hits ignored). Heights are flattened | Live: an ER soldier at 20 m → aim assist pulls onto him; marking shows "20m" over him in ER; 10 min of play with 0 double hits; `pr record` + replay for regressions |
+| 2.2 | **CQC holds and throws on ER enemies** | COMBAT §7: throws and chokes need an MGSV target, so CQC is strikes only. Tier 1 (M–L): when MGSV starts a grab next to an ER enemy, make ER play its own paired reaction: a critical/riposte-style ThrowParam from the hidden puppet, or a knockdown via `dmgLevel` plus a sleep top-up for the choke. Tier 2 (L): an ActorProxy from 2.1 warped into Snake's hands so MGSV runs the real hold, throw, choke or interrogation | M–L / L | Tier 2 needs 2.1 | High (paired animations, enemy ownership) | Tier 1: CQC next to a Gatefront soldier → he is knocked down, no damage beyond MGSV's share; logs show the attack row used |
+| 2.3 | **D-Horse** (`[Buddy] Type = horse`) as the in-mod Torrent | The code path exists (`TppHorse2`, ON_HORSE → `kGuestOnVehicle`, `kOwnerBuddy` draws). Riding works through the same puppet vehicle path as D-Walker. Torrent itself stays reachable through 1.1 (spiritsprings and double jump have no D-Horse equivalent) | S (test) + S–M (tuning: `max_speed_vehicle`, step-up, eye height per buddy type) | none | Low–medium: horse speed on ER slopes, jumping obstacles | Boot with `Type = horse`: drawn and ridden through Limgrave at its speed, whistle brings it, 0 unstucks |
+| 2.4 | **Switch buddies in-session** (through the iDroid buddy menu) | Today it is one buddy per boot (ini). The `SafePauseMenu` / `BlockMissions` filters must let a buddy change through without leaving the sandbox | M | 2.3 | Medium: a buddy change reloads the buddy block; boot's buddy step must re-run | Change D-Walker → D-Horse mid-session: the walker disappears, the horse is drawn, and riding works |
+| 2.5 | **D-Dog, Quiet** | Their AI targets MGSV soldiers; with an empty sandbox they do nothing useful. Their orders are already decoded (GUEST §18.3 table: Quiet "Fire", "Shoot this"; DD "Do it", "Get it") | M each, after 2.1 | 2.1 (targets) and their `kGEvBuddyFire` attribution (Quiet's rifle through `ShotSolver`) | Medium–high | Quiet: "Fire" order → her round traced to an ER enemy, damage lands. DD: "Do it" → a strike on the ER enemy next to the proxy |
+| 2.6 | **Binoculars marking ER enemies** | Without 2.1: the guest reports binocular mode plus camera; the host raycasts the view centre against ER actors, keeps a marked set and draws markers (with distance) through walls in `er/RenderMarkers*` (it already draws the throw arcs). With 2.1 this comes free from MGSV | M (host-side) | none; MGSV's binocular binding to be confirmed (LB hold is the call menu) | Low | Mark 3 Gatefront soldiers: markers follow them, fade at death |
+| 2.7 | **Phantom cigar = ER time skip** | MGSV's cigar time-lapse (its "Cigarette" UI state, GUEST §18.2) maps onto ER's clock. The `WorldAreaTime` writes are verified (+0x2C min, +0x30 s, then +0x28 h). The guest must unfreeze MGSV's clock while he smokes (`FreezeClock = true`) | S–M | protocol event (v10) | Low | Smoke until night: ER's sky goes to night, Renna and Night's Cavalry appear (both are night-only) |
+| 2.8 | **Decoys** | `kGEvPlaced` skips decoys now ("logged once and skipped"). Reuse the box poster's "stop and stare" (`er/Stealth.cpp`) for enemies that see a decoy within its range | S–M | none | Low (stare only); a real lure needs ER AI-sound research (M–L) | Place a decoy: a soldier 10 m away stares at it, and Snake passes behind him |
+| 2.9 | **Dive = hop** (Snake can't jump) | MGSV has no jump. While MGSV dives (X), give the kinematic puppet a small upward and forward impulse so short gaps and low ledges can be crossed. Vault and climb wait for the phase 6 collision injection | M | kinematic only | Medium: must not launch Snake through ceilings | Unit test in the synthetic world (1 m gap crossed, 1 m wall not climbed); live over a Limgrave ditch |
+| 2.10 | **ER item use without leaving Snake** (flask, bell, Shackle) | 1.1 covers it with a toggle; a chord that sends ER's "use quick item" (and D-pad-down cycling) through the existing prompt-style one-press hand-over keeps Snake in control | M | 1.1's chord design | Medium: ER's use-item animation on the hidden Tarnished pauses his movement. HP from a flask must reach Snake (`forward_heals` exists) | Drink a flask mid-fight: Snake's life rises, no lost input |
+| 2.11 | **Fulton** | Fun, but it needs a sleeping or stunned MGSV target (2.1). ER side: disable the enemy, award its runes/drop, draw a balloon. Not for bosses | L | 2.1 | High | Fulton a sleeping soldier: gone, runes awarded, he doesn't respawn until rest |
+| 2.12 | **Progression mapping** | ER levels and runes buy Snake nothing (MGSV life is authoritative; ER damage scales by enemy HP). Decide on a rule, for example ER Vigor → MGSV life max, Endurance → regeneration | M (design + code) | none | Gameplay balance | Level Vigor: `lifeMax` scales, logged |
+| 2.13 | **HUD / iDroid** | Works (supply drops live). Small wins: hide ER's FP and stamina bars while Snake plays (HOST.md notes the CSFeMan+0x78 HUD state). The iDroid's map shows the airport, which is meaningless; document it | S–M | none | Low | Screenshot review |
+| 2.14 | **Keyboard and mouse** | Phase 5 open item, needed by friends. Tier 1 (M): the host maps KB/M onto the virtual XInput pad (WASD → left stick, mouse → right stick with an acceleration curve, keys → buttons), same on both platforms. Tier 2 (L): forward raw input into MGSV's raw-input handler for native mouse aim | M / L | 1.8 | Tier 1: mouse feels like a stick | Play 10 min on KB/M only: every How to play action is reachable; aim error vs pad |
+| 2.15 | **Root motion revisited** | Kinematic plays well but doesn't get ER's own moving-platform displacement (`phys+0x180`) or its slope behaviour. root_motion passed the fake_mgsv tests yet "hit invisible walls everywhere" in real play | M (investigation) | `pr record` of a real session | Medium | Replay the recording with `motion = root_motion`, logging proxy mode `phys+0x388`, `ChrCtrl+0xEA/+0xEB`, and asked/moved per frame at each "wall". Differences from fake_mgsv to suspect: treadmill warps, paced sub-frame deltas, the masked pad's behaviour state |
+
+---
+
+## 3. Windows validation plan (phase 7: built, Wine-tested, never run on Windows)
+
+What WINDOWS.md lists as untested: me3 for Windows with the profile; MGSV started directly with `SteamAppId=287700`; MGSV hidden but still rendering (the forced visibility check `0x14024A1D0`); capture on Microsoft's D3D11 and the renderer on Microsoft's D3D12 (Linux runs on DXVK and vkd3d-proton); job breakaway (`er/Launcher.cpp` falls back when it is refused); sound and performance with both games running.
+
+| Step | What | Effort | Pass criteria |
+|---|---|---|---|
+| W1 | **Dev aids before shipping to friends:** a `[Render] debug_layer` option (`D3D12GetDebugInterface` + GPU-based validation; there is none in `er/` now) and `collect-logs.bat` in the zip (both logs, both inis, BUILD.txt, dxdiag) | S | Zip builds reproducibly (`package_windows.py`) |
+| W2 | **Host alone:** me3 + the profile with MGSV not installed | S | `exe identity OK`, `address table: 70/70`, 4 tasks registered, offline, isolated save created; plain ER plays |
+| W3 | **MGSV once, normally:** accept Konami's ToS and region outside PhantomRing; check D-Walker is developed (the guest reports `kBuddyMissing` otherwise) | S | (The friend does this in a normal MGSV session) |
+| W4 | **Full run** | S (their time) | MGSV started by ER (log), window hidden, never on the taskbar, boot ≤ 4 min, "Snake is in control"; capture frames counted in the guest log; MGSV ≥ 55 fps (`!pace`) |
+| W5 | **Renderer on native D3D12 with the debug layer** | M (fixes likely) | No validation errors, or each one fixed. Watch resource-state barriers: vkd3d is lenient, native D3D12 removes the device. Check the stencil-plane footprint assumption in `er/Gbuffer.cpp` (vkd3d's R8_TYPELESS) and the `d3dcompiler_47` shader compile |
+| W6 | **Lifecycle** | S | Close ER → MGSV closes (or doesn't: document the job-breakaway result); kill MGSV → "Elden Ring has the controller"; alt-tab and resize (only exercised by ER's own resize so far) |
+| W7 | **Input** | S | XInput pad; a DualSense through Steam Input on ER (MGSV gets the pad through shared memory, so Steam Input on MGSV doesn't matter); KB/M after 2.14 |
+| W8 | **AV / SmartScreen** | S | An unsigned `dinput8.dll` proxy plus a process that starts a game: check Defender; publish the sha256 values (BUILD.txt already has them) |
+
+Dependencies: friends with both games. Risk: high for W5 (the only path never run on real drivers). Verification: logs back through `collect-logs.bat`, plus a short screen capture.
+
+---
+
+## 4. Seamless Co-op plan (phase 8; DESIGN §14c)
+
+**Plan around Seamless, don't change it.** Seamless Co-op (`ersc.dll`) is a closed-source binary, so "updating the seamless mod" in practice means coexisting with it: load order, our own side channel, and keeping our behaviour within what ER's netcode syncs. Each Seamless release is tied to an ER version, and PhantomRing pins ER 1.17.1 by exe hash. Match versions and document the pair.
+
+| Stage | What it needs | Effort | Risk | Verify |
+|---|---|---|---|---|
+| C0 **Coexist** | me3 profile with `ersc.dll` and `PhantomRingHost.dll` as natives (ersc first). Online settings: me3 `start_online` and Seamless's own requirement (verify). Saves: Seamless's `.co2` vs PhantomRing's isolated `.sl2` (pick one `savefile` rule, back both up). Seamless's own items (Tiny Great Pot, Effigy) need 1.1 or 2.10 | M | Medium: hooks may collide (both hook input and present?) | One PhantomRing player + one vanilla Seamless player in the same world for 15 min; both logs clean |
+| C1 **Damage that syncs** | Enemy HP is owned by the session host; direct HP writes don't sync (DESIGN §14c). PhantomRing's lethal damage is now "ER's hit + a **top-up**" (COMBAT §2: ER ~42 per round whatever we asked). Replace the top-up with something ER sends over the network: a ladder of fixed-HP-damage SpEffect rows carried on the bullet, the same technique as the existing sleep ladder (rows 25000+). It helps offline too | M–L | High: needs the regulation fields checked (`test_host_combat` already validates rows against `regulation.bin`) | Snake shoots the host's enemy: the same HP on both screens, kill and runes on both. Offline regression: same kills per magazine as COMBAT §8 |
+| C2 **Snake visible to others** | Hide remote puppets locally and draw remote Snakes and buddies. Mesh and texture keys are already content hashes (`mgsv/CaptureMesh.cpp`, `Capture.cpp` `Hash64`), as §14c required. Send per frame: draw list (mesh/texture keys) + deduplicated, quantized matrices (~2–3 KB at 30 Hz, interpolated), anchored to the remote puppet that ER's netcode already places. Channel: Steam `ISteamNetworkingMessages` on a private channel from inside ER, with peers' SteamIDs from ER's session. Missing assets (a different camo, weapon or buddy) fall back to the local Snake's matching mesh; optionally a per-machine cache keyed by hash | L | High: the channel's coexistence with Seamless; asset mismatch | Two machines: each sees the other's Snake and D-Walker moving, ≤ 150 ms lag, no remote Tarnished visible |
+| C3 **Death and respawn under Seamless rules** | Seamless: a dead player spectates until the party wipes or the area is cleared. PhantomRing must keep its camera override off while dead or spectating (it is tied to the puppet now) and re-arm on Seamless's respawn (`kHEvRespawn` on dead → alive should still fire; check the "Choose revival location" waiting logic from §18.4) | M | Medium | Snake dies in co-op: spectate view is ER's camera; the party wipes or wins → Snake back with full life and ammo (1.2) |
+| C4 **Mixed lobbies** | A vanilla player sees the PhantomRing player as the Tarnished sliding without animation (SetPosition-driven). Either require everyone to be modded (document it) or later let the puppet play an ER run animation at Snake's speed for vanilla viewers | S (document) / M | Low | — |
+| C5 **Friendly fire and blasts** | `Hostile()` uses ER's team relation table (`er/Combat.cpp`), so co-op phantoms should be safe. Check blasts, mines and D-Walker flames near teammates | S | Low | Grenade between two players: teammates are unharmed |
+
+Order: Windows (§3) → C0 → C1 → C2 → C3. C1 is worth doing early because it also simplifies single-player damage.
+
+---
+
+## 5. Quality
+
+| # | Item | Why | Effort | Risk | Verify |
+|---|---|---|---|---|---|
+| 5.1 | **Grass over Snake** | Known issue: ER's grass/foliage pass draws over Snake behind it. Most likely it depth-tests against a pre-pass that never saw Snake. Fix: write Snake into ER's depth/stencil pre-pass as well, or inject before the foliage pipelines (identify them by shader hash with `render probe shaders`) | M | Medium | The box in tall grass, `pr replay` screenshots before and after |
+| 5.2 | **Materials** | HOST.md "Not done yet": MGSV material constants only partly sent (`m_materials[0..1]`), hair needs the alpha-test flag, translucent draws dropped in stage C, camo is a per-material rule | M–L | Medium | Side-by-side with MGSV's own frame (`capture_view.py`) |
+| 5.3 | **Lighting: rim light** | Snake uses light set 0 because sets 3 and 4 light nothing without an ER character on screen, so he looks flatter. Next step per HOST.md: find where the per-instance `[+5].x` is written, or learn from on-screen characters (stencil 0x50) | M | Medium | Day/night screenshots vs the Tarnished |
+| 5.4 | **MGSV effects** | No muzzle flashes; smoke looks like brown dust; a grenade is a ball, a rocket a dark ball. Cheap: an ER muzzle sfx on each `kGEvFire`; capture the grenade and rocket meshes once from MGSV's draw at throw time for the host's flown copies; a forward pass for MGSV's translucent effect draws | M each | Medium | Visual review |
+| 5.5 | **D-Walker footsteps** (−21 dBFS vs ER's −35) | Wwise per-object calls had no effect (GUEST §18.2). Next: attenuate at the event-ID or voice level (filter D-Walker's footstep events, or scale its output voices) | M | Medium | dBFS measurement as in README |
+| 5.6 | **D-Walker lag** (~5 m, 2–3 s late) | It follows through MGSV's whistle; try issuing the follow target ahead of Snake by his velocity | S–M | Low | Median distance while running < 3.5 m |
+| 5.7 | **Hitches** | ER 36–40 ms frames 1–6× per 10 s; MGSV drops to ~54 fps while the camera turns (Snake's game runs ~10 % slow) | M (investigation) | Low | `PacingProbe` numbers before and after |
+| 5.8 | **C4 detonation** | MGSV's detonator button not found; placed C4 can't go off | S–M (RE) | Low | C4 placed and set off: ER blast |
+
+---
+
+## 6. Release engineering (needed before the GitHub push)
+
+| # | Item | Why | Effort | Verify |
+|---|---|---|---|---|
+| 6.1 | **Add a `LICENSE`**: the repo has none (only THIRD-PARTY-NOTICES.md). MIT matches SkyCraft (MIT, © chasmlol) and MGS5VR (MIT); MinHook is BSD-2 | Without a licence, nobody may legally reuse it | S | File present; GitHub detects it |
+| 6.2 | **Bring THIRD-PARTY-NOTICES in line with the code** | (a) `er/Singletons.h` says "port of TGA's fd4_singleton.h", while the notices say "re-implemented from the description, no code copied". Make both say the same true thing; if any code was copied, the CT's terms matter. (b) Credit SkyCraft (MIT) for the architecture and schemes adapted from it (`Launcher.h` "SkyCraft's Launcher.cpp model", the overlay triple buffer in `common/Mapping.h`, PlayerPuppet, calibration). (c) The hudhook entry says "no code is in the tree yet", but the renderer exists: update it. (d) Confirm IHHook as MIT (its LICENSE.md: MIT, © TinManTex) and that tpp-mod (GPL) stays facts-only | Copyright hygiene, the user's explicit condition | S | A diff review against `refs/` with a plagiarism-style grep of identical lines |
+| 6.3 | **Scrub personal paths** | The developer's home and drive paths appeared in 26 tracked files (done: scrubbed for the public release) (docs/research, `tools/er_aob_scan.py`, `tools/phantomring/launch.py`, `tools/re/*`, the proton-ipc logs). Make them relative or use environment variables. Decide whether to publish the existing history (the paths stay in old commits) or squash it to a fresh initial commit | Privacy, portability | S | `git grep /home/` is empty |
+| 6.4 | **Content check** | No game binaries, assets, saves or regulation are tracked (checked: only 3 screenshots and text data; `tools/re/data/tppequip_*` and the RTTI/Lua-name TSVs are names and offsets, i.e. facts). Keep MGSV's and ER's music out of the demo (MGSV music is muted by default). Keep the disclaimer; no Konami or FromSoftware logos | Copyright | S | Checklist in the PR |
+| 6.5 | **Versioning** | CMake says 0.1.0 and the protocol is v9. Tag `v0.1.0-alpha`. Embed version and commit in both DLLs' logs and BUILD.txt; both sides refuse a protocol mismatch with a clear corner message; a "supported game versions" table (ER 1.17.1 exe 2.7.1.0, MGSV 1.0.15.4) | S | Mismatched DLLs → readable error |
+| 6.6 | **CI (GitHub Actions)** | Build with MinGW-w64 (the code uses `std::expected` and `std::format`: GCC ≥ 13; Ubuntu 24.04's mingw, or an Arch container), `--recursive` submodules. Run `check_host`, `check_guest`, `check_windows` under wine, plus the Python tests (`test_fakes`, `test_layout`, `test_launcher`, `test_replay`, `test_plugins`). Skip whatever needs the games: `verify_er_addresses`, regulation-backed combat rows (`test_host_combat` already skips without `build/er_params`), and `test_guest_pump` (needs Lua 5.1.5 sources) | Contributors and releases | M | A green run on a clean runner |
+| 6.7 | **Release artifacts** | On tag: the Windows zip (`tools/package_windows.py`, already reproducible) plus a Linux tarball (DLLs, inis, `tools/pr`, the me3 profile; me3 itself stays fetched by `pr install-me3`), with sha256 values | S–M | Download, unpack, `pr launch` on a clean checkout |
+| 6.8 | **`pr doctor`** | Checks exe hashes, me3, gamescope, Steam running, MGSV ToS done, D-Walker developed, save backups | S–M | Run on a machine with each item missing |
+| 6.9 | **Repo hygiene** | Issue template (which logs, how to attach them), CONTRIBUTING (the GPL tpp-mod facts-only rule, the live-test etiquette), and a README "Install" section ahead of the dev-oriented "Running it" | S | — |
+| 6.10 | **Demo video (2–3 min)** | Boot status → "Snake is in control" → run Gatefront → D-Walker order and ride with flamethrower → tranq darts → box and poster stare → grenade arc → rocket → Margit (after §1). Capture with OBS/PipeWire on the gamescope output at 4K, publish 1080p60. ER's music lowered (Content ID) | S–M | Linked from the README |
+
+**6.5–6.9 status (2026-10-13, offline):** done. VERSION (0.2.0-alpha) is the one version source. Both DLLs embed it with
+the commit id, protocol v11 lets the plugins name each other, and a mismatch is red corner text. Also done: CI
+(`.github/workflows/ci.yml`, a Fedora 44 container), `tools/package_linux.py` next to `package_windows.py` (both
+reproducible, with sha256 lists), the tag-only pre-release job, `pr doctor`, `pr collect-logs`, the issue form,
+CONTRIBUTING.md and the README "Install" section. Not yet proven:
+- a green run on GitHub's runners (the steps were reproduced locally with GCC 16 / wine 11; the container's package names
+  and its MinGW GCC are not verified);
+- a first tag (`v0.2.0-alpha`) through the release job;
+- the corner text with a real mismatched guest in the game (unit-tested offline only). **Now seen live** (2026-10-13 morning,
+  the real Elden Ring with a stand-in guest heartbeating unattached): protocol 12 / v0.3.0 -> the corner, in red, "PhantomRing
+  versions differ: Elden Ring plugin v0.2.0-alpha, MGSV plugin v0.3.0 -- reinstall both" (and the host log's error line, `pr
+  status` the same); a guest that names nothing -> "... MGSV plugin from before v0.2.0-alpha -- reinstall both" after 15 s;
+  both cleared ("the guest's version mismatch is gone") when it stopped. Both logs' first lines carry the version and commit
+  (`PhantomRingHost v0.2.0-alpha (commit ..., protocol 11)`, `PhantomRing guest (dinput8.dll) v0.2.0-alpha (...)`). `pr doctor`
+  on the development machine: 19 ok, 1 warning (198 save backups, 23.7 GB: prune), 0 failures.
+
+**Suggested sequence:**
+1. 6.1–6.4 and 1.9 (publishable),
+2. 6.5–6.7 (first tagged alpha),
+3. P0 §1,
+4. Windows (§3) with friends,
+5. 2.1 (ActorProxy v0) and 2.3 (D-Horse),
+6. Seamless C0–C3,
+7. quality and the remaining features.

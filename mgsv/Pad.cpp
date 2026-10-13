@@ -28,6 +28,7 @@ namespace phantom::guest::pad
 
 		std::atomic<Source>        g_source{ Source::kNeutral };
 		std::atomic<bool>          g_blocked{ false };
+		std::atomic<bool>          g_parked{ false };
 		std::atomic<std::uint16_t> g_pulseButtons{ 0 };
 		std::atomic<ULONGLONG>     g_pulseUntil{ 0 };
 		std::atomic<std::uint64_t> g_polls{ 0 };
@@ -73,7 +74,8 @@ namespace phantom::guest::pad
 			}
 			g_polls.fetch_add(1, std::memory_order_relaxed);
 			XINPUT_GAMEPAD pad{};
-			if (g_source.load(std::memory_order_acquire) == Source::kHost && !g_blocked.load(std::memory_order_acquire)) {
+			if (g_source.load(std::memory_order_acquire) == Source::kHost && !g_blocked.load(std::memory_order_acquire) &&
+			    !g_parked.load(std::memory_order_acquire)) {
 				proto::PadState slot{};
 				if (link::HostAlive() && link::ReadPad(slot) && (slot.flags & proto::kPadConnected) && !(slot.flags & proto::kPadNeutral)) {
 					pad.wButtons = slot.buttons;
@@ -196,6 +198,7 @@ namespace phantom::guest::pad
 	void SetSource(Source a_source) { g_source.store(a_source, std::memory_order_release); }
 
 	void SetBlocked(bool a_blocked) { g_blocked.store(a_blocked, std::memory_order_release); }
+	void SetParked(bool a_parked) { g_parked.store(a_parked, std::memory_order_release); }
 
 	void Pulse(std::uint16_t a_buttons, unsigned a_ms)
 	{

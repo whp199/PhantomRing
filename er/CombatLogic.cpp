@@ -247,7 +247,8 @@ namespace phantom::er::combat
 			if (!(a_lives > 0.0f) || a_maxHp <= 0) {
 				return 0;
 			}
-			const float v = a_lives * ReferenceHp(a_maxHp, a_r.scaling) * a_mult;
+			const float progression = std::isfinite(a_r.progression) && a_r.progression > 0.0f ? a_r.progression : 1.0f;
+			const float v = a_lives * ReferenceHp(a_maxHp, a_r.scaling) * a_mult * progression;
 			return std::clamp(static_cast<std::int32_t>(std::lround(v)), 1, std::max(1, a_r.maxDamage));
 		}
 
@@ -502,6 +503,73 @@ namespace phantom::er::combat
 		const double life = static_cast<double>(std::min(a_fraction, 1.0f)) * a_lifeMax;
 		const double amount = a_fraction >= 1.0f ? std::ceil((a_lifeMax + 1.0) / a_guestLifeScale) : std::ceil(life / a_guestLifeScale);
 		return static_cast<std::uint32_t>(std::max(1.0, amount));
+	}
+
+	ProgressionMode ProgressionModeOf(std::string_view a_text)
+	{
+		if (a_text == "level") {
+			return ProgressionMode::kLevel;
+		}
+		if (a_text == "weapon") {
+			return ProgressionMode::kWeapon;
+		}
+		if (a_text == "both") {
+			return ProgressionMode::kBoth;
+		}
+		return ProgressionMode::kOff;
+	}
+
+	std::string_view Name(ProgressionMode a_mode)
+	{
+		switch (a_mode) {
+		case ProgressionMode::kOff: return "off";
+		case ProgressionMode::kLevel: return "level";
+		case ProgressionMode::kWeapon: return "weapon";
+		case ProgressionMode::kBoth: return "both";
+		}
+		return "?";
+	}
+
+	float LevelFactor(int a_level, const ProgressionRules& a_r)
+	{
+		if (a_level <= 0 || !(a_r.levelReference > 0.0f) || !std::isfinite(a_r.levelExponent)) {
+			return 1.0f;
+		}
+		return std::pow(static_cast<float>(a_level) / a_r.levelReference, a_r.levelExponent);
+	}
+
+	float WeaponFactor(int a_upgrade, int a_maxUpgrade, const ProgressionRules& a_r)
+	{
+		if (a_upgrade < 0 || a_maxUpgrade <= 0 || !std::isfinite(a_r.weaponBonus)) {
+			return 1.0f;
+		}
+		return 1.0f + a_r.weaponBonus * static_cast<float>(std::min(a_upgrade, a_maxUpgrade)) / static_cast<float>(a_maxUpgrade);
+	}
+
+	float ProgressionFactor(const ProgressionRules& a_r, const ProgressionStats& a_s)
+	{
+		float f = 1.0f;
+		switch (a_r.mode) {
+		case ProgressionMode::kOff: return 1.0f;
+		case ProgressionMode::kLevel: f = LevelFactor(a_s.level, a_r); break;
+		case ProgressionMode::kWeapon: f = WeaponFactor(a_s.upgrade, a_s.maxUpgrade, a_r); break;
+		case ProgressionMode::kBoth: f = LevelFactor(a_s.level, a_r) * WeaponFactor(a_s.upgrade, a_s.maxUpgrade, a_r); break;
+		}
+		const float lo = a_r.minFactor > 0.0f ? a_r.minFactor : 0.0f;
+		const float hi = a_r.maxFactor >= lo ? a_r.maxFactor : lo;
+		return std::isfinite(f) ? std::clamp(f, lo, hi) : 1.0f;
+	}
+
+	bool LevelMatchesAttributes(int a_level, const int (&a_attributes)[8])
+	{
+		int sum = 0;
+		for (const int a : a_attributes) {
+			if (a < 1 || a > 99) {
+				return false;
+			}
+			sum += a;
+		}
+		return a_level >= 1 && a_level <= 713 && sum - 79 == a_level;
 	}
 
 	std::uint32_t HurtForGuest(std::int32_t a_erDamage, std::int32_t a_erMaxHp, std::uint32_t a_guestLifeMax, float a_guestLifeScale, bool a_share,

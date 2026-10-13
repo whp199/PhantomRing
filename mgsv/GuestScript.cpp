@@ -27,7 +27,7 @@ PR.F = {
 	TITLE = 1, PREPARED = 2, DEMO = 4, MENU = 8, DEAD = 16, VEHICLE = 32, DASH = 64, STAND = 128,
 	SQUAT = 256, CRAWL = 512, CQC = 1024, SUBJECT = 2048, FALL = 4096, BINOCLE = 8192,
 	NORMAL = 16384, HELI = 32768, GUN_FIRE = 65536, CARRY = 131072, SEQ_GAME = 262144, BEHIND = 524288,
-	CBOX = 1048576, POSTER = 2097152,
+	CBOX = 1048576, POSTER = 2097152, NVG = 4194304,
 }
 
 local function fn(mod, name)
@@ -121,6 +121,13 @@ function PR.Flags()
 		local ok, poster = pcall(function() return vars.cboxPosterIndices[vars.currentItemIndex] end)
 		if ok and type(poster) == 'number' and poster ~= 0 then f = f + F.POSTER end
 	end
+	-- Night-vision goggles on: vars.currentItemIndex is the item slot Snake wears/uses (0 = none; the box's slot while he is in
+	-- it), so the goggles are on when that slot holds EQP_IT_Nvg (VERIFIED live: 3 with them on, 0 off, docs/GUEST.md 18.11)
+	local okN, nvg = pcall(function()
+		local i = vars.currentItemIndex
+		return i ~= 0 and vars.items[i] == TppEquip.EQP_IT_Nvg
+	end)
+	if okN and nvg then f = f + F.NVG end
 	return f, mission, seq
 end
 
@@ -158,6 +165,14 @@ local function objectPosition(id)
 	local ok, p = send(id, { id = 'GetPosition' })
 	if ok then return xyz(p) end
 	return nil
+end
+
+-- The active buddy as the ini names it (walker, horse, dog, quiet), or nil: the player may deploy another one from the iDroid
+-- (Buddy Support > D-Horse / D-Dog / ...: "Request deployment", live 2026-10-13), and the guest then follows that choice.
+local KIND_OF = { WALKER_GEAR = 'walker', HORSE = 'horse', DOG = 'dog', QUIET = 'quiet' }
+function PR.ActiveBuddyKind()
+	local name = activeBuddy()
+	return name and KIND_OF[name] or nil
 end
 
 -- Deploys the configured buddy next to (x, y, z). Called repeatedly by the boot sequence until it
@@ -204,11 +219,14 @@ function PR.Buddy(kind, x, y, z, yaw, revive)
 		return id and 'spawned (no position yet)' or 'waiting for buddy object'
 	end
 	if call(TppBuddy2BlockController, 'IsLoading') == true then return 'loading block' end
-	if PR.buddyLoad ~= bt then
+	-- Asked again when the block didn't come within ~10 s: a mission reload (MGSV's continue after a game over) brings the
+	-- save's buddy back and forgets ours (live 2026-10-13: 'waiting for block (active 4)' for D-Horse after one).
+	if PR.buddyLoad ~= bt or PR.tick - (PR.buddyLoadTick or 0) > 600 then
 		try(TppBuddyService, 'SetSortieBuddyType', bt)
 		try(TppBuddy2BlockController, 'SetVarsBuddyType', bt)
 		local ok, r = try(TppBuddy2BlockController, 'Load')
 		PR.buddyLoad = bt
+		PR.buddyLoadTick = PR.tick
 		return 'block requested ' .. tostring(ok) .. ' ' .. tostring(r)
 	end
 	return 'waiting for block (active ' .. tostring(active) .. ')'
@@ -273,11 +291,31 @@ function PR.Run(commands)
 			if w[1] == 'hurt' then return PR.Hurt(n(2), n(3), n(4), n(5), n(6), n(7), n(8)) end
 			-- PlayerStance value (1 stand, 2 squat, 3 crawl): Snake's death collapse and getting up (Death.cpp)
 			if w[1] == 'stance' then return tostring((try(Player, 'RequestToSetTargetStance', n(2)))) end
+			-- Rest at a grace / respawn (kHEvRested): the magazine sizes of Snake's three weapons; the C++ side (Ammo.cpp) then
+			-- fills the magazines and every ammo/item stock natively, through MGSV's own setters
+			if w[1] == 'refill' then return PR.Magazines() end
 			return 'unknown'
 		end)
 		out[#out + 1] = tostring(w[1]) .. '=' .. tostring(ok and r or ('error ' .. tostring(r)))
 	end
 	return table.concat(out, ' ')
+end
+
+-- 'equip/magazine/sub-magazine' of weapon slots 0-2 (PRIMARY_HIP, PRIMARY_BACK, SECONDARY), comma separated: TppEquip.GetAmmoInfo
+-- answers bullet, magazine, stock, sub bullet, sub magazine, sub stock (TppPlayer.SupplyWeaponAmmoFull reads it the same way)
+function PR.Magazines()
+	local out = {}
+	for slot = 0, 2 do
+		local ok, id = pcall(function() return vars.weapons[slot] end)
+		if not ok or type(id) ~= 'number' then id = 0 end
+		local mag, sub = 0, 0
+		if id ~= 0 then
+			local okInfo, _, m, _, _, sm = pcall(TppEquip.GetAmmoInfo, id)
+			if okInfo then mag, sub = tonumber(m) or 0, tonumber(sm) or 0 end
+		end
+		out[#out + 1] = string.format('%d/%d/%d', id, mag, sub)
+	end
+	return table.concat(out, ',')
 end
 
 function PR.LoadMission(code, method)
@@ -327,6 +365,17 @@ end
 function PR.ClearMarkers()
 	local ok = try(TppMarker, 'DisableAll')
 	return tostring(ok)
+end
+
+-- MGSV's "Auto-Aim Correction" (OPTIONS > Control Settings, its first row) is vars.optionSelectedIndices[11]: 0 ON, 1 OFF (VERIFIED
+-- live: applying it in the menu flips only that byte, 0x142C14509; with 1 an FB MR aimed 3-25 deg beside a disabled soldier no
+-- longer swings onto him). The game reads it directly. Written in memory only: MGSV's config save is blocked (SaveGuard).
+function PR.AutoAim(on)
+	local ok, cur = pcall(function() return vars.optionSelectedIndices[11] end)
+	if not ok or (cur ~= 0 and cur ~= 1) then return 'not changed (option 11 is ' .. tostring(cur) .. ')' end
+	local want = on and 0 or 1
+	local okSet = cur == want or pcall(function() vars.optionSelectedIndices[11] = want end)
+	return string.format('%s (was %s)%s', want == 0 and 'on' or 'off', cur == 0 and 'on' or 'off', okSet and '' or ' -- write failed')
 end
 
 function PR.Setup(x, y, z, rotYDeg, disableSoldiers, invincible)

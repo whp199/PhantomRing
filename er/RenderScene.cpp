@@ -31,6 +31,8 @@ namespace phantom::er::RenderScene
 
 		std::mutex                                        g_lock;
 		std::atomic<bool>                                 g_hasMarkers{ false };
+		std::atomic<bool>                                 g_hasNvg{ false };
+		float                                             g_nvg{ 0 };  // night vision's fade (task thread)
 		std::deque<std::shared_ptr<const RenderSnapshot>> g_history;
 		std::uint64_t                                     g_captures{ 0 }, g_withDraws{ 0 }, g_badLists{ 0 };
 		bool                                              g_loggedFirst{ false };
@@ -213,6 +215,20 @@ namespace phantom::er::RenderScene
 		// The host's own world markers (er/RenderMarkers.h); their owners show none in menus, cutscenes, loads.
 		s->markers = RenderMarkers::Collect();
 		g_hasMarkers.store(!s->markers.empty(), std::memory_order_relaxed);
+		// MGSV's night-vision goggles (protocol v10 kGuestNvg): on Elden Ring's frame while Snake plays with them on, faded in
+		// and out like the goggles; not in cutscenes, loads or death.
+		{
+			const bool  want = rc.enabled && rc.nvg && Puppet::Active() && a_f.guestReady && (a_f.guest.flags & proto::kGuestNvg) && !a_f.cutscene &&
+			                   !a_f.loading && !a_f.dead && !a_f.dying;
+			const float step = rc.nvgFadeMs > 0 ? a_f.dt * 1000.0f / static_cast<float>(rc.nvgFadeMs) : 1.0f;
+			const float was = g_nvg;
+			g_nvg = std::clamp(g_nvg + (want ? step : -step), 0.0f, 1.0f);
+			if ((was > 0.0f) != (g_nvg > 0.0f) || (was < 1.0f && g_nvg >= 1.0f)) {
+				Log::Info("render: night vision {} (MGSV's goggles {})", g_nvg >= 1.0f ? "on" : (g_nvg > 0.0f ? "fading in" : "off"), want ? "on" : "off");
+			}
+			s->nvg = g_nvg;
+			g_hasNvg.store(g_nvg > 0.0f, std::memory_order_relaxed);
+		}
 		if (s->camera.valid || ReadCamera(s->camera)) {
 			// The Tarnished (visible while there is no puppet): where his chest is on screen.
 			if (!Puppet::Active() && dying < 0.0f && a_f.inGame && !a_f.loading && a_f.player) {
@@ -253,6 +269,7 @@ namespace phantom::er::RenderScene
 	}
 
 	bool HasMarkers() { return g_hasMarkers.load(std::memory_order_relaxed); }
+	bool HasNvg() { return g_hasNvg.load(std::memory_order_relaxed); }
 
 	std::shared_ptr<const RenderSnapshot> ForPresent()
 	{

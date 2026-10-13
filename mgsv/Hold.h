@@ -8,6 +8,8 @@
 #include "Logic.h"
 
 #include <array>
+#include <cstdint>
+#include <string>
 
 namespace phantom::guest::hold
 {
@@ -16,4 +18,14 @@ namespace phantom::guest::hold
 	[[nodiscard]] bool Available();
 	// Puts the player character at a_pos with rotation a_rot (xyzw). False if any link failed validation.
 	bool Place(const logic::Vec3& a_pos, const std::array<float, 4>& a_rot);
+
+	// The same manager's location object for another GameObject id (EXPERIMENT 2026-10-13, `!loc <id>`): 0 if none.
+	std::uintptr_t LocationOf(std::uint16_t a_id);
+	// Its set-position (vf 0x68), as for Snake: D-Horse answers no Lua SetPosition (live), the treadmill moves it this way.
+	bool PlaceObject(std::uint16_t a_id, const logic::Vec3& a_pos, const std::array<float, 4>& a_rot);
+	std::string DescribeLocation(std::uint16_t a_id);
+	// Console (`!placeobj`): placed on the game thread at the next camera frame (ServicePending from Frame.cpp).
+	void        RequestPlaceObject(std::uint16_t a_id, const logic::Vec3& a_pos, float a_yaw);
+	void        ServicePending();
+	std::string LastPlaceResult();
 }

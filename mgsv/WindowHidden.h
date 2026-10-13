@@ -44,6 +44,7 @@ namespace phantom::guest::hidden
 	// Guest.cpp, after the save guards: true only when MGSV's saves really are blocked ([Saves] Block and
 	// the file guards installed). Until then (and by default) the quit watcher treats saves as live.
 	void SetSavesBlocked(bool a_blocked);
+	[[nodiscard]] bool SavesBlocked();  // what SetSavesBlocked last said (false after an incomplete Steam swap)
 
 	// Pure: quit once the host has been gone (or never came) for longer than a_quitSec.
 	bool ShouldQuit(std::int64_t a_nowMs, std::int64_t a_lastHostMs, int a_quitSec);

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """package_windows.py - pack PhantomRing for a Windows player (docs/WINDOWS.md).
 
-    python3 -I tools/package_windows.py [--build-dir build] [--out dist] [--no-build]
+    python3 -I tools/package_windows.py [--build-dir build] [--out dist] [--no-build] [--allow-other-commit]
 
-Builds (unless --no-build) with the MinGW toolchain already configured in --build-dir, checks that both
-DLLs are 64-bit PE files importing only stock Windows DLLs (tools/check_imports.py), and writes
-dist/PhantomRing-<version>-windows.zip:
+Builds (unless --no-build) with the MinGW toolchain already configured in --build-dir, checks both DLLs (64-bit PE,
+stock Windows imports only, the same build tag, this checkout's commit and protocol: tools/package_common.py) and
+writes dist/PhantomRing-<version>-windows.zip plus its .sha256:
 
     PhantomRing/
       phantomring.me3            Mod Engine 3 profile (Elden Ring offline, isolated save, the host plugin)
@@ -16,14 +16,11 @@ dist/PhantomRing-<version>-windows.zip:
       README-WINDOWS.md          docs/WINDOWS.md
       THIRD-PARTY-NOTICES.md     incl. the MinGW runtime, MinHook and HDE licences the DLLs carry
       LICENSE                    PhantomRing's own (MIT)
-      BUILD.txt                  version, commit, sha256 of every file
+      BUILD.txt                  version, commit, protocol, supported game versions, sha256 of every file
 
 The zip is reproducible: entries sorted, fixed timestamps.
 """
 import argparse
-import hashlib
-import re
-import subprocess
 import sys
 import tomllib
 import zipfile
@@ -31,7 +28,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
-import check_imports  # noqa: E402
+import package_common as P  # noqa: E402
+from phantomring import version  # noqa: E402
 
 # me3 0.13 ModProfileV1, as tools/phantomring/profile/phantomring.me3 but with the DLL next to it.
 ME3_PROFILE = """# PhantomRing for Windows: Mod Engine 3 (me3 >= 0.13) profile. Double-click it (me3 registers .me3 files)
@@ -54,36 +52,7 @@ game = "eldenring"
 path = "PhantomRingHost.dll"
 """
 
-FIXED_TIME = (2026, 1, 1, 0, 0, 0)
-
-
-def sha256(path: Path) -> str:
-	return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def version() -> str:
-	m = re.search(r"project\(PhantomRing VERSION ([0-9.]+)", (ROOT / "CMakeLists.txt").read_text())
-	return m.group(1) if m else "0.0.0"
-
-
-def commit() -> str:
-	try:
-		out = subprocess.run(["git", "-C", str(ROOT), "describe", "--always", "--dirty"], capture_output=True, text=True, check=True)
-		return out.stdout.strip()
-	except (OSError, subprocess.CalledProcessError):
-		return "unknown"
-
-
-def is_pe64_dll(path: Path) -> bool:
-	data = path.read_bytes()[:4096]
-	if data[:2] != b"MZ" or len(data) < 0x40:
-		return False
-	pe = int.from_bytes(data[0x3C:0x40], "little")
-	if data[pe:pe + 4] != b"PE\0\0":
-		return False
-	machine = int.from_bytes(data[pe + 4:pe + 6], "little")
-	characteristics = int.from_bytes(data[pe + 22:pe + 24], "little")
-	return machine == 0x8664 and bool(characteristics & 0x2000)  # AMD64, IMAGE_FILE_DLL
+FIXED_TIME = P.FIXED_TIME
 
 
 def entries(build: Path) -> dict:
@@ -110,14 +79,12 @@ def main() -> int:
 	ap.add_argument("--build-dir", default=str(ROOT / "build"))
 	ap.add_argument("--out", default=str(ROOT / "dist"))
 	ap.add_argument("--no-build", action="store_true")
+	ap.add_argument("--allow-other-commit", action="store_true", help="package DLLs built from another commit than the checkout's")
 	args = ap.parse_args()
 	build = Path(args.build_dir).resolve()
 
 	if not args.no_build:
-		lock = build / ".buildlock"
-		lock.touch(exist_ok=True)
-		# Through the shared build lock: other builds may use the same tree.
-		subprocess.run(["flock", str(lock), "cmake", "--build", str(build), "--target", "PhantomRingHost", "PhantomRingGuest"], check=True)
+		P.build(build)
 
 	profile = tomllib.loads(ME3_PROFILE)  # me3 reads TOML: a typo here would only show on the player's PC
 	if profile.get("natives", [{}])[0].get("path") != "PhantomRingHost.dll" or profile.get("start_online") is not False:
@@ -129,22 +96,19 @@ def main() -> int:
 		if isinstance(src, Path) and not src.is_file():
 			print(f"missing {src} (build first, or drop --no-build)")
 			return 1
-	for dll in (build / "PhantomRingHost.dll", build / "dinput8.dll"):
-		if not is_pe64_dll(dll):
-			print(f"{dll} is not a 64-bit Windows DLL")
-			return 1
-	if check_imports.check([str(build / "PhantomRingHost.dll"), str(build / "dinput8.dll")]):
+	tags, problems = P.check_dlls(build, args.allow_other_commit)
+	for p in problems:
+		print(p)
+	if problems:
 		return 1
 
-	ver = version()
-	rev = commit()
+	ver = version.release()
 	data = {}
 	for name, src in files.items():
 		raw = src if isinstance(src, bytes) else src.read_bytes()
 		data[name] = crlf(raw) if name.endswith((".ini", ".md", ".me3", ".txt")) else raw
-	lines = [f"PhantomRing {ver} for Windows ({rev})", "", "sha256:"]
-	lines += [f"  {hashlib.sha256(raw).hexdigest()}  {name.removeprefix('PhantomRing/')}" for name, raw in sorted(data.items())]
-	data["PhantomRing/BUILD.txt"] = crlf(("\n".join(lines) + "\n").encode())
+	listed = {name.removeprefix("PhantomRing/"): raw for name, raw in data.items()}
+	data["PhantomRing/BUILD.txt"] = crlf(P.build_txt("Windows", tags, listed).encode())
 
 	out = Path(args.out)
 	out.mkdir(parents=True, exist_ok=True)
@@ -161,9 +125,13 @@ def main() -> int:
 			print(f"{zip_path}: {bad} is corrupt")
 			return 1
 		names = z.namelist()
-	print(f"{zip_path} ({zip_path.stat().st_size:,} bytes, sha256 {sha256(zip_path)})")
+	sums = P.write_sha256(zip_path)
+	print(f"{zip_path} ({zip_path.stat().st_size:,} bytes, sha256 {P.sha256_bytes(zip_path.read_bytes())})")
+	print(f"{sums}")
 	for name in names:
 		print(f"  {name}")
+	if "-dirty" in (tags.get("PhantomRingHost.dll") or {}).get("commit", ""):
+		print("note: built from uncommitted changes (-dirty): fine for testing, not for a release")
 	return 0
 
 

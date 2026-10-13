@@ -15,20 +15,19 @@
 #include "Renderer.h"
 #include "Singletons.h"
 #include "Tasks.h"
+#include "Version.h"
 
 #include <windows.h>
 
 namespace
 {
-	constexpr char kVersion[] = "0.1.0";
-
 	DWORD WINAPI Init(LPVOID)
 	{
 		using namespace phantom;
 		using namespace phantom::er;
 		const auto dir = ModuleDir();
 		Log::Init(dir + L"PhantomRingHost.log", "host");
-		Log::Info("PhantomRingHost {} (protocol v{}) loading from {}", kVersion, proto::kVersion, Narrow(dir));
+		Log::Info("PhantomRingHost {} loading from {}", version::Describe(), Narrow(dir));
 
 		auto& cfg = Cfg();
 		if (!cfg.Load(dir + L"PhantomRingHost.ini")) {

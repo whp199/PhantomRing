@@ -1,5 +1,6 @@
 #include "InputBridge.h"
 
+#include "Chord.h"
 #include "Config.h"
 #include "Hook.h"
 #include "Link.h"
@@ -9,6 +10,7 @@
 #include <xinput.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 
@@ -33,6 +35,12 @@ namespace phantom::er::InputBridge
 		std::atomic<bool>          g_neutral{ true };
 		std::atomic<bool>          g_prompt{ false };
 		std::atomic<bool>          g_promptLatch{ false };  // the prompt button belongs to ER until released
+		std::atomic<bool>          g_promptDeferred{ false };  // SetPrompt(.., deferred): the press goes to neither game
+		std::atomic<bool>          g_deferLatch{ false };      // ... and stays out of both until released
+		std::atomic<ULONGLONG>     g_erPressUntil{ 0 };        // PressForEr: Elden Ring alone sees the prompt button until then
+		DWORD                      g_erPressPacket{ 0x60000000 };
+		DWORD                      g_erPressRaw{ 0 };
+		WORD                       g_erPressShown{ 0 };
 		std::atomic<int>           g_padIndex{ -1 };
 		std::atomic<std::uint16_t> g_lastButtons{ 0 };
 		std::atomic<std::int16_t>  g_lastRx{ 0 };
@@ -43,69 +51,66 @@ namespace phantom::er::InputBridge
 		std::atomic<bool>          g_buttonsOnly{ false };  // ER's interaction before its HUD hides: buttons only
 		std::atomic<std::uint32_t> g_viewToGuest{ 0 };    // View holds handed to MGSV (its iDroid)
 
-		// View (Back) while Snake plays: a tap is Elden Ring's map, a hold of [Input] view_hold_ms is MGSV's iDroid. ER
-		// only gets the tap once it is released (a short synthesized press), so a hold never opens ER's map first.
-		// MGSV's own Back is its pause menu and its iDroid opens on Start held ~1 s (VERIFIED live), so the hold reaches
-		// MGSV as a synthesized Start of [Input] guest_idroid_start_ms, and the View itself never does.
-		struct ViewHold
-		{
-			ULONGLONG downAt{ 0 };          // 0 = not held
-			bool      toGuest{ false };      // this hold reached the threshold
-			ULONGLONG erBackUntil{ 0 };      // ER sees Back until then (the tap)
-			ULONGLONG guestStartUntil{ 0 };  // MGSV sees Start until then (its iDroid)
-		};
-		ViewHold         g_view;
-		std::atomic_flag g_viewLock = ATOMIC_FLAG_INIT;
-		std::atomic<bool> g_guestStart{ false };  // this poll: MGSV's pad carries the synthesized Start
-		std::atomic<bool> g_erBack{ false };      // this poll: ER's masked pad carries Back
+		// Start/View and the Tarnished-mode chord (er/Chord.h): one gate, run on every poll of the published pad, one poll at a
+		// time (the others keep its last result). View held [Input] view_hold_ms while Snake plays is MGSV's iDroid, sent as a
+		// synthesized Start of [Input] guest_idroid_start_ms (MGSV's own Back is its pause menu and its iDroid opens on Start
+		// held ~1 s, VERIFIED live), and the View itself never reaches MGSV.
+		PadGate                    g_gate;
+		std::atomic_flag           g_gateLock = ATOMIC_FLAG_INIT;
+		std::atomic<int>           g_padMode{ static_cast<int>(PadGate::Mode::kOff) };  // set by the game thread each frame
+		std::atomic<bool>          g_guestStart{ false };  // this poll: MGSV's pad carries the synthesized Start
+		std::atomic<bool>          g_erStart{ false };     // this poll: Elden Ring's pad carries Start ...
+		std::atomic<bool>          g_erBack{ false };      // ... and Back (View)
+		std::atomic<std::uint32_t> g_chords{ 0 };          // the chord fired (Host toggles Tarnished mode)
+		std::atomic<bool>          g_gateHolding{ false };
 		// The View that opened MGSV's iDroid stays out of MGSV's pad until released: once the iDroid is up MGSV gets the
 		// whole pad, and a still-held View would be its Back (pause menu / back out of the iDroid).
 		std::atomic<bool> g_backHeldOver{ false };
 
-		// Runs on every poll of the published pad (any ER input thread); one at a time, the others keep the last result.
-		void UpdateViewHold(std::uint16_t a_buttons, std::uint16_t a_before)
+		void UpdateGate(std::uint16_t a_buttons)
 		{
-			if (g_viewLock.test_and_set(std::memory_order_acquire)) {
+			if (g_gateLock.test_and_set(std::memory_order_acquire)) {
 				return;
 			}
-			const auto holdMs = Cfg().viewHoldMs;
-			const bool active = holdMs > 0 && g_maskEr.load(std::memory_order_relaxed) && !g_guestMenu.load(std::memory_order_relaxed);
-			const ULONGLONG now = ::GetTickCount64();
-			const bool      down = (a_buttons & XINPUT_GAMEPAD_BACK) != 0;
-			if (!down) {
+			const auto&     c = Cfg();
+			PadGate::Params p;
+			p.viewHoldMs = c.viewHoldMs;
+			p.idroidStartMs = c.guestIdroidStartMs;
+			p.startWaitMs = c.startWaitMs;
+			p.chordMs = c.chordMs;
+			PadGate::Input in;
+			in.nowMs = ::GetTickCount64();
+			in.start = (a_buttons & XINPUT_GAMEPAD_START) != 0;
+			in.view = (a_buttons & XINPUT_GAMEPAD_BACK) != 0;
+			in.mode = static_cast<PadGate::Mode>(g_padMode.load(std::memory_order_relaxed));
+			const auto o = g_gate.Update(in, p);
+			if (!in.view) {
 				g_backHeldOver.store(false, std::memory_order_relaxed);
 			}
-			if (!active) {
-				g_view = {};
-				g_guestStart.store(false, std::memory_order_relaxed);
-				g_erBack.store(false, std::memory_order_relaxed);
-				g_viewLock.clear(std::memory_order_release);
-				return;
-			}
-			if (down && !(a_before & XINPUT_GAMEPAD_BACK)) {
-				g_view.downAt = now;
-				g_view.toGuest = false;
-			}
-			if (down && g_view.downAt && !g_view.toGuest && now - g_view.downAt >= static_cast<ULONGLONG>(holdMs)) {
-				g_view.toGuest = true;
-				g_view.guestStartUntil = now + static_cast<ULONGLONG>(std::max(0, Cfg().guestIdroidStartMs));
+			if (o.viewToGuest) {
 				g_backHeldOver.store(true, std::memory_order_relaxed);
 				g_viewToGuest.fetch_add(1, std::memory_order_relaxed);
 			}
-			if (!down && g_view.downAt) {
-				if (!g_view.toGuest) {
-					g_view.erBackUntil = now + 120;  // a few of ER's polls: its map opens on the press
-					g_menuPresses.fetch_add(1, std::memory_order_relaxed);
-				}
-				g_view.downAt = 0;
-				g_view.toGuest = false;
+			if (o.menuPresses) {
+				g_menuPresses.fetch_add(static_cast<std::uint32_t>(o.menuPresses), std::memory_order_relaxed);
 			}
-			g_guestStart.store(now < g_view.guestStartUntil, std::memory_order_relaxed);
-			g_erBack.store(now < g_view.erBackUntil, std::memory_order_relaxed);
-			g_viewLock.clear(std::memory_order_release);
+			if (o.chord) {
+				g_chords.fetch_add(1, std::memory_order_relaxed);
+			}
+			g_erStart.store(o.erStart, std::memory_order_relaxed);
+			g_erBack.store(o.erView, std::memory_order_relaxed);
+			g_guestStart.store(o.guestStart, std::memory_order_relaxed);
+			g_gateHolding.store(g_gate.Holding(), std::memory_order_relaxed);
+			g_gateLock.clear(std::memory_order_release);
 		}
 
-		bool ViewHoldActive() { return Cfg().viewHoldMs > 0 && g_maskEr.load(std::memory_order_relaxed) && !g_guestMenu.load(std::memory_order_relaxed); }
+		// Elden Ring's Start/View bits as the gate says, the rest as given.
+		WORD GatedButtons(WORD a_buttons)
+		{
+			constexpr WORD kGated = XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_BACK;
+			return static_cast<WORD>((a_buttons & ~kGated) | (g_erStart.load(std::memory_order_relaxed) ? XINPUT_GAMEPAD_START : 0) |
+									 (g_erBack.load(std::memory_order_relaxed) ? XINPUT_GAMEPAD_BACK : 0));
+		}
 
 		// The pad slot has one writer at a time (seqlock); ER may poll from more than one thread.
 		std::atomic_flag g_publishLock = ATOMIC_FLAG_INIT;
@@ -113,11 +118,17 @@ namespace phantom::er::InputBridge
 		bool             g_wasConnected{ false };
 		DWORD            g_maskedPacket{ 0 };
 		std::uint16_t    g_maskedButtons{ 0 };
+		DWORD            g_gatePacket{ 0x20000000 };  // unmasked pad with Start/View changed by the gate (its own range)
+		DWORD            g_gateRawPacket{ 0 };
+		WORD             g_gateShown{ 0 };
 		// Buttons (and triggers) already held while MGSV had a neutral pad stay out of MGSV's pad until released: the A
 		// that confirms an Elden Ring menu choice (or the B that closes one) is still down when the menu is gone, and
 		// MGSV used to take it as its own (VERIFIED live: Snake crouched after choosing a revival location).
 		std::uint16_t    g_heldOver{ 0 };
 		bool             g_ltHeldOver{ false }, g_rtHeldOver{ false };
+		std::atomic<bool> g_lstickHoldWanted{ false };  // HoldLeftStickUntilReleased(): latch on the next publish
+		bool             g_lstickHeldOver{ false };
+		constexpr int    kStickDeadZone = 7849;          // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
 
 		void Publish(const XINPUT_STATE* a_state, bool a_connected)
 		{
@@ -146,7 +157,8 @@ namespace phantom::er::InputBridge
 					// MGSV's own menu (iDroid, pause) is open: it gets the whole pad, Start/View and Y included, to work it
 					// and to close it; Elden Ring gets a neutral pad meanwhile.
 				} else {
-					if (g_prompt.load(std::memory_order_relaxed) || g_promptLatch.load(std::memory_order_relaxed)) {
+					if (g_prompt.load(std::memory_order_relaxed) || g_promptLatch.load(std::memory_order_relaxed) ||
+						g_deferLatch.load(std::memory_order_relaxed)) {
 						pad.buttons &= static_cast<std::uint16_t>(~Cfg().promptButton);  // ER's press, not MGSV's
 					}
 					if (g_maskEr.load(std::memory_order_relaxed)) {
@@ -161,8 +173,13 @@ namespace phantom::er::InputBridge
 				}
 				pad.leftTrigger = g_ltHeldOver ? 0 : g.bLeftTrigger;
 				pad.rightTrigger = g_rtHeldOver ? 0 : g.bRightTrigger;
-				pad.thumbLX = g.sThumbLX;
-				pad.thumbLY = g.sThumbLY;
+				const bool stickOut = std::abs(static_cast<int>(g.sThumbLX)) > kStickDeadZone || std::abs(static_cast<int>(g.sThumbLY)) > kStickDeadZone;
+				if (g_lstickHoldWanted.exchange(false, std::memory_order_relaxed)) {
+					g_lstickHeldOver = stickOut;
+				}
+				g_lstickHeldOver = g_lstickHeldOver && stickOut;
+				pad.thumbLX = g_lstickHeldOver ? 0 : g.sThumbLX;
+				pad.thumbLY = g_lstickHeldOver ? 0 : g.sThumbLY;
 				pad.thumbRX = g.sThumbRX;
 				pad.thumbRY = g.sThumbRY;
 			} else {
@@ -252,40 +269,40 @@ namespace phantom::er::InputBridge
 					const auto now = a_state->Gamepad.wButtons;
 					const auto before = g_lastButtons.exchange(now, std::memory_order_relaxed);
 					g_lastRx.store(a_state->Gamepad.sThumbRX, std::memory_order_relaxed);
-					// Presses that reach Elden Ring's menus (MenuWatch's latch): none while MGSV's menu has the pad; a held
-					// View goes to MGSV and its tap is counted when ER gets it (UpdateViewHold).
-					const std::uint16_t menuButtons = g_guestMenu.load(std::memory_order_relaxed) ? 0 :
-						(ViewHoldActive() ? XINPUT_GAMEPAD_START : (XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_BACK));
-					if ((now & ~before) & menuButtons) {
-						g_menuPresses.fetch_add(1, std::memory_order_relaxed);
-					}
-					UpdateViewHold(now, before);
+					// Start/View: Elden Ring's menu and map, MGSV's iDroid, the Tarnished-mode chord; the presses that reach Elden
+					// Ring are counted for MenuWatch's latch (er/Chord.h).
+					UpdateGate(now);
 					// Only a press that starts while the prompt is up goes to ER (a button already held for MGSV
 					// must not turn into an ER interaction); it stays ER's until released.
 					const auto button = Cfg().promptButton;
 					if (button && (now & ~before & button) && g_prompt.load(std::memory_order_relaxed)) {
-						g_promptLatch.store(true, std::memory_order_relaxed);
+						(g_promptDeferred.load(std::memory_order_relaxed) ? g_deferLatch : g_promptLatch).store(true, std::memory_order_relaxed);
 						g_promptPresses.fetch_add(1, std::memory_order_relaxed);
 					} else if (!(now & button)) {
 						g_promptLatch.store(false, std::memory_order_relaxed);
+						g_deferLatch.store(false, std::memory_order_relaxed);
 					}
 				} else {
 					// The pad went away (or a test press ended): nothing is held any more.
 					g_lastButtons.store(0, std::memory_order_relaxed);
 					g_lastRx.store(0, std::memory_order_relaxed);
+					UpdateGate(0);
 				}
 				Publish(a_state, ok);
 			}
+			const bool published = static_cast<DWORD>(pad) == a_index;
 
 			if (ok && g_maskEr.load(std::memory_order_relaxed)) {
 				auto&      g = a_state->Gamepad;
-				auto       allow = static_cast<WORD>(Cfg().allowButtons | (g_promptLatch.load(std::memory_order_relaxed) ? Cfg().promptButton : 0));
-				WORD       extra = 0;
+				constexpr WORD kGated = XINPUT_GAMEPAD_START | XINPUT_GAMEPAD_BACK;
+				auto           allow = static_cast<WORD>((Cfg().allowButtons & ~kGated) | (g_promptLatch.load(std::memory_order_relaxed) ? Cfg().promptButton : 0));
+				WORD           extra = 0;
 				if (g_guestMenu.load(std::memory_order_relaxed)) {
 					allow = 0;  // MGSV's menu: Elden Ring gets nothing, not even Start/View
-				} else if (ViewHoldActive()) {
-					allow = static_cast<WORD>(allow & ~XINPUT_GAMEPAD_BACK);  // only the released tap (UpdateViewHold)
-					extra = g_erBack.load(std::memory_order_relaxed) ? XINPUT_GAMEPAD_BACK : 0;
+				} else if (published) {
+					// Start/View only as the gate passes them on (a View tap at its release, Start after start_wait_ms, never
+					// the chord's).
+					extra = static_cast<WORD>(GatedButtons(0) & Cfg().allowButtons);
 				}
 				const auto allowed = static_cast<WORD>((g.wButtons & allow) | extra);
 				g.wButtons = allowed;
@@ -300,7 +317,7 @@ namespace phantom::er::InputBridge
 				a_state->dwPacketNumber = g_maskedPacket;
 			} else if (ok && g_buttonsOnly.load(std::memory_order_relaxed)) {
 				auto&      g = a_state->Gamepad;
-				const auto allowed = static_cast<WORD>(g.wButtons & kInteractionButtons);
+				const auto allowed = static_cast<WORD>((published ? GatedButtons(g.wButtons) : g.wButtons) & kInteractionButtons);
 				g.wButtons = allowed;
 				g.bLeftTrigger = g.bRightTrigger = 0;
 				g.sThumbLX = g.sThumbLY = g.sThumbRX = g.sThumbRY = 0;
@@ -309,6 +326,42 @@ namespace phantom::er::InputBridge
 					++g_maskedPacket;
 				}
 				a_state->dwPacketNumber = g_maskedPacket;
+			} else if (ok && published) {
+				// Unmasked (the Tarnished plays, an Elden Ring menu is open): Start/View as the gate says -- delayed for the chord
+				// in Tarnished mode, a chord's presses kept out until released. When that differs from the real pad, Elden Ring
+				// gets our own packet number, moved whenever the real one or what it may see changes (it only re-reads a pad
+				// whose packet number changed).
+				auto&      g = a_state->Gamepad;
+				const auto shown = GatedButtons(g.wButtons);
+				if (shown != g.wButtons) {
+					if (a_state->dwPacketNumber != g_gateRawPacket || shown != g_gateShown) {
+						g_gateRawPacket = a_state->dwPacketNumber;
+						g_gateShown = shown;
+						++g_gatePacket;
+					}
+					g.wButtons = shown;
+					a_state->dwPacketNumber = g_gatePacket;
+				}
+			}
+			if (ok && published) {
+				// A deferred prompt press (a ladder's): the real button stays out of Elden Ring's pad until released, and the host's
+				// own press (PressForEr, once the puppet has stepped aside) reaches it alone -- Elden Ring sees exactly one press,
+				// made while it has the Tarnished. Our own packet numbers whenever that differs from the real pad.
+				const WORD button = Cfg().promptButton;
+				const bool give = ::GetTickCount64() < g_erPressUntil.load(std::memory_order_acquire);
+				if (button && (give || g_deferLatch.load(std::memory_order_relaxed))) {
+					auto&      g = a_state->Gamepad;
+					const WORD shown = give ? static_cast<WORD>(g.wButtons | button) : static_cast<WORD>(g.wButtons & ~button);
+					if (shown != g.wButtons) {
+						if (a_state->dwPacketNumber != g_erPressRaw || shown != g_erPressShown) {
+							g_erPressRaw = a_state->dwPacketNumber;
+							g_erPressShown = shown;
+							++g_erPressPacket;
+						}
+						g.wButtons = shown;
+						a_state->dwPacketNumber = g_erPressPacket;
+					}
+				}
 			}
 			return result;
 		}
@@ -424,11 +477,21 @@ namespace phantom::er::InputBridge
 		g_neutral.store(a_neutralForGuest, std::memory_order_relaxed);
 	}
 
-	void SetPrompt(bool a_shown) { g_prompt.store(a_shown && Cfg().promptButton != 0, std::memory_order_relaxed); }
+	void SetPrompt(bool a_shown, bool a_deferred)
+	{
+		g_promptDeferred.store(a_deferred, std::memory_order_relaxed);
+		g_prompt.store(a_shown && Cfg().promptButton != 0, std::memory_order_relaxed);
+	}
 
 	void SetButtonsOnly(bool a_on) { g_buttonsOnly.store(a_on && g_installed, std::memory_order_relaxed); }
 
 	void SetGuestMenu(bool a_open) { g_guestMenu.store(a_open && g_installed, std::memory_order_relaxed); }
+	void PressForEr(unsigned a_ms) { g_erPressUntil.store(::GetTickCount64() + a_ms, std::memory_order_release); }
+	void HoldLeftStickUntilReleased() { g_lstickHoldWanted.store(true, std::memory_order_relaxed); }
+	void SetPadMode(PadGate::Mode a_mode) { g_padMode.store(static_cast<int>(a_mode), std::memory_order_relaxed); }
+	std::uint32_t Chords() { return g_chords.load(std::memory_order_relaxed); }
+	bool          ChordHolding() { return g_gateHolding.load(std::memory_order_relaxed); }
+	void          NoteMenuPress() { g_menuPresses.fetch_add(1, std::memory_order_relaxed); }
 	bool GuestMenu() { return g_guestMenu.load(std::memory_order_relaxed); }
 	std::uint32_t ViewHoldsToGuest() { return g_viewToGuest.load(std::memory_order_relaxed); }
 

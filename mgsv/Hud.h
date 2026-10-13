@@ -41,7 +41,12 @@ namespace phantom::guest::capture::hud
 	// Presenting thread, before the game's Present: read back, publish, clear for the next frame.
 	void OnPresent(ID3D11Device* a_device, ID3D11DeviceContext* a_immediate);
 
-	// "!capture hud [on|off|every N|probe]" (Capture.cpp forwards).
+	// MGSV's night-vision goggles are on (Frame.cpp, every frame from the Lua flags): MGSV draws their noise and darkening as
+	// a full-screen quad inside a UI job (pixel shader kNvgOverlayPs); it stays out of the layer while they are on, so
+	// Elden Ring doesn't get a darker, noisy picture -- the host draws its own night vision from kGuestNvg (docs/GUEST.md 18.12).
+	void SetNightVision(bool a_on);
+
+	// "!capture hud [on|off|every N|skip <ps hash>]" (Capture.cpp forwards).
 	std::string Command(std::string_view a_args);
 	std::string Describe();
 

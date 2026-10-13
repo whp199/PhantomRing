@@ -25,6 +25,7 @@
 #include "PacingProbe.h"
 #include "Puppet.h"
 #include "GeomProbe.h"
+#include "Progression.h"
 #include "Stealth.h"
 #include "Renderer.h"
 #include "Singletons.h"
@@ -565,10 +566,12 @@ namespace phantom::er::Console
 			"throw [status | arc on|off|auto|ini]   Snake's thrown grenades we fly (er/Throw.h); arc on = draw it without MGSV aiming\n"
 			"mines [detonate <id>]                   Snake's placed explosives (er/Mines.h)\n"
 			"stealth [hide on|off | speffect <id>]   Snake in MGSV's cardboard box (er/Stealth.h)\n"
-			"geom [learn [use] | near|all [radius] | dump <ins>]   destructible map assets around the player (er/GeomProbe.h)\n"
+			"geom [learn [use] | near|all [radius] | ladders [radius] | dump <ins>]   map assets around the player (er/GeomProbe.h)\n"
+			"progression [off|level|weapon|both]   the Tarnished's level and right-hand armament, Snake's damage factor ([Progression]; switch live)\n"
 			"call setpos x y z | setyaw rad | ray x y z dx dy dz | kill yes\n"
 			"flag [name [on|off]]         render nodead nodamage nohit noattack nomove nogravity\n"
 			"puppet auto|off | motion kinematic|root_motion   menu auto|open|closed   debug on|off\n"
+			"tarnished [on|off|toggle]    Tarnished mode (what View + Start held 1 s toggles): the Tarnished plays, Snake parks\n"
 			"render [status | keys | set <key> <value> | probe]   phase 2 renderer\n"
 			"hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value>]   overlay (MGSV HUD layer, reticle, corner text)\n"
 			"draw [skeleton|buddy|tracers on|off]   CSEzDraw developer views\n"
@@ -680,6 +683,17 @@ namespace phantom::er::Console
 		if (cmd == "geom") {
 			return GeomProbe::Command(w, a_f);
 		}
+		if (cmd == "progression") {
+			if (w.size() > 1) {
+				// progression off|level|weapon|both: [Progression] damage_scaling live (not saved)
+				if (w[1] != "off" && w[1] != "level" && w[1] != "weapon" && w[1] != "both") {
+					return "progression [off|level|weapon|both]";
+				}
+				Cfg().progression = w[1];
+				Log::Info("console: [Progression] damage_scaling = {}", w[1]);
+			}
+			return Progression::Command(a_f);
+		}
 		if (cmd == "ui") {
 			return MenuWatch::DumpUi() + "\n" + MenuWatch::Describe();
 		}
@@ -730,6 +744,9 @@ namespace phantom::er::Console
 		if (cmd == "puppet" && w.size() > 1) {
 			Puppet::SetOverride(w[1] == "off" ? Puppet::Override::kOff : Puppet::Override::kAuto);
 			return Puppet::Describe();
+		}
+		if (cmd == "tarnished") {
+			return Host::TarnishedCommand(w.size() > 1 ? std::string_view(w[1]) : std::string_view());
 		}
 		if (cmd == "menu" && w.size() > 1) {
 			MenuWatch::SetForce(w[1] == "open" ? MenuWatch::Force::kOpen : (w[1] == "closed" ? MenuWatch::Force::kClosed : MenuWatch::Force::kAuto));

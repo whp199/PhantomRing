@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 namespace phantom::guest::logic
 {
@@ -114,6 +115,17 @@ namespace phantom::guest::logic
 	// Elden Ring damage a_erDamage scaled into MGSV life points. Snake never reaches 0 here: Elden Ring
 	// runs the death (YOU DIED, respawn), so MGSV must not run its own game over.
 	LifeResult ApplyHurt(std::uint16_t a_life, float a_erDamage, float a_scale);
+	// Our native life write (a_before -> a_written) did not stick when, 8 frames after it was applied, life (a_now) is back
+	// nearer the value it replaced than ours. Writes under 400 points are not judged: MGSV's own regeneration (~13 a frame,
+	// starting right after our write, which it never saw as a hit) could bring those back by itself.
+	bool LifeWriteLost(int a_before, int a_written, int a_now);
+
+	// MGSV's own regeneration after one of its hits (measured live 2026-10-13: an 11 m fall, 7801 -> 2651, sampled at 10 Hz):
+	// life holds ~2.4 s, then regenerates at a rate that grows linearly to ~750 life/s over ~6.25 s and stays there (2651 ->
+	// 7801 in 12.5 s). MGSV never sees Elden Ring's hits, so it regenerates from them at the full rate at once (~760 life/s:
+	// 18 of Margit's hits survived in 70 s). The guest caps life after each Elden Ring hit with MGSV's curve: the most life
+	// a_since seconds after a hit that left a_base. ([Combat] RegenDelaySec, RegenRampSec, RegenRate.)
+	float RegenCap(float a_base, double a_since, float a_delay, float a_ramp, float a_rate);
 
 	// MGSV-side feedback for an Elden Ring hit, played through MGSV's own Lua (GuestScript PR.Hurt):
 	// Player.RequestToSetCameraNoise{levelX, levelY, time, decayRate} shakes MGSV's camera, which is
@@ -290,4 +302,12 @@ namespace phantom::guest::logic
 		std::uint64_t rounds_{ 0 };
 		std::uint64_t last_{ 0 };
 	};
+
+	// The refill's magazine sizes (Ammo.cpp): PR.Magazines() answers "equip/magazine/sub,equip/magazine/sub,equip/magazine/sub"
+	// for weapon slots 0-2. False on anything else.
+	struct SlotMagazine
+	{
+		std::uint32_t equip{ 0 }, rounds{ 0 }, sub{ 0 };
+	};
+	bool ParseMagazines(std::string_view a_text, std::array<SlotMagazine, 3>& a_out);
 }

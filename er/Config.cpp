@@ -41,6 +41,25 @@ namespace phantom::er
 			}
 		}
 
+		// "a, b, c" (decimal or 0x hex) -> a_out, replacing the defaults; empty/missing keeps them, "none" empties the list.
+		void IntList(const Ini& a_ini, const char* a_section, const char* a_key, std::vector<int>& a_out, long a_max)
+		{
+			const auto text = a_ini.Get(a_section, a_key);
+			if (text.empty()) {
+				return;
+			}
+			a_out.clear();
+			std::stringstream list(text);
+			std::string       item;
+			while (std::getline(list, item, ',')) {
+				char*      end = nullptr;
+				const long v = std::strtol(item.c_str(), &end, 0);
+				if (end != item.c_str() && v >= 0 && v <= a_max) {
+					a_out.push_back(static_cast<int>(v));
+				}
+			}
+		}
+
 		int Auto(const std::string& a_text)
 		{
 			if (a_text.empty() || a_text == "auto" || a_text == "0") {
@@ -92,40 +111,29 @@ namespace phantom::er
 		guestIdroidStartMs = static_cast<int>(ini.GetInt("Input", "guest_idroid_start_ms", guestIdroidStartMs));
 		guestMenuOwnsPad = ini.GetBool("Input", "guest_menu_owns_pad", guestMenuOwnsPad);
 		padGlyphDevice = static_cast<int>(ini.GetInt("Input", "pad_glyph_device", padGlyphDevice));
-		if (const auto text = ini.Get("Input", "release_prompts"); !text.empty()) {
-			releasePrompts.clear();
-			std::stringstream list(text);
-			std::string       item;
-			while (std::getline(list, item, ',')) {
-				char*      end = nullptr;
-				const long v = std::strtol(item.c_str(), &end, 0);
-				if (end != item.c_str() && v >= 0) {
-					releasePrompts.push_back(static_cast<int>(v));
-				}
-			}
-		}
+		IntList(ini, "Input", "release_prompts", releasePrompts, 0x7FFFFFFF);
 		releaseMs = static_cast<int>(ini.GetInt("Input", "release_ms", releaseMs));
-		{
-			std::stringstream list(ini.Get("Input", "menu_ui_states"));
-			std::string       item;
-			while (std::getline(list, item, ',')) {
-				char*      end = nullptr;
-				const long v = std::strtol(item.c_str(), &end, 0);
-				if (end != item.c_str() && v >= 0 && v < 0x46) {
-					menuUiStates.push_back(static_cast<int>(v));
-				}
-			}
-		}
+		startWaitMs = static_cast<int>(ini.GetInt("Input", "start_wait_ms", startWaitMs));
+		chordMs = static_cast<int>(ini.GetInt("Input", "chord_ms", chordMs));
+		IntList(ini, "Input", "rest_prompts", restPrompts, 0x7FFFFFFF);
+		IntList(ini, "Input", "menu_keys", menuKeys, 0xFF);
+		IntList(ini, "Input", "ladder_prompts", ladderPrompts, 0x7FFFFFFF);
+		ladderPressDelayMs = static_cast<int>(ini.GetInt("Input", "ladder_press_delay_ms", ladderPressDelayMs));
+		ladderWaitMs = static_cast<int>(ini.GetInt("Input", "ladder_wait_ms", ladderWaitMs));
+		ladderSettleMs = static_cast<int>(ini.GetInt("Input", "ladder_settle_ms", ladderSettleMs));
+		IntList(ini, "Input", "menu_ui_states", menuUiStates, 0x45);
 
 		hideMode = ini.Get("Puppet", "hide_mode", hideMode);
 		motion = ini.Get("Puppet", "motion", motion);
 		if (motion != "kinematic" && motion != "root_motion") {
-			Log::Warn("[Puppet] motion = {} is not kinematic|root_motion; using root_motion", motion);
-			motion = "root_motion";
+			Log::Warn("[Puppet] motion = {} is not kinematic|root_motion; using kinematic", motion);
+			motion = "kinematic";
 		}
 		catchUp = static_cast<float>(ini.GetFloat("Puppet", "catch_up", catchUp));
 		unstick = ini.GetBool("Puppet", "unstick", unstick);
 		unstickSeconds = static_cast<float>(ini.GetFloat("Puppet", "unstick_seconds", unstickSeconds));
+		fallWatchSeconds = static_cast<float>(ini.GetFloat("Puppet", "fall_watch_seconds", fallWatchSeconds));
+		fallWatchDrop = static_cast<float>(ini.GetFloat("Puppet", "fall_watch_drop", fallWatchDrop));
 		hitHook = ini.GetBool("Puppet", "hit_hook", hitHook);
 		noDead = ini.GetBool("Puppet", "nodead", noDead);
 		noDamage = ini.GetBool("Puppet", "nodamage", noDamage);
@@ -134,11 +142,15 @@ namespace phantom::er
 		killOnGuestDeath = ini.GetBool("Puppet", "kill_on_guest_death", killOnGuestDeath);
 		maxSpeed = static_cast<float>(ini.GetFloat("Puppet", "max_speed", maxSpeed));
 		maxSpeedVehicle = static_cast<float>(ini.GetFloat("Puppet", "max_speed_vehicle", maxSpeedVehicle));
+		maxSpeedHorse = static_cast<float>(ini.GetFloat("Puppet", "max_speed_horse", maxSpeedHorse));
 		teleportDrop = static_cast<float>(ini.GetFloat("Puppet", "teleport_drop", teleportDrop));
 		resyncDistance = static_cast<float>(ini.GetFloat("Puppet", "resync_distance", resyncDistance));
 		radius = static_cast<float>(ini.GetFloat("Puppet", "radius", radius));
 		stepUp = static_cast<float>(ini.GetFloat("Puppet", "step_up", stepUp));
 		stepUpVehicle = static_cast<float>(ini.GetFloat("Puppet", "step_up_vehicle", stepUpVehicle));
+		stepUpHorse = static_cast<float>(ini.GetFloat("Puppet", "step_up_horse", stepUpHorse));
+		radiusVehicle = static_cast<float>(ini.GetFloat("Puppet", "radius_vehicle", radiusVehicle));
+		radiusHorse = static_cast<float>(ini.GetFloat("Puppet", "radius_horse", radiusHorse));
 		snapDown = static_cast<float>(ini.GetFloat("Puppet", "snap_down", snapDown));
 		chestHeight = static_cast<float>(ini.GetFloat("Puppet", "chest_height", chestHeight));
 		gravity = static_cast<float>(ini.GetFloat("Puppet", "gravity", gravity));
@@ -160,6 +172,7 @@ namespace phantom::er
 		syncCompassCam = ini.GetBool("Camera", "sync_compass_cam", syncCompassCam);
 		eyeHeight = static_cast<float>(ini.GetFloat("Camera", "eye_height", eyeHeight));
 		eyeHeightVehicle = static_cast<float>(ini.GetFloat("Camera", "eye_height_vehicle", eyeHeightVehicle));
+		eyeHeightHorse = static_cast<float>(ini.GetFloat("Camera", "eye_height_horse", eyeHeightHorse));
 		collisionMargin = static_cast<float>(ini.GetFloat("Camera", "collision_margin", collisionMargin));
 		collisionRadius = static_cast<float>(ini.GetFloat("Camera", "collision_radius", collisionRadius));
 		collisionEaseOut = static_cast<float>(ini.GetFloat("Camera", "collision_ease_out", collisionEaseOut));
@@ -312,6 +325,18 @@ namespace phantom::er
 		f("explosion_cloud_repeat", explosionCloudRepeat);
 		explosionGround = ini.GetBool("Combat", "explosion_ground", explosionGround);
 
+		progression = ini.Get("Progression", "damage_scaling", progression);
+		if (progression != "off" && progression != "level" && progression != "weapon" && progression != "both") {
+			Log::Warn("[Progression] damage_scaling = {} is not off|level|weapon|both; using off", progression);
+			progression = "off";
+		}
+		auto pf = [&](const char* a_key, float& a_value) { a_value = static_cast<float>(ini.GetFloat("Progression", a_key, a_value)); };
+		pf("level_reference", levelReference);
+		pf("level_exponent", levelExponent);
+		pf("weapon_bonus", weaponBonus);
+		pf("min_factor", progressionMin);
+		pf("max_factor", progressionMax);
+
 		auto tf = [&](const char* a_key, float& a_value) { a_value = static_cast<float>(ini.GetFloat("Throw", a_key, a_value)); };
 		throwSim = ini.GetBool("Throw", "sim", throwSim);
 		tf("gravity", throwGravity);
@@ -429,6 +454,15 @@ namespace phantom::er
 			r.deathVisual = "keep";
 		}
 		r.deathFadeMs = static_cast<int>(ini.GetInt("Render", "death_fade_ms", r.deathFadeMs));
+		r.nvg = ini.GetBool("Render", "nvg", r.nvg);
+		r.nvgGain = static_cast<float>(ini.GetFloat("Render", "nvg_gain", r.nvgGain));
+		r.nvgCurve = static_cast<float>(ini.GetFloat("Render", "nvg_curve", r.nvgCurve));
+		r.nvgFloor = static_cast<float>(ini.GetFloat("Render", "nvg_floor", r.nvgFloor));
+		Floats(ini.Get("Render", "nvg_tint"), r.nvgTint, 3);
+		r.nvgGrain = static_cast<float>(ini.GetFloat("Render", "nvg_grain", r.nvgGrain));
+		r.nvgVignette = static_cast<float>(ini.GetFloat("Render", "nvg_vignette", r.nvgVignette));
+		r.nvgScanlines = static_cast<float>(ini.GetFloat("Render", "nvg_scanlines", r.nvgScanlines));
+		r.nvgFadeMs = static_cast<int>(ini.GetInt("Render", "nvg_fade_ms", r.nvgFadeMs));
 
 		auto& o = overlay;
 		o.enabled = ini.GetBool("Overlay", "enabled", o.enabled);

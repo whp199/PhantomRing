@@ -53,6 +53,8 @@ def status_text(link: proto.Link, rates: dict | None = None) -> str:
 		out.append(f"header    not stamped yet (magic {h.magic:#x}): the Elden Ring host has not attached since the mapping was created")
 	else:
 		ver = "" if h.version == proto.VERSION else f"  VERSION MISMATCH: mapping v{h.version}, tools v{proto.VERSION}"
+		if proto.version_mismatch(h):
+			ver += f"\n          {proto.version_mismatch(h)}"
 		att = "guest attached" if h.guestNonce == h.sessionNonce and h.sessionNonce else ("guest not attached" if not h.guestNonce else "guest attached to an OLD session")
 		out.append(f"header    v{h.version} session {h.sessionNonce:#018x} ({att}) qpcFreq {h.qpcFrequency}{ver}")
 	host, guest = link.side("host"), link.side("guest")
@@ -252,11 +254,19 @@ def cmd_restore(args) -> int:
 		print(f"would restore from {src} (verified):")
 		for name, info in manifest["sets"].items():
 			if (er and name == "er") or (mgsv and name.startswith("mgsv/")):
-				print(f"  {name}: {len(info['files'])} files -> {info['source']}")
+				files = L.restore_files(info, name, args.all_er_files)
+				print(f"  {name}: {len(files)} files -> {info['source']}")
+				for e in files:
+					print(f"    overwrites {e['path']}  ({e['bytes']} bytes)")
+				for p in L.created_after(info, name):
+					print(f"    removes {p.name}  (not in the backup: created after it; kept in the safety backup)")
+				left = len(info["files"]) - len(files)
+				if left:
+					print(f"    ({left} other files of that folder are left as they are, e.g. your vanilla ER0000.sl2: --all-er-files restores them too)")
 		print("current saves are backed up first. Re-run with --yes to do it.")
 		return EXIT_ERROR
 	try:
-		L.restore_saves(args.timestamp, er, mgsv)
+		L.restore_saves(args.timestamp, er, mgsv, all_er=args.all_er_files)
 	except L.LaunchError as e:
 		print(f"restore aborted: {e}", file=sys.stderr)
 		return EXIT_ERROR
@@ -317,8 +327,21 @@ def cmd_install_me3(args) -> int:
 	return EXIT_OK
 
 
+class VersionAction(argparse.Action):
+	"""`pr --version`: computed only when asked (it asks the VCS and reads both DLLs)."""
+
+	def __init__(self, option_strings, dest, **kwargs):
+		super().__init__(option_strings, dest, nargs=0, help="print the version of these tools and of the built DLLs, then exit")
+
+	def __call__(self, parser, namespace, values, option_string=None):
+		from . import version
+		print(version.report(L.BUILD))
+		parser.exit()
+
+
 def main(argv=None) -> int:
 	ap = argparse.ArgumentParser(prog="pr", description="PhantomRing Linux tools (docs/TOOLS.md)")
+	ap.add_argument("--version", action=VersionAction)
 	ap.add_argument("--path", help="mapping file (default $PHANTOMRING_SHM or /dev/shm/phantomring_v1)")
 	sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -388,9 +411,17 @@ def main(argv=None) -> int:
 	g.add_argument("--mgsv-only", action="store_true")
 	g.add_argument("--er-only", action="store_true")
 	p.add_argument("--yes", action="store_true", help="really do it")
+	p.add_argument("--all-er-files", action="store_true",
+		help="restore every file of the Elden Ring save folder (default: only PhantomRing0000.sl2 and its .bak)")
 	p.set_defaults(fn=cmd_restore)
 
 	sub.add_parser("uninstall-guest", help="remove our dinput8.dll (+ini) from the MGSV dir").set_defaults(fn=cmd_uninstall_guest)
+
+	sub.add_parser("doctor", help="check this machine for PhantomRing: Steam, game versions, me3, gamescope, Proton, the build, "
+		"saves (read-only)").set_defaults(fn=lambda a: __import__("phantomring.doctor", fromlist=["main"]).main(a))
+	p = sub.add_parser("collect-logs", help="zip the logs, inis, versions and pr doctor for a bug report (personal paths redacted)")
+	p.add_argument("-o", "--output", help="zip to write (default logs/phantomring-logs-<time>.zip)")
+	p.set_defaults(fn=lambda a: __import__("phantomring.collect", fromlist=["main"]).main(a))
 
 	p = sub.add_parser("screenshot", help="KDE screenshot via spectacle (for live tests)")
 	p.add_argument("-o", "--output")

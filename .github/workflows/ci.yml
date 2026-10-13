@@ -1,0 +1,198 @@
+# PhantomRing CI: build both plugins with MinGW-w64 and run every offline suite (no games needed); on a v* tag, also
+# publish the Windows zip and the Linux tarball as a GitHub pre-release.
+#
+# The toolchain is a pinned Fedora container: MinGW-w64 GCC (the code needs C++23 std::format/std::expected: GCC >= 13),
+# wine for the tests that run the Windows binaries, Xvfb so wine has a display. Reproduce a run locally:
+#   cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake -DCMAKE_BUILD_TYPE=Release
+#   cmake --build build
+#   export WINEPREFIX=$(mktemp -d) PHANTOMRING_WINEPREFIX=$WINEPREFIX
+#   python3 tools/phantomring/test_launcher.py && python3 tools/phantomring/test_fakes.py && python3 tools/phantomring/test_replay.py
+#   xvfb-run -a cmake --build build --target check_host check_guest check_windows
+#   xvfb-run -a python3 tools/phantomring/test_layout.py && xvfb-run -a python3 tools/phantomring/test_plugins.py
+#   python3 tools/phantomring/test_release.py
+# Skipped here because they need the games or their data: tests/verify_er_addresses.cpp, mgsv/verify_addresses.py,
+# check_host's regulation-backed rows (no build/er_params), check_guest's test_guest_pump (Lua 5.1.5 sources).
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build-test:
+    name: Build and offline tests (MinGW-w64, wine)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container:
+      # Pinned: a new Fedora (or MinGW/wine version) is a deliberate change here, not a surprise.
+      image: registry.fedoraproject.org/fedora:44
+      # The shared-memory link is a ~204 MB file in /dev/shm; test_replay maps three at once. Docker's default is 64 MB.
+      options: --shm-size=2g
+    env:
+      WINEPREFIX: /tmp/phantomring-wine
+      PHANTOMRING_WINEPREFIX: /tmp/phantomring-wine
+      WINEDEBUG: -all
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Install the toolchain
+        run: |
+          dnf -y install --setopt=install_weak_deps=False \
+            git cmake ninja-build python3 util-linux findutils procps-ng \
+            mingw64-gcc mingw64-gcc-c++ mingw64-binutils mingw64-winpthreads-static \
+            wine xorg-x11-server-Xvfb xorg-x11-xauth
+          # Optional extras (skipped quietly where Fedora has no such package): a static libstdc++ split out of
+          # mingw64-gcc-c++ on some releases, and Lua 5.1 for check_guest's guest-script test.
+          dnf -y install --setopt=install_weak_deps=False --skip-unavailable mingw64-libstdc++-static compat-lua
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # extern/minhook
+          fetch-depth: 0
+
+      - name: Toolchain versions
+        run: |
+          # The container runs as root on a workspace owned by the runner: let git read it (cmake/version.cmake asks
+          # it for the commit id).
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/extern/minhook"
+          x86_64-w64-mingw32-g++ --version | head -n1
+          x86_64-w64-mingw32-g++ -v 2>&1 | grep -i 'thread model'
+          libstdcxx=$(x86_64-w64-mingw32-g++ -print-file-name=libstdc++.a)
+          echo "static libstdc++: $libstdcxx"
+          test -f "$libstdcxx" || { echo "no static libstdc++ for MinGW: the DLLs link it statically"; exit 1; }
+          wine --version
+          command -v xvfb-run
+          cmake --version | head -n1
+          python3 --version
+          test -f extern/minhook/src/hook.c
+
+      - name: Configure
+        run: |
+          lua=$(command -v lua5.1 || command -v lua-5.1 || command -v lua51 || true)
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake -DCMAKE_BUILD_TYPE=Release \
+            -DPHANTOM_WINEPREFIX="$WINEPREFIX" ${lua:+-DPHANTOM_LUA51="$lua"}
+
+      - name: Build
+        run: |
+          cmake --build build
+          cat build/generated/phantomring_version.h
+
+      - name: Wine prefix
+        run: |
+          mkdir -p "$WINEPREFIX"
+          timeout 600 xvfb-run -a sh -c 'wineboot --init && wineserver --wait'
+
+      - name: Launcher, stand-ins, record/replay (Python only)
+        run: |
+          python3 tools/phantomring/test_launcher.py
+          python3 tools/phantomring/test_fakes.py
+          python3 tools/phantomring/test_replay.py
+
+      - name: check_host, check_guest, check_windows (wine)
+        run: xvfb-run -a cmake --build build --target check_host check_guest check_windows
+
+      - name: Protocol layout, plugins vs stand-ins (wine)
+        run: |
+          xvfb-run -a python3 tools/phantomring/test_layout.py
+          xvfb-run -a python3 tools/phantomring/test_plugins.py
+
+      - name: Release tooling (versions, packages, doctor, collect-logs)
+        run: python3 tools/phantomring/test_release.py
+
+      - name: Packages
+        run: |
+          python3 -I tools/package_windows.py --no-build --out dist
+          python3 -I tools/package_linux.py --no-build --out dist
+          (cd dist && cat *.sha256 > SHA256SUMS && sha256sum -c SHA256SUMS)
+
+      - name: Release tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          want="v$(head -n1 VERSION | tr -d '[:space:]')"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "tag $GITHUB_REF_NAME does not match VERSION ($want): bump VERSION, or tag $want"
+            exit 1
+          fi
+          case "$(cat build/generated/phantomring_version.h)" in
+            *-dirty*|*unknown*) echo "the tagged build is not from a clean checkout"; exit 1 ;;
+          esac
+
+      - name: Upload the DLLs
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhantomRing-dlls-${{ github.sha }}
+          path: |
+            build/PhantomRingHost.dll
+            build/dinput8.dll
+            build/generated/phantomring_version.h
+          if-no-files-found: error
+
+      - name: Upload the packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhantomRing-packages-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PhantomRing-test-logs-${{ github.sha }}
+          path: |
+            build/*.log
+            /tmp/phantomring_*/
+          if-no-files-found: ignore
+
+  release:
+    name: GitHub pre-release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build-test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: PhantomRing-packages-${{ github.sha }}
+          path: dist
+
+      - name: Release notes
+        run: |
+          linux=$(ls dist/*-linux.tar.gz)
+          {
+            echo "PhantomRing ${GITHUB_REF_NAME}: an early alpha. Unofficial fan mod; you need both games on Steam."
+            echo
+            echo "- **Linux**: \`$(basename "$linux")\`. Unpack it, then follow README.md's *Install* (\`tools/pr doctor\`, \`tools/pr install-me3\`, \`tools/pr launch\`)."
+            echo "- **Windows**: \`$(basename dist/*-windows.zip)\`: built and tested under Wine only, never run on Windows (README-WINDOWS.md inside)."
+            echo "- Supported game versions: ELDEN RING 1.17.1 (eldenring.exe 2.7.1.0) and METAL GEAR SOLID V: THE PHANTOM PAIN 1.0.15.4; the plugins stay inert on any other."
+            echo "- Elden Ring always runs offline through Mod Engine 3 (me3 0.13.0, downloaded by you). Never take a PhantomRing setup online."
+            echo
+            echo "Check the downloads with \`sha256sum -c SHA256SUMS\`. Each package's BUILD.txt lists its version, commit and the sha256 of every file."
+            echo
+            echo '```'
+            tar -xzOf "$linux" --wildcards '*/BUILD.txt' | sed -n '1,/^sha256:/p'
+            echo '```'
+          } > notes.md
+          cat notes.md
+
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
+            --title "PhantomRing $GITHUB_REF_NAME" --notes-file notes.md

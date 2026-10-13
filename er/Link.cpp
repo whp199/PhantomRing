@@ -1,6 +1,7 @@
 #include "Link.h"
 
 #include "Log.h"
+#include "Version.h"
 
 #include <bcrypt.h>
 
@@ -90,6 +91,7 @@ namespace phantom::er
 		Atomic(h->hostHeartbeatQpc).store(Qpc(), std::memory_order_relaxed);
 		h->hostStatus = proto::Status::kBooting;
 		CopyText(h->hostStatusText, sizeof(h->hostStatusText), "Elden Ring starting");
+		version::WriteField(h->hostRelease, sizeof(h->hostRelease), version::Release());
 		ResetHostRegions();
 		Atomic(h->sessionNonce).store(nonce_, std::memory_order_release);
 		Atomic(h->magic).store(proto::kMagic, std::memory_order_release);
@@ -162,6 +164,7 @@ namespace phantom::er
 			Log::Info("guest left this session (nonce changed)");
 		}
 		guestAttached_ = attached;
+		CheckGuestVersion(attached);
 
 		const bool alive = GuestAliveNow();
 		if (alive != guestAlive_) {
@@ -209,8 +212,42 @@ namespace phantom::er
 		GuestRing{ map_.Base() + proto::kOffGuestEvents }.Drain();
 		drawFront_ = 2;
 		drawValid_ = false;
-		Log::Info("guest attached to session {:016x} (attach #{}, guest unix pid {})", nonce_, attaches_,
-			Atomic(Hdr()->guestUnixPid).load(std::memory_order_acquire));
+		const auto release = version::ReadField(Hdr()->guestRelease, sizeof(Hdr()->guestRelease));
+		Log::Info("guest attached to session {:016x} (attach #{}, guest unix pid {}, MGSV plugin v{})", nonce_, attaches_,
+			Atomic(Hdr()->guestUnixPid).load(std::memory_order_acquire), release.empty() ? "?" : release);
+	}
+
+	void Link::CheckGuestVersion(bool a_attached)
+	{
+		// A guest that heartbeats here but never attaches may speak another protocol: it refuses to attach then
+		// (mgsv/Link.cpp), and the player is told in words (common/Version.h). A guest from 0.2.0-alpha on names its
+		// protocol at once; an older one names nothing, so one heartbeating unattached for 15 s without a name is taken
+		// for an older one.
+		auto*       h = Hdr();
+		std::string text;
+		const auto  now = Qpc();
+		const auto  beat = Atomic(h->guestHeartbeatQpc).load(std::memory_order_acquire);
+		if (!a_attached && beat && QpcToMs(now - beat) < static_cast<double>(proto::kHeartbeatTimeoutMs)) {
+			if (!unattachedSince_) {
+				unattachedSince_ = now;
+			}
+			const auto protocol = Atomic(h->guestProtocol).load(std::memory_order_acquire);
+			if (protocol && protocol != proto::kVersion) {
+				text = version::MismatchText(version::Release(), proto::kVersion, version::ReadField(h->guestRelease, sizeof(h->guestRelease)), protocol);
+			} else if (!protocol && QpcToMs(now - unattachedSince_) > 15000.0) {
+				text = version::MismatchText(version::Release(), proto::kVersion, {}, 0);
+			}
+		} else {
+			unattachedSince_ = 0;
+		}
+		if (text != versionMismatch_) {
+			if (!text.empty()) {
+				Log::Error("{} (this plugin {})", text, version::Describe());
+			} else {
+				Log::Info("the guest's version mismatch is gone");
+			}
+			versionMismatch_ = std::move(text);
+		}
 	}
 
 	void Link::SetHostStatus(proto::Status a_status, std::string_view a_text)

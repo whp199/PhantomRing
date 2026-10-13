@@ -85,6 +85,14 @@ class PadFile:
 		return self.pad
 
 
+def cam_yaw_deg(q) -> float:
+	"""World yaw of the camera's forward axis (+z rotated by quat x,y,z,w), degrees, atan2(fwd.x, fwd.z) like rootYaw."""
+	x, y, z, w = q[0], q[1], q[2], q[3]
+	fx = 2.0 * (x * z + w * y)
+	fz = 1.0 - 2.0 * (x * x + y * y)
+	return math.degrees(math.atan2(fx, fz))
+
+
 def scripted_pad(t: float):
 	t %= 10.0
 	for until, lx, ly, buttons, rt in PAD_SCRIPT:
@@ -119,6 +127,7 @@ class FakeHost:
 		self.pad_override = None  # dict as parse_pad_line returns: a fixed pad (recorder --pad) instead of the loop
 		self.placed: dict[int, tuple] = {}  # v5: kGEvPlaced ids still there (`pr er detonate <id>|all`)
 		self.dead = False  # `pr er die`: HostState kHostPlayerDead until `pr er respawn` (guest death tests)
+		self.tarnished = False  # `pr er tarnished 1`: Tarnished mode, no kHostPuppeting (the pad stays as given: the guest parks itself)
 		self.stats = {
 			"frames": 0, "guestAttaches": 0, "guestStates": 0, "guestFlagsSeen": 0, "odoDistance": 0.0,
 			"events": {}, "drawFrames": 0, "lastDrawCount": 0, "lastMatrixCount": 0, "drawOwnersSeen": [],
@@ -153,7 +162,7 @@ class FakeHost:
 		st["frames"] += 1
 		t = self.elapsed()
 
-		flags = HostFlags.InGame | (HostFlags.PlayerDead if self.dead else HostFlags.Puppeting)
+		flags = HostFlags.InGame | (HostFlags.PlayerDead if self.dead else (0 if self.tarnished else HostFlags.Puppeting))
 		hs = proto.HostState(flags=int(flags), frame=self.frame, qpc=proto.qpc_now(),
 			timeOfDayHours=(12.0 + t / 60.0) % 24.0, cameraMaxDistance=8.0, erHpFrac=1.0, erWorldId=0x3C2A2400,
 			groundY=0.0, fallSpeed=0.0)
@@ -222,7 +231,9 @@ class FakeHost:
 					f"{gs.rootPos[0]:.4f},{gs.rootPos[1]:.4f},{gs.rootPos[2]:.4f},{gs.rootYaw:.4f},{gs.velocity[0]:.3f},{gs.velocity[2]:.3f},"
 					f"{gs.buddyFlags:#x},{gs.buddyPos[0]:.3f},{gs.buddyPos[1]:.3f},{gs.buddyPos[2]:.3f},{gs.vehicleId:#x},{gs.buddyAmmo},"
 					f"{1 if gs.flags & proto.GuestFlags.ThrowAim else 0},{gs.aimThrowPos[0]:.3f},{gs.aimThrowPos[1]:.3f},{gs.aimThrowPos[2]:.3f},"
-					f"{gs.aimThrowVel[0]:.3f},{gs.aimThrowVel[1]:.3f},{gs.aimThrowVel[2]:.3f},{gs.aimThrowKind}\n")
+					f"{gs.aimThrowVel[0]:.3f},{gs.aimThrowVel[1]:.3f},{gs.aimThrowVel[2]:.3f},{gs.aimThrowKind},"
+					f"{gs.life},{gs.lifeMax},{gs.weaponId},{gs.ammoInClip},{gs.ammoStock},{cam_yaw_deg(gs.camQuat):.3f},"
+					f"{1 if gs.flags & proto.GuestFlags.Nvg else 0}\n")
 			if gs.buddyFlags & proto.GuestBuddyFlags.PosValid and math.isfinite(gs.buddyPos[0]):
 				st["buddyPosValid"] += 1  # the real host maps buddyPos through the anchor and snaps it to ER ground
 			odo = list(gs.odo)
@@ -343,6 +354,8 @@ class FakeHost:
 		ev = proto.HostEvent(type=int(typ), a=a, b=b, frame=self.frame & 0xFFFFFFFF)
 		ev.v0[:] = [0.0, 0.0, 1.0]
 		ok = self.link.host_events.push(ev)
+		if ok and self.trace:
+			self.trace.write(f"# host {proto.enum_name(int(typ), HostEventType)} a={a} b={b} t={time.monotonic() - self.t0:.4f}\n")
 		return (0, f"sent {proto.enum_name(int(typ), HostEventType)} a={a}") if ok else (1, "host event ring full")
 
 	def console(self, text: str) -> tuple[int, str]:
@@ -352,7 +365,7 @@ class FakeHost:
 		match cmd:
 			case ["help"]:
 				return 0, ("fake_er canned commands: help, ping, status, peek player.pos, peek <addr>, hurt <er dmg>, heal <amount>, die, respawn, "
-					"placed, detonate <id>|all")
+					"rested 0|1, tarnished 0|1, placed, detonate <id>|all")
 			case ["placed"]:
 				return 0, " ".join(f"#{k}@{v[0]:.1f},{v[1]:.1f},{v[2]:.1f}" for k, v in self.placed.items()) or "none"
 			case ["detonate", which]:
@@ -366,6 +379,17 @@ class FakeHost:
 			case ["heal", amount]:
 				# v3: what the host sends when Elden Ring heals the puppet (a = Snake's life / LifeScale units)
 				return self.host_event(HostEventType.Heal, int(amount, 0), 0)
+			case ["rested", which]:
+				# v10: the Tarnished rested at a grace (0) or respawned (1): the guest refills Snake's ammo and life
+				if which not in ("0", "1"):
+					return 1, "usage: rested 0|1   (0 grace rest, 1 respawn)"
+				return self.host_event(HostEventType.Rested, int(which), 0)
+			case ["tarnished", which]:
+				# v10: Tarnished mode on (1: Snake parks) / off (0). The real host also sends a neutral pad while the puppet is off.
+				if which not in ("0", "1"):
+					return 1, "usage: tarnished 0|1"
+				self.tarnished = which == "1"
+				return self.host_event(HostEventType.Tarnished, int(which), 0)
 			case ["die"]:
 				# What the real host does when the Tarnished dies: kHostPlayerDead from the death until the respawn.
 				self.dead = True
@@ -396,7 +420,8 @@ def main(argv=None) -> int:
 	ap.add_argument("--summary", help="write a JSON summary here on exit")
 	ap.add_argument("--quiet", action="store_true")
 	ap.add_argument("--trace", help="append one CSV line per new guest frame (t,frame,flags,epoch,odo xyz,root xyz,yaw,vel xz,"
-		"buddyFlags,buddyPos xyz,vehicleId,buddyAmmo) and one '# event' line per guest event")
+		"buddyFlags,buddyPos xyz,vehicleId,buddyAmmo,throwAim,aimThrowPos xyz,aimThrowVel xyz,aimThrowKind,life,lifeMax,weaponId,"
+		"ammoInClip,ammoStock,camYawDeg,nvg) and one '# event' line per guest event (and '# host' per host event sent)")
 	ap.add_argument("--pad-file", help="drive the pad from this file instead of the 10 s loop (see parse_pad_line); "
 		"an absent file means a neutral pad")
 	ap.add_argument("--force", action="store_true", help="take the host side over even if another live process holds it")

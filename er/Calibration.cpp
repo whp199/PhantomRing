@@ -107,7 +107,10 @@ namespace phantom::er::Calibration
 		if (Cfg().erForward) {
 			return static_cast<float>(Cfg().erForward);
 		}
-		return g_erForward.locked ? static_cast<float>(g_erForward.locked) : 1.0f;
+		// Until learned: -Z. Every live session voted it (0/40: the Tarnished runs along -(quat x +Z); 2026-10-13, ER's own
+		// control, four stick directions: the physics quaternion's +Z 180 deg from the run each time). A wrong +1 used to be
+		// harmless (the puppet's yaw was a pitch, er/Game.cpp SetYaw); now it would turn the hidden puppet backwards.
+		return g_erForward.locked ? static_cast<float>(g_erForward.locked) : -1.0f;
 	}
 
 	float CamForwardRow()

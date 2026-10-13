@@ -185,6 +185,14 @@ local cok, ctext = PR.Console(loadstring('return 1, nil, "x", true'))
 check(cok == true and ctext == '1\tnil\tx\ttrue', 'Console packs results: ' .. tostring(ctext))
 cok, ctext = PR.Console(loadstring('error("bad")'))
 check(cok == false and ctext:find('bad') ~= nil, 'Console reports errors')
+-- v10: the goggles flag, the refill's magazine sizes, MGSV's auto-aim option
+env.TppEquip = { EQP_IT_Nvg = 492, GetAmmoInfo = function(id) if id == 36 then return 15, 30, 210, 0, 0, 0 end return 0, 0, 0, 0, 0, 0 end }
+env.vars.items, env.vars.currentItemIndex, env.vars.weapons = { [0] = 0, 458, 462, 492 }, 3, { [0] = 36, 0, 7 }
+check(math.floor(PR.Flags() / F.NVG) % 2 == 1, 'NVG: the item in use is EQP_IT_Nvg')
+env.vars.currentItemIndex = 0
+check(math.floor(PR.Flags() / F.NVG) % 2 == 0 and PR.Run('refill') == 'refill=36/30/0,0/0/0,7/0/0', 'no NVG; refill magazine sizes')
+env.vars.optionSelectedIndices = { [11] = 0 }
+check(PR.AutoAim(false) == 'off (was on)' and env.vars.optionSelectedIndices[11] == 1, 'auto-aim correction off')
 
 -- ---- robustness: an empty engine ---------------------------------------------------------------------
 local bare = { math = math, string = string, table = table, pairs = pairs, ipairs = ipairs, type = type, tostring = tostring,

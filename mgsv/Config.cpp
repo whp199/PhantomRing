@@ -71,6 +71,7 @@ namespace phantom::guest
 		rotYDeg = static_cast<float>(ini.GetFloat("Boot", "RotY", rotYDeg));
 		disableSoldiers = ini.GetBool("Boot", "DisableSoldiers", disableSoldiers);
 		clearMarkersSec = static_cast<int>(ini.GetInt("Boot", "ClearMarkersSec", clearMarkersSec));
+		autoAim = ini.GetBool("Boot", "AutoAim", autoAim);
 		invincible = ini.GetBool("Boot", "Invincible", invincible);
 		clockTime = ini.Get("Boot", "Clock", clockTime);
 		freezeClock = ini.GetBool("Boot", "FreezeClock", freezeClock);
@@ -79,6 +80,11 @@ namespace phantom::guest
 		timeoutSec = static_cast<int>(ini.GetInt("Boot", "TimeoutSec", timeoutSec));
 
 		buddy = Lower(ini.Get("Buddy", "Type", buddy));
+		// Test runs pick the buddy without touching the installed ini (the player's): PHANTOMRING_BUDDY=horse.
+		if (wchar_t env[32]; ::GetEnvironmentVariableW(L"PHANTOMRING_BUDDY", env, 32) > 0 && env[0]) {
+			buddy = Lower(Narrow(env));
+			Log::Info("ini: [Buddy] Type = {} (PHANTOMRING_BUDDY)", buddy);
+		}
 		buddyAhead = static_cast<float>(ini.GetFloat("Buddy", "Ahead", buddyAhead));
 		buddySide = static_cast<float>(ini.GetFloat("Buddy", "Side", buddySide));
 		buddyFollow = ini.GetBool("Buddy", "Follow", buddyFollow);
@@ -94,6 +100,8 @@ namespace phantom::guest
 		buddyFollowCatchUp = static_cast<float>(ini.GetFloat("Buddy", "FollowCatchUp", buddyFollowCatchUp));
 		buddyFollowMethod = Lower(ini.Get("Buddy", "FollowMethod", buddyFollowMethod));
 		buddyFollowModes = Lower(ini.Get("Buddy", "FollowModes", buddyFollowModes));
+		buddyHorseFollowDistance = static_cast<float>(ini.GetFloat("Buddy", "HorseFollowDistance", buddyHorseFollowDistance));
+		buddyHorseWhistleEveryMs = static_cast<int>(ini.GetInt("Buddy", "HorseWhistleEveryMs", buddyHorseWhistleEveryMs));
 
 		const auto hold = Lower(ini.Get("Motion", "Hold", "native_treadmill"));
 		holdMode = hold == "off"                ? HoldMode::kOff
@@ -124,6 +132,10 @@ namespace phantom::guest
 		lifeScale = static_cast<float>(ini.GetFloat("Combat", "LifeScale", lifeScale));
 		nativeLifeWrite = ini.GetBool("Combat", "NativeLifeWrite", nativeLifeWrite);
 		hurtFeedback = ini.GetBool("Combat", "HurtFeedback", hurtFeedback);
+		regenGate = ini.GetBool("Combat", "RegenGate", regenGate);
+		regenDelaySec = static_cast<float>(ini.GetFloat("Combat", "RegenDelaySec", regenDelaySec));
+		regenRampSec = static_cast<float>(ini.GetFloat("Combat", "RegenRampSec", regenRampSec));
+		regenRate = static_cast<float>(ini.GetFloat("Combat", "RegenRate", regenRate));
 		hurtBlood = ini.GetBool("Combat", "HurtBlood", hurtBlood);
 		deathCollapse = ini.GetBool("Combat", "DeathCollapse", deathCollapse);
 		fireFromAmmo = ini.GetBool("Combat", "FireFromAmmo", fireFromAmmo);

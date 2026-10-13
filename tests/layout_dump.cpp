@@ -46,6 +46,9 @@ int main()
 	OFF(Header, guestStatus);
 	OFF(Header, hostStatusText);
 	OFF(Header, guestStatusText);
+	OFF(Header, guestProtocol);
+	OFF(Header, hostRelease);
+	OFF(Header, guestRelease);
 	SIZE(HostState);
 	OFF(HostState, flags);
 	OFF(HostState, frame);

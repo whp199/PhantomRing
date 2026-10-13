@@ -6,6 +6,7 @@
 #include "D3D12Util.h"
 #include "Log.h"
 #include "RenderMesh.h"
+#include "RenderNvg.h"
 #include "RenderPso.h"
 #include "RenderShadow.h"
 #include "RenderShared.h"
@@ -80,6 +81,7 @@ static void TestShaders()
 	CHECK(gbuffer);
 	CHECK(velocity);
 	CHECK(Shaders::MarkerShader(false) && Shaders::MarkerShader(true));  // er/RenderMarkers.h: throw arc, grenades, mines
+	CHECK(RenderNvg::ShadersCompile());  // er/RenderNvg.h: MGSV's night vision
 
 	// Snake's body layout as the guest publishes it (GUEST.md 15.2, merged streams), and a rigid one.
 	const std::vector<proto::RenInputElement> skinned = {

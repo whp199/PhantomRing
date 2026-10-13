@@ -14,6 +14,7 @@
 #include "RenderProbe.h"
 #include "RenderPso.h"
 #include "RenderMarkers.h"
+#include "RenderNvg.h"
 #include "RenderScene.h"
 #include "RenderBind.h"
 #include "RenderShared.h"
@@ -95,6 +96,8 @@ namespace phantom::er::Renderer
 		std::atomic<std::uint64_t> g_depthFrames{ 0 }, g_sceneFrames{ 0 }, g_gbufFrames{ 0 }, g_fallbackFrames{ 0 };
 		bool                       g_sceneDrawn{ false };  // stage B (or C) drew this frame: Present doesn't
 		bool                       g_markersDrawn{ false };  // er/RenderMarkers.h drawn before the HUD this frame
+		bool                       g_nvgDone{ false };       // er/RenderNvg.h handled this frame
+		std::atomic<std::uint64_t> g_nvgFrames{ 0 };
 		std::unordered_map<int, ComPtr<ID3D12PipelineState>> g_markerPsos;  // by render-target format
 		bool                       g_markerFailed{ false };
 		std::atomic<std::uint64_t> g_markerFrames{ 0 }, g_markerPresentFrames{ 0 };
@@ -853,6 +856,7 @@ namespace phantom::er::Renderer
 			}
 			// Already in this frame: stage B drew before the composite, or stage C put Snake in the G-buffer.
 			const bool drawnBeforeHud = std::exchange(g_sceneDrawn, false) || g_gbufDrawn;
+			g_nvgDone = false;
 			g_gbufDone = g_velDone = g_gbufDrawn = false;
 			Gbuffer::OnFence(g_fence->GetCompletedValue());
 			RenderView::OnFence(g_fence->GetCompletedValue());
@@ -962,6 +966,27 @@ namespace phantom::er::Renderer
 			}
 		}
 
+		// MGSV's night vision over Elden Ring's scene, after Snake and the markers are in it, before its HUD (er/RenderNvg.h).
+		void NvgBeforeComposite(const std::shared_ptr<const RenderSnapshot>& a_snap)
+		{
+			DrawTarget t;
+			if (g_nvgDone || !a_snap || a_snap->nvg <= 0.0f || RenderNvg::Failed() || !SceneColorTarget(t)) {
+				return;
+			}
+			g_nvgDone = true;
+			RenderNvg::Target nt;
+			nt.resource = t.resource;
+			nt.state = t.state;
+			nt.rtv = t.rtv;
+			nt.format = t.format;
+			nt.srgbView = d3d::Info(t.format).srgb;
+			nt.width = g_width;
+			nt.height = g_height;
+			if (Submit(true, [&](render::Recording& a_rec) { return RenderNvg::Record(a_rec, nt, a_snap->nvg, a_snap->erFrame); })) {
+				++g_nvgFrames;
+			}
+		}
+
 		// Elden Ring's frame passes through here batch by batch. Up to three of our submissions go between
 		// its lists: stage C after its last G-buffer list (Snake into the G-buffer, lit by Elden Ring) and
 		// after its velocity pass (his motion vectors), stage B right before its composite (stage C's
@@ -982,7 +1007,8 @@ namespace phantom::er::Renderer
 			// (most frames have none: a split per back-buffer batch for nothing would also redraw Snake in stage B).
 			const bool wantScene = !g_sceneDrawn;
 			const bool wantMarkers = !g_markersDrawn && RenderScene::HasMarkers();
-			const int  k = wantScene || wantMarkers ? RenderDepth::CompositeIndex(a_n, a_lists) : -1;
+			const bool wantNvg = !g_nvgDone && RenderScene::HasNvg();
+			const int  k = wantScene || wantMarkers || wantNvg ? RenderDepth::CompositeIndex(a_n, a_lists) : -1;
 			if (g < 0 && v < 0 && k < 0) {
 				RenderDepth::OnExecute(a_n, a_lists);
 				RenderProbe::OnExecute(a_queue, a_n, a_lists);
@@ -1039,6 +1065,7 @@ namespace phantom::er::Renderer
 					}
 				}
 				MarkersBeforeComposite(snap);
+				NvgBeforeComposite(snap);
 			}
 			run(a_n);
 			RenderProbe::OnExecute(a_queue, a_n, a_lists);
@@ -1056,6 +1083,7 @@ namespace phantom::er::Renderer
 				ReleaseTargets();
 				RenderDepth::Reset();
 				Gbuffer::Reset();
+				RenderNvg::Reset();
 			}
 		}
 
@@ -1107,6 +1135,7 @@ namespace phantom::er::Renderer
 			RenderAssets::Describe(), RenderScene::Describe(), RenderDepth::Describe() + "\n  " + RenderProbe::Describe() + "\n  " + RenderPso::Describe());
 		s += std::format("\n  {}: {} frames before the HUD, {} at Present{}", RenderMarkers::Describe(), g_markerFrames.load(), g_markerPresentFrames.load(),
 			g_markerFailed ? " (marker pipeline FAILED)" : "");
+		s += std::format("\n  {} ({} submissions)", RenderNvg::Describe(), g_nvgFrames.load());
 		return s;
 	}
 
@@ -1134,7 +1163,8 @@ namespace phantom::er::Renderer
 			return "render set <key> <value>: stage (gbuffer|post|present) debug_view (0 lit,1 albedo,2 normals,3 uv,4 facing,5 bones,6 srm; stage C: 1 grey albedo, 2 no normal map, 6 srm as albedo) "
 				   "latency_frames cull (back|front|none) front_ccw flip_x xray (0..1 opacity) er_depth er_depth_bias er_depth_near day_night exposure light_intensity "
 				   "draw_player draw_buddy albedo_srgb normal_xy (auto|rg|ag) enabled gbuffer_depth (finite|infinite) gbuffer_stencil gbuffer_light_set gbuffer_ao "
-				   "gbuffer_translucency albedo_scale gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b)";
+				   "gbuffer_translucency albedo_scale gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b) "
+				   "nvg nvg_gain nvg_curve nvg_floor nvg_tint (r,g,b) nvg_grain nvg_vignette nvg_scanlines nvg_fade_ms";
 		}
 		if (verb != "set" || key.empty()) {
 			return "usage: render [status] | render keys | render set <key> <value> | render probe [shaders] | render psos | render gbuf [peek [x y [n]]]";
@@ -1150,6 +1180,20 @@ namespace phantom::er::Renderer
 			}
 		};
 		if (key == "debug_view") r.debugView = i();
+		else if (key == "nvg") r.nvg = b();
+		else if (key == "nvg_gain") r.nvgGain = f();
+		else if (key == "nvg_curve") r.nvgCurve = f();
+		else if (key == "nvg_floor") r.nvgFloor = f();
+		else if (key == "nvg_grain") r.nvgGrain = f();
+		else if (key == "nvg_vignette") r.nvgVignette = f();
+		else if (key == "nvg_scanlines") r.nvgScanlines = f();
+		else if (key == "nvg_fade_ms") r.nvgFadeMs = i();
+		else if (key == "nvg_tint") {
+			float c[3]{};
+			if (std::sscanf(value.c_str(), "%f,%f,%f", &c[0], &c[1], &c[2]) == 3) {
+				std::copy(c, c + 3, r.nvgTint);
+			}
+		}
 		else if (key == "latency_frames") r.latencyFrames = i();
 		else if (key == "cull") r.cull = value;
 		else if (key == "front_ccw") r.frontCcw = b();

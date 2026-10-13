@@ -4,11 +4,14 @@ The guest is the half of PhantomRing that lives inside `mgsvtpp.exe` 1.0.15.4. I
 exactly as MGSV does, and translates that for Elden Ring: Snake's intended motion, camera, skeleton,
 life, shots, melee and his battle buddy (D-Walker first) go out through the shared mapping, and the
 player's pad and Elden Ring's hits come in. Architecture: `docs/DESIGN.md`. Contract:
-`protocol/phantomring_protocol.h` (v2).
+`protocol/phantomring_protocol.h` (v10).
 
 Status: phases 0 and 1 for the guest, plus the shot/melee/buddy parts of phases 3 and 4 that the RE
 backlog made possible, all run live with both games since (README "Status", docs/STATUS.md). §10 was the
-checklist for the first live run.
+checklist for the first live run (kept for reference). §18.11-18.14 (protocol v10: ammo refill on rest/respawn, night
+vision, MGSV's auto-aim off, Tarnished mode) ran live with both games on 2026-10-13 (docs/STATUS.md). §18.15 (MGSV's
+regeneration curve after Elden Ring's hits), §8.1 (D-Horse) and §8.2 (another buddy in session) are 2026-10-13 morning
+work, live with MGSV and fake_er only (no protocol change).
 
 ---
 
@@ -36,7 +39,7 @@ checklist for the first live run.
   then. `DirectInput8Create` also wraps the returned `IDirectInput8W` so that game controllers are hidden.
 - Each feature is gated by its own byte check (`mgsv/Addresses.h` + `Verify.cpp`). A mismatch logs the
   bytes it found and turns off only that feature. `python3 -I mgsv/verify_addresses.py` runs the same
-  checks against the exe on disk; all 46 sites match the local 1.0.15.4.
+  checks against the exe on disk; all 102 sites match the local 1.0.15.4.
 
 ## 2. Files
 
@@ -52,9 +55,9 @@ checklist for the first live run.
 | `Pump.*` | runs on MGSV's Lua thread: script load/override, dev console, per-update Tick, boot state machine |
 | `Camera.*` | camera-setter hook with a GNU-as stub that captures the caller's RSI (the player camera owner) |
 | `Frame.*` | once per player-camera frame: odometer, hold, hurt/respawn, shot fallback, GuestState |
-| `Skeleton.*` | `SkinPublish` hook → PoseBlock (178 bones) |
+| `Skeleton.*` | `SkinPublish` hook → PoseBlock (178 bones); the buddy's own skin for buddies without GetPosition (D-Horse, §8.1) |
 | `Combat.*` | `ShotSolver` hook → kGEvFire/kGEvBuddyFire; CQC attack-serial poll → kGEvMelee |
-| `Hold.*` | native set-position of the player character (re-backlog M1) for the native hold modes |
+| `Hold.*` | native set-position of the player character (re-backlog M1) for the native hold modes; `!loc`/`!placeobj` experiments |
 | `Vars.*` | native reads of the `vars` ScriptVar block, plus the playerLife write |
 | `Pad.*`, `DInputWrap.*`, `WindowGuard.*` | XInput IAT, DirectInput enumeration filter, minimise/foreground/cursor guards (every user32 detour) |
 | `WindowHidden.*` | Windows: hidden MGSV window, focus spoof, forced view-visibility check `0x14024A1D0`, windowed swap chain, quit without host (`[Window]`, `!window`; docs/WINDOWS.md) |
@@ -62,9 +65,10 @@ checklist for the first live run.
 | `State.*` | what the Lua thread and the frame thread share |
 | `Logic.*` | pure arithmetic (odometer, treadmill, life, ammo, transforms, blast kinds, lead point), unit-tested |
 | `Blast.*` | attack-area system vf0 detour -> kGEvExplosion for thrown/placed explosives (§18.5) |
+| `Ammo.*` | kHEvRested: magazines, ammo stocks and item counts back to full through MGSV's own ammo component (§18.11) |
 | `Menu.*` | MGSV's pause menu (native) / iDroid (Lua) -> kGuestInMenu; GuestState republished while frames stall (§18.6) |
 | `Sound.*` | Wwise SetPosition/PostEvent detours, D-Walker volume experiment and `!sound` diagnostics (§18.2) |
-| `Follow.*` | D-Walker follow: whistles, follow spot, steering, out-of-view catch-up (§18.3) |
+| `Follow.*` | D-Walker follow: whistles, follow spot, steering, out-of-view catch-up (§18.3); D-Horse's whistle (§8.1); the player's buddy orders |
 | `FramePace.*` | MGSV's frame rate: its Sleep(1) job polls shortened (`[Pacing] JobSleepUs`), `!pace` timings, wait probe, present experiments (§19) |
 
 ## 3. Threads
@@ -106,12 +110,15 @@ An unprotected error would hit `lua_atpanic` and end the game.
     - Standing, Crouching, Prone;
     - Cqc (CQC_HOLD/CONTINUOUS), FirstPerson (SUBJECT/BINOCLE, or riding with MGSV's cockpit camera: §18.10);
     - InBox (CBOX), BoxPoster (its item slot has a poster) (v8, §18.9);
+    - Nvg: the night-vision goggles are on (v10, §18.12);
   - mission/location codes;
   - `odoEpoch`, `odo`, `rootPos`/`rootYaw` (owner+0x30 matrix; yaw = atan2(fwd.x, fwd.z)), smoothed `velocity`;
   - camera pos/quat (setter source);
   - `camFovY` (focal length at camera+0xC through `FilmHeightMm`, or `FovOverrideDeg`), `camNear`;
   - life/lifeMax/stamina, stance;
-  - `weaponId`/`ammoInClip` (`weapons[currentInventorySlot]`, UNVERIFIED slot meaning), `ammoStock` = 0 (not mapped);
+  - `weaponId`/`ammoInClip`/`ammoStock`: the weapon in hand (`vars.currentInventorySlot` 0-2 = `weapons[]`/`ammoInWeapons[]`,
+    3 = the selected support item; VERIFIED live). `ammoStock` is MGSV's count for it: every round left with the magazine's
+    included (the SVG-76: 30 + 180 = 210 full), a support item's count (§18.11);
   - `buddyType` (vars), `vehicleId`, `phase`;
   - **buddy (v2):** `buddyFlags` (Present, PosValid, Ridden, Loading, Missing), `buddyObjectId`,
     `buddyAmmo` (`buddyGearAmmoCount[0]`), `buddyPos` (`GameObject.SendCommand(id,{id="GetPosition"})`),
@@ -142,14 +149,18 @@ An unprotected error would hit `lua_atpanic` and end the game.
   - **PadState:** user 0. The pad is neutral without a live host, with `kPadNeutral`, or before the
     sandbox is ready.
   - **Host events:**
-    - `kHEvHurt`: life −= a × LifeScale, clamped at 1;
+    - `kHEvHurt`: life −= a × LifeScale, clamped at 1; MGSV's own post-hit regeneration curve follows (§18.15);
     - `kHEvRespawn`: refill to lifeMax and clear the died latch;
-    - `kHEvHeal` (v3): life += a × LifeScale, up to lifeMax (never while he lies dead);
+    - `kHEvHeal` (v3): life += a × LifeScale, up to lifeMax (never while he lies dead). VERIFIED live 2026-10-13 (fake_er
+      `heal 500` 0.2 s after `hurt 1500`: life 2002 -> 4064, +2000 = 500 × 4, plus MGSV's own regeneration);
+    - `kHEvRested` (v10): life to lifeMax (unless he lies dead: kHEvRespawn does it) and the ammo refill (§18.11);
+    - `kHEvTarnished` (v10): Snake parks / gets the pad back (§18.14);
     - `kHEvWarped` and `kHEvStatus` are logged.
   - **Console** at `kOffGuestConsole`.
 
-Unused so far: HostState (camera boom clamp and clock sync come later), ActorTable, draw/HUD slots
-(phase 2 capture). The render ring only carries `kRenClearAll`.
+HostState is read for `kHostPlayerDead` (Death.cpp) and `kHostPuppeting` (Placed.cpp re-announces mines when the puppet
+starts); its camera boom clamp and clock are unused. ActorTable is unused. The draw lists, the render ring (meshes,
+textures) and the HUD slots carry the capture (§15, §16).
 
 ## 5. Boot sequence (Pump.cpp, status text in quotes)
 
@@ -170,7 +181,8 @@ Unused so far: HostState (camera boom clamp and clock sync come later), ActorTab
    - `TppGameStatus.Set('PhantomRing','S_DISABLE_PLAYER_DAMAGE')`;
    - clock set and frozen;
    - weather;
-   - audio: `PhantomRing.Audio(music, ambience, radio)` (§18.2).
+   - audio: `PhantomRing.Audio(music, ambience, radio)` (§18.2);
+   - MGSV's pause menu / iDroid restrictions (§18.6), and its "Auto-Aim Correction" off (`PhantomRing.AutoAim`, §18.13).
    Each result is logged.
 7. **buddy** "MGSV: deploying D-Walker (…)", steps of `PhantomRing.Buddy`:
    1. obtained / not dead / can sortie? Otherwise it reports `missing: …`, sets `kBuddyMissing`, and
@@ -179,8 +191,11 @@ Unused so far: HostState (camera boom clamp and clock sync come later), ActorTab
    3. wait while the block loads;
    4. `UnsetDisableCallBuddyType` + `CallBuddy(type, Vector3 [Buddy] Ahead m in front of Snake and Side m to his
       right, yaw, true)` (never behind him: the camera is there; §18.3);
-   5. `active` once a `TppCommonWalkerGear2`/`TppWalkerGear2` object answers GetPosition.
-   It gives up after 60 s.
+   5. `active` once a `TppCommonWalkerGear2`/`TppWalkerGear2` object answers GetPosition; D-Horse (no GetPosition) once its
+      skin is known (§8.1): looked for where it was called, and if it isn't there after ~8 s MGSV's own horse whistle brings
+      it (it gallops over; live 2026-10-13: `whistling it over: ok` -> `buddy skin learned ... (69 bones)` 5 s later).
+   It gives up after 60 s. The block is requested again when it hasn't come within ~10 s: a mission reload (MGSV's continue
+   after a game over) brings the save's buddy back (live: `waiting for block (active 4)` for D-Horse until this).
 8. **centre**: 1 s later the sandbox centre is set to Snake's position.
 9. **ready** "MGSV: ready (Mother Base, D-Walker deployed)":
    - the player's pad now reaches MGSV, and `kGuestReady` is set;
@@ -232,17 +247,23 @@ the sequence.
 - **Life:** Elden Ring damage × `LifeScale` (4) is written into the native life (`0x142C0147C`, regenerating) and
   `vars.playerLife`. The native one is written only while it agrees with vars within 400 (a frame of MGSV's ~760
   life/s regeneration; an exact compare dropped every hit taken while Snake regenerated: "write did not stick",
-  VERIFIED live with both games). The guest checks that the value stuck 8 frames later and warns once if the game
-  overwrote it. Snake is never
+  VERIFIED live with both games). The guest checks that the value stuck and warns once if the game overwrote it: 8 frames
+  after the worker applied it (`ApplyPendingLife`, ~33 ms ticks), life nearer the value it replaced than ours
+  (`logic::LifeWriteLost`, tested; writes under 400 not judged). Its first form (any rise of 300 in 8 frames) fired on
+  Margit's hits that had stuck: MGSV regenerated right after our write (it never saw a hit, so its regeneration delay never
+  started; §18.15 now holds it), and a 2-frame version caught writes still pending (live 2026-10-13; 0 warnings in 11 hits after). Snake is never
   taken below 1: the hit that would kill him sends kGEvDied once, and Elden Ring runs YOU DIED and then
   kHEvRespawn. MGSV's own damage is off in the sandbox (`Invincible`).
+- **Regeneration after an Elden Ring hit** follows MGSV's own post-hit curve (§18.15, `[Combat] RegenGate`): life is held
+  ~2.4 s, then regenerates at a rate that grows to ~750/s over ~6.25 s, as after an MGSV hit. Before, MGSV regenerated
+  from every Elden Ring hit at once at the full rate.
 - **Hurt feedback:** each hit that costs life queues `hurt` for the Lua pump: MGSV's camera noise (its
   camera is Elden Ring's) and blood on Snake's model (`HurtFeedback`, `HurtBlood`; docs/COMBAT.md).
 
 ## 8. Battle buddies (D-Walker first)
 
-MGSV runs the buddy entirely: following, orders (the D-pad buddy menu works through the pad),
-mounting (A prompt), dash/hover, and its guns. The guest:
+MGSV runs the buddy entirely: following, orders (the LB call menu works through the pad),
+mounting (Y prompt), dash/hover, and its guns. The guest:
 - deploys the configured buddy at boot (§5.7), or reports `kBuddyMissing` with the reason;
 - publishes its object id, position, derived heading and main-gun ammo every frame, plus `kBuddyRidden`
   when Snake rides it. Snake's root, odometer and `kGuestOnVehicle` then follow the walker, so Elden
@@ -250,8 +271,54 @@ mounting (A prompt), dash/hover, and its guns. The guest:
 - moves it along with every treadmill jump (or moves it *as* the jump while it is ridden);
 - reports its shots as kGEvBuddyFire.
 Horse, dog and Quiet go through the same code (`[Buddy] Type`). Their GameObject classes are
-`TppHorse2`, `TppBuddyDog2` and `TppBuddyQuiet2`. Drawing the buddy in Elden Ring comes with the phase 2
-capture (`kOwnerBuddy` draws).
+`TppHorse2`, `TppBuddyDog2` and `TppBuddyQuiet2`. The buddy is drawn in Elden Ring from the capture (`kOwnerBuddy` draws,
+live with D-Walker and D-Horse).
+
+### 8.1 D-Horse (`[Buddy] Type = horse`; live 2026-10-13, MGSV + fake_er/recorder)
+
+- **Position:** `TppHorse2` answers neither `GetPosition` nor `SetPosition` (SendCommand returns true and nothing; `Warp`,
+  `WarpRequest`, `SetWarpPosition`, `position = Vector3` forms and `CallBuddy` again: no effect, live). Its position is its
+  own skin's (`Skeleton.cpp`): SkinPublish gives every skinned model's (driver, binding), the binding starts with the
+  model's root matrix (the horse's model `+0xD0` translation followed it in a /proc memory scan). The pair is learned near
+  a hint -- where boot called it, beside Snake after a horse whistle (6 m, 20 s), under Snake while he rides it (1.5 m) --
+  as the nearest skin with 53+ bones that isn't Snake's (178) or one of his other skins standing exactly on his root (64
+  bones: once learned as the horse before this rule), stable for 10 publications; then every publication of that pair is
+  the buddy's position and heading (`MatrixYaw` of the root). Not published for 3 s = learned again at the next hint.
+  The horse's skeleton has 69 bones; a re-learn wants the same count. `!buddy` shows it (`buddy skin: driver ... (69
+  bones) at ...`). The Tick's Lua position (none for the horse) is replaced by it (Pump.cpp), so GuestState `buddyPos`
+  / `kBuddyPosValid`, capture ownership (`kOwnerBuddy` within 4 m) and revival work as for D-Walker.
+- **Calling it:** MGSV's call menu (hold LB) offers Knock / **Whistle (call D-Horse)** (right stick right, then click it
+  with the stick released) / Do it (defecate) / Sonar. The horse doesn't follow by itself; its whistle (buddy command
+  17, message `0x7C8CC24E84C3`, case byte-checked: `kBuddyCommandHorseWhistle`) makes it gallop to Snake and stop
+  beside him -- MGSV places it nearer first when it is far (live: 170 m -> beside Snake ~5 s later). `Follow.cpp`
+  issues it ([Buddy] `HorseFollowDistance = 15` m, `HorseWhistleEveryMs = 6000`) when it is that far from Snake on foot,
+  and at once after a treadmill jump (it can't be moved with him). The player's "Stay back" (18) holds that until their
+  next horse whistle (as D-Walker's modes do).
+- **Riding:** Y next to it mounts (PlayerStatus ON_HORSE, `vars.playerVehicleGameObjectId` = the horse 0x1a00): GuestState
+  `kGuestOnVehicle` (0x20), buddyFlags Present|PosValid|**Ridden** (0x7), `vehicleId` 0x1a00; Snake's root sits ~1.4 m
+  above the horse's. Left stick walks it (~3-4 m/s), **X taps** speed it up: canter ~6 m/s, gallop 13-17 m/s (live
+  odometer: 180 m in ~15 s); Y dismounts. No treadmill while riding: nothing moves the horse (Lua SetPosition, the
+  player's native placement while riding, the player's Warp while riding: all tried) -- the guest logs `D-Horse can't
+  be moved -- no treadmill while Snake rides it` and leaves it alone. MGSV's own world then limits the ride: the
+  airport terminal is ~40 m north of the sandbox centre, something stopped a gallop ~50 m east; south (~90 m) and then
+  west (~160 m) are open. Dismounting far away, the treadmill puts Snake back at the centre and the horse is whistled
+  over (in Elden Ring it jumps by that distance, then gallops back).
+- **Recording:** `horse_ride.prrec` (scratch recordings, README line): mount, walk, gallop, turn, stop, dismount,
+  the whistle back; 2616 of 2895 draw lists carry 14-20 buddy-owned draws.
+
+### 8.2 Another buddy in session (`!buddy`, the iDroid; live 2026-10-13)
+
+- `!buddy walker|horse|dog|quiet|none` (console) switches buddies without leaving the sandbox: the boot's buddy step runs
+  again from Ready (Snake keeps the pad, no box sequence, the centre kept), next to Snake. Live: walker -> horse 1.0 s
+  (`in-session buddy switch done`, the walker gone, the horse beside Snake, screenshots), horse -> walker 1.0 s (the walker
+  following again after a 5 s run).
+- **MGSV's own way works too:** iDroid (hold Start) > MISSIONS (RB) > BUDDY SUPPORT > D-HORSE ("Request deployment of
+  D-Horse", a drop point on the map, GMP -35,500 in memory only: saves are blocked) -- "Support Unit: Dispatch request
+  received [D-Horse]", the walker leaves and D-Horse arrives at Snake. `BlockMissions` only strikes out the DISMISS
+  entries, so this stays available. The guest follows the player's choice: once MGSV's active buddy type has been another
+  kind for 2 s, `[Buddy] Type` becomes it for the session (`boot: the player deployed D-Horse from the iDroid (was
+  D-Walker) -- following that choice`), the skin is learned anew (live: 69 bones, beside Snake). The next boot deploys
+  the ini's buddy again.
 
 ## 9. Saves
 
@@ -269,7 +336,7 @@ capture (`kOwnerBuddy` draws).
   `<dll dir>\PhantomRingSaveSink\`, and later reads of those names follow it there.
 - The launcher also backs up `userdata/<id>/287700` before each run.
 
-## 10. Live test checklist (first run)
+## 10. Live test checklist (first run, 2026-10-12; kept for reference -- every item has been run since)
 
 **Load and link**
 - [ ] `PhantomRingGuest.log`:
@@ -339,25 +406,20 @@ capture (`kOwnerBuddy` draws).
 
 ## 11. UNVERIFIED (what the live test settles)
 
-- **Runtime meaning of:**
-  - camera+0xC (focal, mm) and the film size behind the FOV;
-  - `currentInventorySlot` as an index into `weapons[]`;
-  - the vars liveness rate.
-- **Lua side:**
-  - every Lua API except those IH/MGS5VR use on this build (see GuestScript.cpp);
-  - the D-Walker GameObject class and its GetPosition / SetPosition;
-  - EndLoadingTips;
-  - the music calls;
-  - `CallBuddy`'s exact arguments (MGS5VR's D-Dog form is used).
-- **Native side:**
-  - the native hold call's effect on animation;
-  - the melee shape geometry vfunc;
-  - D-Walker's fire path;
-  - (D-Walker's mode byte and the restore/record methods: VERIFIED live, §18.3);
-  - whether `vars.playerLife` writes stick;
-  - the Steam vtable swap reaching the in-process client.
+Settled live since the first run (2026-10-12/13): `currentInventorySlot` as the weapon slot in hand (0-2, 3 = support
+item); the native life write sticks (§7); the D-Walker class (`TppCommonWalkerGear2`), its GetPosition / SetPosition
+(`pos = {x, y, z}`, §17) and `CallBuddy`'s arguments; EndLoadingTips; the audio mutes (§18.2); MGSV's ammo component
+(§18.11). Still open:
+
+- **Runtime meaning of:** camera+0xC (focal, mm) and the film size behind the FOV; the vars liveness rate.
+- **Native side:** the native hold call's effect on animation (native_treadmill is the default and works; `native` was
+  never played); the melee shape geometry vfunc; the Steam vtable swap reaching the in-process client.
 - **Stance/flag bits:** these come from `PlayerInfo.AndCheckStatus` names (values in re-backlog M5).
   Dive/roll detection relies on NORMAL_ACTION.
+- Every Lua API not named in §18 is still used as IH/MGS5VR use it on this build, without a check of its own.
+- D-Horse with Elden Ring (§8.1): only MGSV + fake_er/recorder so far -- how the host draws and grounds the horse, the
+  jump after a far dismount, riding speeds against Elden Ring's slopes (DESIGN `max_speed_vehicle`).
+- The regeneration curve (§18.15) against Elden Ring's real hits (fake_er's `hurt` only).
 
 ## 12. Offline verification
 
@@ -366,9 +428,9 @@ capture (`kOwnerBuddy` draws).
 
 | Test | Covers |
 |---|---|
-| `tests/test_guest_script.lua` (lua5.1) | the embedded script against a mock engine: Tick result order, command parser (Warp vs WarpAndWaitBlock, SetPosition), D-Walker steps, mission loading (direct/reserve/ACC), setup, console packing, an empty engine and an engine that throws |
+| `tests/test_guest_script.lua` (lua5.1) | the embedded script against a mock engine: Tick result order, command parser (Warp vs WarpAndWaitBlock, SetPosition), D-Walker steps, mission loading (direct/reserve/ACC), setup, console packing, the NVG flag, `refill`, `AutoAim`, an empty engine and an engine that throws |
 | `test_guest_pump` (real Lua 5.1.5) | Pump.cpp end to end: VM probe, script load and refs, Tick → frame state, the full boot sequence title → Continue → 10040 → load the sandbox mission → setup → D-Walker → centre → Ready (status texts), frame → Lua commands, the dev console over a real mapping (results, errors, syntax errors), live `phantomring.lua` override, leaving the sandbox; the engine's Lua stack is unchanged after every pump |
-| `test_guest_logic` | odometer (teleports, rebase, drift over 100k frames), treadmill (radius, direction, cooldown, height, with the odometer over 100 m), life clamp/death, ammo-counter shots, matrix→yaw/quat, quaternion rotation, focal→FOV |
+| `test_guest_logic` | odometer (teleports, rebase, drift over 100k frames), treadmill (radius, direction, cooldown, height, with the odometer over 100 m), life clamp/death, ammo-counter shots, the refill's magazine sizes (§18.11), matrix→yaw/quat, quaternion rotation, focal→FOV |
 | `test_guest_link` | attach handshake on a real file mapping, version refusal, kRenClearAll, GuestState/PoseBlock/events/pad flow, `!` console, host restart (re-attach, drain, console reset), host death; the shipped ini equals the built-in defaults; ini parsing |
 | `test_guest_proxy` | a dummy exe loads the proxy (`dinput8=n,b`) and gets a working real IDirectInput8W without and with `PHANTOMRING=1` (identity refusal, log checked); the wrapper hides gamepads/joysticks, keeps keyboard/mouse, and handles refcounts and QueryInterface |
 | `mgsv/verify_addresses.py` | every signature in Addresses.h against the exe on disk |
@@ -383,12 +445,22 @@ capture (`kOwnerBuddy` draws).
 - `!centre` sets the centre to Snake's current position.
 - `!debug on|off`.
 - `!blast` (explosions sent / kept out), `!menu` (menu state), `!sound ...` (§18.2), `!whistle`, `!follow on|off|spot a s|<m> <ms>|method m|modes list` (§18.3).
+- `!buddy [walker|horse|dog|quiet|none]` (state of the buddy and its skin, or another buddy in session, §8.2), `!regen
+  on|off` ([Combat] RegenGate for A/B tests, §18.15), `!loc <id>` / `!placeobj <id> x y z [yaw]` (experiments: the
+  player location manager's object for a GameObject id, and its set-position on the next frame; it knows only Snake).
+- `!refill` (what kHEvRested does), `!ammo` (refill state, last refill), `!ammo drain` (dev: every ammo/item stock to half
+  through MGSV's own setter, §18.11; queued and run on the Lua thread with the next Tick's results -- it used to call MGSV's
+  component lookup and setter from the console's worker thread -- `!ammo` shows the outcome); a refill asked more than 5 s
+  ago that never came back (a failed `PhantomRing.Tick` loses that update's commands) is queued again on the next request; `!capture hud skip <ps hash>` (dev: leave one UI pixel shader's draws out of the HUD
+  layer, how the night-vision overlay was found, §18.12). `!status` also shows the ammo refill and Tarnished mode.
 
 `phantomring.lua` next to the DLL overrides the embedded script, and is reloaded within 1 s of a change.
 `phantomring.default.lua` is written at start as a starting point.
 
 ## 14. Protocol
 
+v10 (2026-10-13): `kGuestNvg = 1 << 16` (§18.12), `kHEvRested = 7` (a = 0 grace rest, 1 respawn; §18.11),
+`kHEvTarnished = 8` (a = 1 Tarnished mode on, 0 off; §18.14). GuestState `ammoStock` is filled now (§4).
 v9 (2026-10-12 evening): `kPlacedAgain = 1 << 16` in kGEvPlaced `pad[0]` (§18.8). v5-v8: thrown/placed explosives (§18.8),
 the throw arc (v6), D-Walker's orders (v7), the damage share and the box flags (v8, §18.9).
 v4 (2026-10-12): `AmmoKind::kAmmoSmoke = 3` for kGEvExplosion (smoke / flares: no damage); kGEvExplosion documented
@@ -402,8 +474,8 @@ bit, melee attack id). The host may ignore them.
 ## 15. Capture (phase 2): what MGSV draws for Snake
 
 Files: `D3D11Hooks.*` (observation), `D3D11Reflect.*` (DXBC RDEF/ISGN reader, content hash),
-`Capture.*` (the decisions; today: the probe), `CaptureMesh.*`, `CaptureAssets.*`, `CaptureRing.*`
-(the publishing pipeline: written, NOT built yet, compiled out behind `PHANTOM_CAPTURE_PIPELINE`),
+`Capture.*` (the decisions and the probe), `CaptureMesh.*`, `CaptureAssets.*`, `CaptureRing.*`
+(the publishing pipeline: built and live since 2026-10-12, docs/STATUS.md),
 `tools/phantomring/capture_view.py` (host stand-in that keeps what the guest sends; `render` mode still
 to write). `[Capture] Enabled = true` (ini).
 
@@ -467,7 +539,7 @@ to write). `[Capture] Enabled = true` (ini).
   1024² BC1, all with full mip chains. PS constants: `cPSSystem` b0 (64 B), `cPSMaterial` b4 (128 B,
   `m_materials[8]` float4).
 
-### 15.3 Publishing (designed; code in CaptureMesh/Assets/Ring, not built yet)
+### 15.3 Publishing (CaptureMesh/Assets/Ring; live)
 
 - Owner: G-buffer draw with `cVSObject`; `m_eyepos` picks the game frame (history of the last 64
   camera-frame samples from Frame.cpp); `kOwnerPlayer` if `m_world`'s translation is within 2.5 m of
@@ -538,6 +610,8 @@ replayed exactly), wiring in `Capture.cpp`, `tools/phantomring/hud_dump.py`. `[C
   pixel for pixel minus the scene.
 - Not in it: full-screen post effects that are not UI jobs (MGSV's damage/blood edge is a post-process
   effect, not a UI job, UNVERIFIED which).
+- The night-vision goggles' noise and darkening IS drawn in a UI job (one full-screen quad, pixel shader
+  `0xae282a7fe2bdbdd9`): it is left out while the goggles are on (§18.12).
 
 ### 16.4 Tools
 
@@ -1109,6 +1183,126 @@ in first person view", the host saw a smoke cloud "jump between two places 30 m 
   5.5) -> (-8.6, 1.7, 5.5) -> (-40.5, 1.7, 5.5), always "throw 12") follows Elden Ring's world shifts, not the guest. The guest now
   also keeps a throw alive while its cloud puffs (Throw.cpp), and logs every attack id at most every 5 s again (the throttle used to
   swallow every repeat of a twice-a-second cloud).
+
+### 18.11 Ammo refill on rest and respawn (`Ammo.cpp`, protocol v10 `kHEvRested`; live 2026-10-13, MGSV + fake_er)
+
+Elden Ring refills the flasks when the player rests at a grace or respawns; the host sends `kHEvRested` (a = 0 rest, 1
+respawn) and the guest gives Snake everything back: life to full (unless he lies dead -- `kHEvRespawn` ends that), every
+weapon's magazine, every ammo stock, every support item (grenades, mines) and item count (NVG battery, ...) to its maximum.
+
+- **Where MGSV keeps ammo.** `vars.ammoInWeapons` / `vars.ammoStockCounts` (and a static copy at `0x142A5D110`+0xD8 that the
+  HUD's weapon box shows) are copies: a Lua write to vars is overwritten at the next shot (VERIFIED: 7/21 written, one shot
+  later 4/18). The authoritative counts are in the player's ammo component, the one `Player.GetAmmoStockBySlot` (Lua C
+  function `0x1409D1BB0`) reads: Player2System impl (`[0x142A82C28+8]`) +0xC8 -> +8, vtable `0x1423895D0` (found by a memory
+  scan for the magazine, then the Lua binding's code). Its layout and own setters (Addresses.h `kAmmo*`, byte-checked):
+  magazines u16 at `[+0x50] + (player * [+0xC] + slot) * 6` (+2 the sub magazine), set by vf 4 `SetMagazine(this, player,
+  slot, rounds, sub)` (`0x140EE96C0`, which also notifies the component's listener); 23 stocks with ids u8 `[+0x90]`, counts
+  u16 `[+0x98]`, maxima u16 `[+0xA0]`, count = min(value, max) by vf 15 `SetCount(this, index, -, count)` (`0x140EE9730`).
+  Stock indices: 0/2/4 the weapon slots (1/3 their sub ammo), 5 the hand (bionic arm), 6-13 the 8 support items, 14-21 the
+  items. A stock count is every round left, the magazine's included (it drops with each shot: SVG-76 full = 210 = 30 + 180).
+- **Refill:** the frame thread queues the Lua `refill` command; `PR.Magazines()` answers each weapon slot's magazine and sub
+  magazine from `TppEquip.GetAmmoInfo` (as MGSV's own `TppPlayer.SupplyWeaponAmmoFull` reads it); on the Lua thread right
+  after that Tick, `Ammo.cpp` calls `SetMagazine` for the three slots and `SetCount(max)` for every stock below its maximum,
+  then writes the vars copies and the HUD box's copy (only where it still shows the old count), so GuestState and MGSV's HUD
+  agree at once (MGSV itself refreshes them at the next shot or weapon change). Failures (vtable, a setter moved, no
+  component) refill nothing and log why. `TppPlayer.SupplyAllAmmoFullOnMissionFinalize` was not usable: it fills the gvars
+  for the next mission start. `Player.ChangeEquip` with the same weapon and full counts broke the weapon (Snake could no
+  longer raise the pistol; HUD "7/∞") -- never used for weapons.
+- **Live (fake_er `rested 0|1`):** `ammo: refill (rest: magazines 36:24->30 54:1->1 7:5->7; stocks #0(bullet 15) 204->210
+  #4(bullet 10) 19->21 #15(bullet 202) 7->8; HUD box 2 slot(s))` 15 ms after the event; vars and GuestState `ammoInClip` /
+  `ammoStock` 5/19 -> 7/21 in the next frame (fake_er trace); the weapon box went from "5/∞" to "7/∞" (screenshots). Respawn
+  (`die`, `rested 1`, `respawn`): magazines and stocks refilled, life from `kHEvRespawn` (7801). Life on a rest: 4064 ->
+  7801 in the frame after the event. After `!ammo drain` (every stock halved) a rest put all 11 back: grenades 4 -> 8, the
+  rocket 4 -> 8, AR 105 -> 210, ... This save never uses up grenades or reserve rounds (HUD "∞", an Infinity Bandana-like
+  setting: two thrown sleep grenades left the count at 8), so the drain is the way to see a support refill here.
+
+### 18.12 Night vision (`kGuestNvg`, Hud.cpp; live 2026-10-13, MGSV + fake_er/recorder)
+
+Player report: "MGSV's night-vision goggles do nothing in ER and make everything look darker".
+
+- **Detection:** `vars.currentItemIndex` is the item slot Snake uses (0 = none; the box's slot while he is in it), so the
+  goggles are on when `vars.items[vars.currentItemIndex] == TppEquip.EQP_IT_Nvg` (492). Found by a memory diff over four
+  toggles (vars+0x67C, registered as `currentItemIndex`: 3 on, 0 off; no PlayerStatus bit changes). `PR.Flags` sets `NVG`,
+  the frame publishes `kGuestNvg`. Toggle in MGSV: a short tap of D-pad left with the goggles as the current item (taps of 150
+  ms or more open the item menu instead).
+- **HUD layer:** with the goggles on the layer was 100% covered (MGSV's noise and vignette). Leaving out one UI pixel shader at a
+  time (`!capture hud skip`): `0xae282a7fe2bdbdd9` (a full-screen quad drawn inside a UI job; its textures are
+  `g_ReflectionTexture`, `g_tex_mesh`: a filter, not a HUD element) brought it to 4.6% (weapon box, NVG item box, prompts). It is
+  left out while the goggles are on (`hud::SetNightVision` from the frame's flags) and kept otherwise; `!capture hud` counts
+  the draws left out. Layer coverage now: 2.2% off, 4.1-5.4% on (notifications, the item box with its battery bar).
+- MGSV's own picture still turns green and noisy (the host never shows it); the host recreates night vision from `kGuestNvg`.
+- Recordings for the host: `nvg2.prrec` (goggles on t = 3.5-10.6 s and 14.7-19.8 s, a crouch-walk and a pan with them on).
+
+### 18.13 MGSV's auto-aim off (`[Boot] AutoAim = false`, `PR.AutoAim`; live 2026-10-13)
+
+Known issue: aiming (LT) swung Snake's aim onto the disabled MGSV soldiers that still stand around the airport (live: a
+rocket launcher's aim 30 deg off an Elden Ring target); `ClearMarkersSec` didn't help.
+
+- Reproduced: with the FB MR launcher, a camera yaw anywhere from -2 to 25 deg turned to exactly 12.57 deg when LT was pressed
+  (a disabled soldier at the guard post, screenshot); the pistol didn't snap. Moving or "vanishing" disabled soldiers didn't work
+  (`Warp`, `RequestVanish`, `Unrealize` left them where they stood; `SetEnabled` true + `Warp` moved them 4 m).
+- It is MGSV's option OPTIONS > Control Settings > **Auto-Aim Correction** ("readying a weapon will make you aim automatically
+  at enemies"). Applying it in the menu changed one byte of `.data2`, `0x142C14509` = `vars.optionSelectedIndices[11]` (the
+  registration table names the array; 0 ON, 1 OFF); the game reads it directly. The menu's own apply tried to save the config:
+  the save guard dropped `TPP_CONFIG_DATA` (Steam) and redirected `TPP_CONFIG_DATA0/1` to the sink; the option was set back
+  to ON in the menu afterwards.
+- The sandbox setup writes `vars.optionSelectedIndices[11] = 1` (`boot: auto-aim correction: off (was on)`), only while
+  MGSV's saves are blocked, so it is never saved: `[Saves] Block` *and* the file guards installed *and* the Steam Cloud swap
+  complete (`hidden::SavesBlocked() && saves::SteamGuarded()`; review 2026-10-13 -- with either guard incomplete the guest
+  carries on with saves live, and the write is skipped: `left as it is (the save guards are incomplete ...)`, checked by
+  test_guest_pump). Live after a boot: aiming the launcher at -1.8, 3, 8, 12.5, 17 and 25 deg
+  kept those yaws exactly (trace camera yaw); with the option set back on, 8 deg swung to 18.0 deg. `AutoAim = true` keeps
+  MGSV's setting.
+
+### 18.14 Tarnished mode (protocol v10 `kHEvTarnished`; live 2026-10-13, MGSV + fake_er)
+
+The player can take the Tarnished (flasks, spirit ashes, Torrent): the host stops the puppet, sends a neutral pad and
+`kHEvTarnished` a = 1; Snake parks where he stands until a = 0.
+
+- Parked: the pad is neutral whatever the host sends (`pad::SetParked`, on top of the death block), no treadmill warps
+  (`state::Parked()` in Frame.cpp's hold), no follow whistles, steering or catch-up for D-Walker (Follow.cpp). Death,
+  hurt/heal, rested and the capture go on as usual. A new host session unparks him.
+- Live: 4 s of full stick forward plus A, LT+RT while parked: root unchanged (820.60, 1179.10), no shot; after a = 0 the
+  same stick moved him at once. A 4-minute park with the pad cycling every 10 s through full stick, LT/RT, Y+X and the
+  right stick: Snake at (820.60, 1179.10) at all 24 samples, alert phase 0, life full, D-Walker standing at (821.81, -11.90,
+  ...) 0.5 m from its spot, 0 whistles, 0 treadmill warps, MGSV's frames and poses still flowing (frame 17040); a = 0 and
+  4 s of stick: 6 m walked.
+- fake_er: `pr er tarnished 1|0` (it also drops `kHostPuppeting` meanwhile, like the real host).
+
+### 18.15 Regeneration after Elden Ring's hits (`[Combat] RegenGate`; live 2026-10-13, MGSV + fake_er)
+
+Player report (Margit): Snake regenerated ~760 life/s right after each Elden Ring hit and survived 18 hits in 70 s
+standing still: MGSV never saw those hits, so the pause it takes after its own never started.
+
+- **MGSV's own curve, measured:** S_DISABLE_PLAYER_DAMAGE reset, Snake warped 11.5 m up (Lua `Warp`): the landing took
+  7801 -> 2651 (a 15 m fall and a 22 m fall killed him: MGSV game over and its continue; 8 m: nothing). Life sampled at 10 Hz
+  from /proc/<pid>/mem: held at 2651 for 2.4 s, then +17, +27, +37 ... per 0.3 s up to +225 per 0.3 s (~750/s) about 6.3 s
+  into it, then steady: full 12.5 s after the hit. Fitted: life = base + 60·s² for the first 6.25 s of regeneration (s =
+  time since the 2.4 s pause), then +750/s (`logic::RegenCap`, unit-tested against these numbers).
+- **Where MGSV keeps it:** the hit shows in the player's life block (`Player2System impl -> [+0x380]`: f32 life `+0x60`, max
+  `+0x64`, a 0.13 s hit flash `+0x70`, the last damage `+0x74` = 5150) and a damage-reaction record (a 2.25 s timer, attack
+  id 103); the regeneration's own timer/ramp state wasn't found in the player's objects (depth 1 from the impl and its
+  instance, and 256 KB around both: memory diffs over two falls). A page-guard write watch on the native life
+  (`0x142C0147C`, PAGE_WRITECOPY .data2) crashed MGSV (access violation while single-stepping): never watch that page.
+  So the guest **emulates** the curve instead of triggering MGSV's state: after every kHEvHurt it caps life with
+  `RegenCap(post-hit life, time since the hit)` and writes it back down (the usual native+vars write) whenever MGSV
+  regenerated above it; a new hit starts it again from its own post-hit life; a heal (kHEvHeal) raises the base by what
+  it gave; kHEvRested/kHEvRespawn end it. MGSV's blood/screen damage effects stay the `HurtFeedback` ones (camera shake,
+  blood on the model).
+- **Live, fake_er `hurt 1000` (-4000 life):** gate off (`!regen off`): 3801 and regenerating at once, ~750/s, full 5.3 s
+  later. Gate on: 3801 held 2.4 s (+13: one frame of MGSV's own regeneration before each write lands), then 3830, 3877,
+  3945, 4054, 4192 ... per 0.5 s, full 10.6 s after the hit -- MGSV's own curve from that life (its fall: 12.5 s from
+  2651). `!status` frame line: `life ... (regen gate from 3801, 3.1 s, N capped)`.
+- **Live with Elden Ring (2026-10-13 morning, combined run, the real MGSV):** a 9.8 m fall at the Castleward Tunnel grace
+  (`landed at 13.8 m/s -> fall damage 18%`, kHEvHurt 354): 7801 -> 6385, held (6385-6398) until ~3.3 s after the hit, then
+  6441, 6527, 6638, 6776, 6950, 7181, 7427, 7709 per 0.5 s, full **7.25 s** after the hit; the same fall with `!regen off`:
+  regenerating 0.13 s after it, full **2.0 s** after it. **Margit**, Snake standing still inside his arena: gate on -- 5 hits
+  (15/15/33/29/16%) in 12 s and Snake died (a second try: dead in ~17 s); gate off -- 22 hits in 75 s and still alive,
+  regenerating 0.1-0.17 s after every hit (the player's "18 hits in 70 s"). Between a hit and the cap's first write life may
+  rise 50-140 (MGSV's own regeneration while the hit's write is pending: `RegenGate` skips while `vars::PendingLife()`), then
+  goes back to the curve.
+- `[Combat] RegenDelaySec = 2.4`, `RegenRampSec = 6.25`, `RegenRate = 750` tune it; `RegenGate = false` restores the old
+  behaviour.
 
 ## 19. Frame pacing (`FramePace.cpp`, `[Pacing]`, `!pace`; live 2026-10-12, both games)
 

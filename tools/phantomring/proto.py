@@ -26,9 +26,10 @@ from ctypes import c_char, c_double, c_float, c_int16, c_int32, c_int64, c_uint8
 
 # ---- constants (namespace phantom::proto) ---------------------------------------------------------
 MAGIC = 0x47524850  # "PHRG"
-VERSION = 9  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
+VERSION = 11  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
 				# v6: GuestState aimThrowPos/Vel/Kind (0xA8..0xC4) + GuestFlags.ThrowAim; v7: GuestEventType.BuddyOrder; v8: GuestFlags.InBox/BoxPoster, Fire pad[1] = damage share;
-				# v9: PLACED_AGAIN (Placed pad[0]: an announcement repeated)
+				# v9: PLACED_AGAIN (Placed pad[0]: an announcement repeated); v10: GuestFlags.Nvg, HostEventType.Rested/Tarnished;
+				# v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100: plugin versions, readable on a mismatch)
 DEFAULT_PATH = "/dev/shm/phantomring_v1"
 DEFAULT_MAPPING_WIN = "file:Z:\\dev\\shm\\phantomring_v1"
 
@@ -129,6 +130,7 @@ class GuestFlags(enum.IntFlag):
 	ThrowAim = 1 << 13  # v6: aimThrowPos/Vel/Kind valid (Snake aims a throwable)
 	InBox = 1 << 14  # v8: Snake is inside a cardboard box
 	BoxPoster = 1 << 15  # v8: ...a box with a poster (distracts soldiers in MGSV)
+	Nvg = 1 << 16  # v10: night-vision goggles on
 
 
 class GuestBuddyFlags(enum.IntFlag):
@@ -179,6 +181,8 @@ class HostEventType(enum.IntEnum):
 	Status = 4
 	Heal = 5  # v3: a = amount in Hurt units (life / LifeScale), b = ER HP healed
 	Detonate = 6  # v5: b placed id: an ER enemy is within its trigger radius
+	Rested = 7  # v10: a = 0 grace rest, 1 respawn: refill ammo (and life)
+	Tarnished = 8  # v10: a = 1 Tarnished mode on, 0 Snake back
 
 
 class HurtKind(enum.IntEnum):
@@ -301,6 +305,9 @@ class Header(Struct):
 		("guestStatus", c_uint32),
 		("hostStatusText", c_char * 64),
 		("guestStatusText", c_char * 96),
+		("guestProtocol", c_uint32),     # v11: the guest's VERSION, written even while it refuses to attach (0: older guest)
+		("hostRelease", c_char * 14),    # v11: each plugin's VERSION file, e.g. b"0.2.0-alpha"
+		("guestRelease", c_char * 14),
 	]
 
 
@@ -799,6 +806,7 @@ class Link:
 		h.hostHeartbeatQpc = qpc_now()
 		h.hostStatus = int(status)
 		set_text(h, "hostStatusText", text)
+		set_text(h, "hostRelease", _release())
 		h.version = VERSION
 		h.sessionNonce = nonce
 		h.magic = MAGIC
@@ -842,6 +850,38 @@ class Link:
 		w, h = min(hdr.width, MAX_HUD_W), min(hdr.height, MAX_HUD_H)
 		off = OFF_HUD_SLOTS + index * HUD_SLOT_BYTES
 		return hdr, self.mm[off:off + w * h * 4]
+
+
+def _release() -> str:
+	from .version import release  # the VERSION file: the stand-ins say they are this checkout's plugins
+	return release()
+
+
+FIRST_NAMED_RELEASE = "0.2.0-alpha"  # common/Version.h kFirstNamedRelease: the first plugins that fill hostRelease/guestRelease
+
+
+def header_text(struct_obj, field: str) -> str:
+	return bytes(getattr(struct_obj, field)).split(b"\0", 1)[0].decode("ascii", "replace")
+
+
+def mismatch_text(host_release: str, host_protocol: int, guest_release: str, guest_protocol: int) -> str:
+	"""common/Version.cpp MismatchText, word for word (the player sees the C++ one in Elden Ring's corner)."""
+	same = host_release == guest_release
+
+	def side(release: str, protocol: int) -> str:
+		if not release:
+			return f"from before v{FIRST_NAMED_RELEASE}" + (f" (protocol {protocol})" if protocol else "")
+		return f"v{release} (protocol {protocol})" if same and protocol else f"v{release}"
+	return (f"PhantomRing versions differ: Elden Ring plugin {side(host_release, host_protocol)}, "
+		f"MGSV plugin {side(guest_release, guest_protocol)} -- reinstall both")
+
+
+def version_mismatch(h) -> str | None:
+	"""The player-readable text when the host (h.version) and the guest (h.guestProtocol, v11+) speak different
+	protocols; None when they match or the guest has not said (an older guest leaves guestProtocol 0)."""
+	if h.magic != MAGIC or not h.guestProtocol or h.guestProtocol == h.version:
+		return None
+	return mismatch_text(header_text(h, "hostRelease"), h.version, header_text(h, "guestRelease"), h.guestProtocol)
 
 
 def set_text(struct_obj, field: str, text: str) -> None:

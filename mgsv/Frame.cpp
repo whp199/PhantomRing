@@ -1,7 +1,9 @@
 #include "Frame.h"
 
 #include "Addresses.h"
+#include "Ammo.h"
 #include "Capture.h"
+#include "Hud.h"
 #include "Combat.h"
 #include "Config.h"
 #include "Death.h"
@@ -60,13 +62,24 @@ namespace phantom::guest::frame
 		bool              g_diedNow{ false };      // this frame: the life clamp latched (Death.cpp)
 		bool              g_respawnedNow{ false };  // this frame: kHEvRespawn
 		std::int32_t      g_lifeWritten{ -1 };  // value of our last native write, for the stickiness check
+		std::int32_t      g_lifeBefore{ -1 };   // ... and the life it replaced
 		std::uint64_t     g_lifeWrittenFrame{ 0 };
 		bool              g_lifeWarned{ false };
+		// The regeneration gate (logic::RegenCap): after an Elden Ring hit, life is capped by MGSV's own post-hit curve.
+		bool              g_regenGate{ false };
+		ULONGLONG         g_regenHitAt{ 0 };
+		float             g_regenBase{ 0 };
+		std::uint64_t     g_regenCapped{ 0 };  // frames the cap wrote life back down (!status)
 		bool              g_nativeHoldWarned{ false };
 		bool              g_wasReady{ false };
 		Vec3              g_buddyLast;        // buddy heading from its motion (no per-frame GetRotationY)
 		bool              g_buddyLastValid{ false };
 		float             g_buddyYaw{ 0 };
+		// A ridden vehicle no warp of ours could move (D-Horse answers no Lua SetPosition: live 2026-10-13, 15 warps in 45 s
+		// never landed): after 3 misses in a row the treadmill leaves it alone until Snake rides something else.
+		std::uint16_t     g_warpVehicle{ 0xFFFF };
+		int               g_vehicleMisses{ 0 };
+		std::uint16_t     g_unwarpable{ 0xFFFF };
 		proto::GuestState g_last{};
 		std::mutex        g_publishLock;  // GuestState has two writers: the camera frame, and the Lua thread while frames stall
 		std::uint64_t     g_lastFrameMs{ 0 };
@@ -114,6 +127,33 @@ namespace phantom::guest::frame
 		constexpr float kNozzleAhead = 1.8f, kNozzleRight = 0.45f, kNozzleUp = 1.9f;
 		constexpr float kFlameReach = 12.0f;  // the stream's reach (kGEvBuddyFire pad[1] in mm)
 
+		// After an Elden Ring hit MGSV regenerates as after its own (Logic.h RegenCap): life MGSV regenerated above the curve is
+		// written back down to it, until the curve reaches full life (or a respawn/rest ends it).
+		void RegenGate(const vars::Snapshot& a_vars)
+		{
+			if (!g_regenGate) {
+				return;
+			}
+			const auto& c = Cfg();
+			if (!c.regenGate || !a_vars.valid || !a_vars.lifeMax) {
+				g_regenGate = false;
+				return;
+			}
+			const double since = static_cast<double>(::GetTickCount64() - g_regenHitAt) / 1000.0;
+			const float  cap = logic::RegenCap(g_regenBase, since, c.regenDelaySec, c.regenRampSec, c.regenRate);
+			if (cap >= static_cast<float>(a_vars.lifeMax)) {
+				g_regenGate = false;
+				Log::Debug("regen: MGSV's curve reached full life {:.1f} s after the last hit (from {:.0f})", since, g_regenBase);
+				return;
+			}
+			if (vars::PendingLife() >= 0 || static_cast<float>(a_vars.life) <= cap + 1.0f) {
+				return;
+			}
+			if (vars::WriteLife(static_cast<std::uint16_t>(std::max(1.0f, cap)))) {
+				++g_regenCapped;
+			}
+		}
+
 		// ---- Elden Ring -> Snake ------------------------------------------------------------------
 		void HostEvents(const vars::Snapshot& a_vars, const Vec3& a_root)
 		{
@@ -129,6 +169,7 @@ namespace phantom::guest::frame
 						const auto r = logic::ApplyHurt(life, static_cast<float>(e.a), Cfg().lifeScale);
 						Log::Debug("hurt: er {} kind {} -> life {} -> {}", e.a, e.b, life, r.life);
 						if (Cfg().nativeLifeWrite && r.life != life && vars::WriteLife(r.life)) {
+							g_lifeBefore = life;
 							g_lifeWritten = r.life;
 							g_lifeWrittenFrame = g_frame;
 						}
@@ -145,6 +186,11 @@ namespace phantom::guest::frame
 							}
 						}
 						life = r.life;
+						if (Cfg().regenGate && r.life < a_vars.lifeMax) {
+							g_regenGate = true;
+							g_regenHitAt = ::GetTickCount64();
+							g_regenBase = r.life;
+						}
 						if (r.died && !g_diedLatched) {
 							g_diedLatched = true;
 							g_diedNow = true;
@@ -160,10 +206,12 @@ namespace phantom::guest::frame
 					g_diedLatched = false;
 					g_respawnedNow = true;
 					if (a_vars.lifeMax && vars::WriteLife(a_vars.lifeMax)) {
+						g_lifeBefore = life;
 						g_lifeWritten = a_vars.lifeMax;
 						g_lifeWrittenFrame = g_frame;
 						life = a_vars.lifeMax;
 					}
+					g_regenGate = false;
 					Log::Info("life: respawn -- refilled to {}", a_vars.lifeMax);
 					break;
 				case proto::kHEvHeal:
@@ -176,13 +224,38 @@ namespace phantom::guest::frame
 						const float add = static_cast<float>(e.a) * Cfg().lifeScale;
 						const auto  healed = static_cast<std::uint16_t>(std::min<float>(a_vars.lifeMax, static_cast<float>(life) + std::max(0.0f, add)));
 						if (healed > life && Cfg().nativeLifeWrite && vars::WriteLife(healed)) {
+							g_lifeBefore = life;
 							g_lifeWritten = healed;
 							g_lifeWrittenFrame = g_frame;
 							Log::Debug("heal: er {} -> life {} -> {}", e.a, life, healed);
+							g_regenBase += static_cast<float>(healed - life);  // a flask is no regeneration: it isn't capped
 							life = healed;
 						}
 						break;
 					}
+				case proto::kHEvRested:
+					// v10: a grace rest (a = 0) or a respawn (a = 1, grace / Stake of Marika / death): Elden Ring refills the
+					// flasks, Snake gets his life and every magazine, ammo stock and item back (Ammo.cpp, docs/GUEST.md 18.11).
+					// A respawn's death is still kHEvRespawn's to end (it clears the died latch and stands him up).
+					if (!g_diedLatched && a_vars.lifeMax && a_vars.life < a_vars.lifeMax && vars::WriteLife(a_vars.lifeMax)) {
+						g_lifeBefore = life;
+						g_lifeWritten = a_vars.lifeMax;
+						g_lifeWrittenFrame = g_frame;
+						life = a_vars.lifeMax;
+					}
+					g_regenGate = false;
+					ammo::Request(e.a ? "respawn" : "rest");
+					Log::Info("rested: {} -- life {}/{}, ammo refill requested", e.a ? "respawn" : "grace rest", life, a_vars.lifeMax);
+					break;
+				case proto::kHEvTarnished:
+					// v10: Tarnished mode -- the player takes the Tarnished (a = 1) and Snake parks: neutral pad, no treadmill
+					// warps, no follow whistles; a = 0 gives him back the pad where he stands.
+					if ((e.a != 0) != state::Parked()) {
+						state::SetParked(e.a != 0);
+						pad::SetParked(e.a != 0);
+						Log::Info("tarnished mode: {}", e.a ? "on -- Snake parked (neutral pad, no warps, no whistles)" : "off -- Snake has the pad again");
+					}
+					break;
 				case proto::kHEvWarped:
 					Log::Debug("host: the Elden Ring player was moved by the game (warp/elevator)");
 					break;
@@ -196,13 +269,16 @@ namespace phantom::guest::frame
 					break;
 				}
 			}
-			// Does the engine keep a native write? (UNVERIFIED: vars.playerLife may be a copy the player
-			// object overwrites.) A big jump back up within a few frames means it doesn't.
-			if (g_lifeWritten >= 0 && g_frame == g_lifeWrittenFrame + 8) {
-				if (!g_lifeWarned && a_vars.life > g_lifeWritten + 300) {
+			// Does the engine keep a native write? 8 frames on, once the worker has applied it (vars::ApplyPendingLife runs
+			// every ~33 ms), life back nearer the value it replaced than ours means it didn't. (It used to warn on any rise of
+			// 300: MGSV regenerates right after our write -- it never saw a hit, so its regeneration delay never starts --
+			// ~100 in 8 frames and more, and the warning fired on writes that had stuck: live, Margit's hits 2026-10-13.)
+			if (g_lifeWritten >= 0 && g_frame >= g_lifeWrittenFrame + 8 && (vars::PendingLife() < 0 || g_frame >= g_lifeWrittenFrame + 30)) {
+				const int now = a_vars.life;
+				if (!g_lifeWarned && vars::PendingLife() < 0 && logic::LifeWriteLost(g_lifeBefore, g_lifeWritten, now)) {
 					g_lifeWarned = true;
-					Log::Warn("life: native playerLife write did not stick ({} written, {} now) -- need the Lua/native damage path (RE M6)",
-						g_lifeWritten, a_vars.life);
+					Log::Warn("life: native playerLife write did not stick ({} -> {} written, {} now) -- need the Lua/native damage path (RE M6)",
+						g_lifeBefore, g_lifeWritten, now);
 				}
 				g_lifeWritten = -1;
 			}
@@ -313,7 +389,7 @@ namespace phantom::guest::frame
 			}
 			const auto& c = Cfg();
 			const auto  centre = state::Centre();
-			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled()) {
+			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled() || state::Parked()) {
 				return;
 			}
 			const bool onVehicle = (a_lua.flags & state::kLVehicle) || a_vars.vehicleId != kNullId || a_lua.ridden != kNullId;
@@ -325,6 +401,22 @@ namespace phantom::guest::frame
 				Log::Warn("motion: native hold unavailable -- using the Lua treadmill");
 			}
 			const bool native = wantNative && hold::Available() && !onVehicle;
+			const auto riddenId = onVehicle ? (a_vars.vehicleId != kNullId ? a_vars.vehicleId : a_lua.ridden) : kNullId;
+			if (riddenId != g_warpVehicle) {
+				g_warpVehicle = riddenId;
+				g_vehicleMisses = 0;
+				if (g_unwarpable != kNullId && riddenId != g_unwarpable) {
+					g_unwarpable = kNullId;
+				}
+			}
+			if (onVehicle && riddenId != kNullId && riddenId == a_lua.buddyId && a_lua.buddyActive == state::kBuddyTypeHorse && g_unwarpable != riddenId) {
+				// D-Horse answers no SetPosition (Lua, native player placement and Warp while riding: all tried live 2026-10-13).
+				g_unwarpable = riddenId;
+				Log::Info("treadmill: D-Horse can't be moved -- no treadmill while Snake rides it");
+			}
+			if (onVehicle && riddenId == g_unwarpable) {
+				return;
+			}
 
 			if (c.holdMode == HoldMode::kNative && native) {
 				if (!normal || busy) {
@@ -390,7 +482,10 @@ namespace phantom::guest::frame
 				cmd = std::format("warp {} {} {} {}", lifted.x, lifted.y, lifted.z, warpYaw);
 			}
 			// Keep the buddy where it was relative to Snake, or Elden Ring would see it jump by the radius.
-			if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId) {
+			if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId &&
+				a_lua.buddyActive == state::kBuddyTypeHorse) {
+				follow::OnShift(d.shift);  // D-Horse can't be moved (no SetPosition): it is whistled back to Snake at once
+			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId) {
 				const Vec3 b = a_lua.buddyPos + d.shift;
 				cmd += std::format("{}owarp {} {} {} {} {}", cmd.empty() ? "" : ";", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw);
 				follow::OnShift(d.shift);  // and where it is walking to
@@ -417,6 +512,7 @@ namespace phantom::guest::frame
 	{
 		++g_frame;
 		link::NoteGameTick();
+		hold::ServicePending();
 		skeleton::ObserveOwner(a_sample.owner, g_frame);
 		if (!g_qpcFreq) {
 			LARGE_INTEGER f;
@@ -448,19 +544,31 @@ namespace phantom::guest::frame
 		// pause menu stops Lua updates) keep the epoch.
 		const auto gen = link::AttachGeneration();
 		if (gen != g_attachGen || (bootReady && !g_wasReady)) {
+			const bool newSession = gen != g_attachGen;
 			g_attachGen = gen;
 			g_odo.Reset(root);
 			g_ammo.Reset();
 			g_buddyAmmoPrimed = false;
 			g_warpPending = false;
 			Log::Info("motion: odometer epoch {} at {:.2f},{:.2f},{:.2f}", g_odo.Epoch(), root.x, root.y, root.z);
+			if (newSession && state::Parked()) {
+				state::SetParked(false);  // a new host session starts with Snake in control (it says so if not)
+				pad::SetParked(false);
+				Log::Info("tarnished mode: off (new host session)");
+			}
 		}
 		g_wasReady = bootReady;
 
 		const bool warpWindow = g_warpPending && ::GetTickCount64() - g_warpAt < 3000;
 		if (g_warpPending && !warpWindow) {
 			g_warpPending = false;
-			Log::Warn("treadmill: warp didn't land within 3 s");
+			if (g_warpVehicle != kNullId && ++g_vehicleMisses >= 3 && g_unwarpable != g_warpVehicle) {
+				g_unwarpable = g_warpVehicle;
+				Log::Warn("treadmill: what Snake rides ({:#x}) can't be moved -- no treadmill while he rides it (Snake can leave the sandbox)",
+					g_warpVehicle);
+			} else if (g_unwarpable != g_warpVehicle || g_warpVehicle == kNullId) {
+				Log::Warn("treadmill: warp didn't land within 3 s");
+			}
 		}
 		// A warp lands where we sent him (WarpLift puts him on his feet), but MGSV's root still settles a few cm
 		// over the next frames, and the pre-warp root bobbed with his stride: vertical is held at the warp's
@@ -477,13 +585,20 @@ namespace phantom::guest::frame
 			g_warpPending = false;
 			g_settleUntil = g_frame + 20;
 			++g_landings;
+			g_vehicleMisses = 0;
 		}
 		g_odo.Update(odoRoot, dt, warpWindow && g_warpPending, c.teleportJump, c.velocitySmoothing);
 		g_lastRoot = root;
 
+		// Riding a buddy whose GameObject gives no position (D-Horse): its skin is the one under Snake (Skeleton.cpp).
+		if (lua.buddyId != kNullId && (lua.ridden == lua.buddyId || v.vehicleId == lua.buddyId) && lua.buddyActive != state::kBuddyTypeWalker) {
+			skeleton::HintBuddy(root, 1.5f, 500);
+		}
+
 		pad::SetSource(bootReady || c.padDuringBoot ? pad::Source::kHost : pad::Source::kNeutral);
 		g_diedNow = g_respawnedNow = false;
 		HostEvents(v, root);
+		RegenGate(v);
 		{
 			proto::HostState hs{};
 			const bool       haveHost = link::ReadHostState(hs);
@@ -571,6 +686,11 @@ namespace phantom::guest::frame
 				f |= proto::kGuestBoxPoster;
 			}
 		}
+		// v10: night-vision goggles on (MGSV's own effect only darkens Elden Ring's frame: the host recreates it)
+		if (lf & state::kLNvg) {
+			f |= proto::kGuestNvg;
+		}
+		capture::hud::SetNightVision((lf & state::kLNvg) != 0);
 		if (aim.valid) {
 			f |= proto::kGuestThrowAim;  // v6: the arc MGSV draws, for the host's own
 			std::copy_n(aim.pos, 3, s.aimThrowPos);
@@ -602,10 +722,19 @@ namespace phantom::guest::frame
 		s.lifeMax = v.lifeMax;
 		s.stamina = v.stamina;
 		s.stance = Stance(lf);
-		const auto slot = v.inventorySlot;  // UNVERIFIED: index into weapons[] of the equipped one
-		s.weaponId = slot < v.weapons.size() ? v.weapons[slot] : 0;
-		s.ammoInClip = slot < v.ammo.size() ? v.ammo[slot] : 0;
-		s.ammoStock = 0;  // not mapped yet (Player.GetAmmoStockBySlot)
+		// The weapon in hand: slots 0-2 index weapons[] / ammoInWeapons[], 3 is the selected support item (VERIFIED live). The
+		// stock is MGSV's count for it: all the rounds left, the magazine's included (it drops with every shot; full = 210 for
+		// the SVG-76: 30 + 180), a support item's count (grenades left).
+		const auto slot = v.inventorySlot;
+		if (slot == addr::kSupportSlotInHand) {
+			s.weaponId = v.supportIndex < v.supportWeapons.size() ? v.supportWeapons[v.supportIndex] : 0;
+			s.ammoInClip = 0;
+			s.ammoStock = v.supportIndex < 8 ? v.stockCounts[6 + v.supportIndex] : 0;
+		} else {
+			s.weaponId = slot < 3 ? v.weapons[slot] : 0;
+			s.ammoInClip = slot < 3 ? v.ammo[slot] : 0;
+			s.ammoStock = slot < 3 ? v.stockCounts[slot * 2] : 0;
+		}
 		s.buddyType = v.buddyType;
 		s.vehicleId = riding ? (v.vehicleId != kNullId ? v.vehicleId : lua.ridden) : kNullId;
 		s.phase = v.phase;
@@ -658,9 +787,10 @@ namespace phantom::guest::frame
 		if (g_frame % 30 == 0) {
 			std::scoped_lock lock(g_describeLock);
 			g_describe = std::format("frame {} ready {} flags {:#x} lua {:#x} root {:.2f},{:.2f},{:.2f} yaw {:.1f} (vars {:.1f}) odo {:.2f},{:.2f},{:.2f} epoch {} "
-			                         "teleports {} warps {} landed {} life {}/{} fov {:.1f} focal {:.1f} pose {} pad polls {} buddy {:#x} id {} ammo {}",
+			                         "teleports {} warps {} landed {} life {}/{} (regen gate {}, {} capped) fov {:.1f} focal {:.1f} pose {} pad polls {} buddy {:#x} id {} ammo {}",
 				g_frame, ready, f, lf, root.x, root.y, root.z, yaw * 57.2958f, v.rotYDeg, odo[0], odo[1], odo[2], g_odo.Epoch(), g_odo.Teleports(), g_warps, g_landings, v.life,
-				v.lifeMax, fov * 57.2958f, a_sample.focalMm, skeleton::PublishedFrames(), pad::Polls(), bf, lua.buddyId, s.buddyAmmo);
+				v.lifeMax, g_regenGate ? std::format("from {:.0f}, {:.1f} s", g_regenBase, static_cast<double>(::GetTickCount64() - g_regenHitAt) / 1000.0) : std::string("off"),
+				g_regenCapped, fov * 57.2958f, a_sample.focalMm, skeleton::PublishedFrames(), pad::Polls(), bf, lua.buddyId, s.buddyAmmo);
 		}
 	}
 

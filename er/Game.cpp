@@ -119,8 +119,12 @@ namespace phantom::er::game
 		if (!a_player || !addr().Has(A::ChrInsSetYaw) || !std::isfinite(a_yaw)) {
 			return false;
 		}
-		alignas(16) float yaw[4] = { a_yaw, 0, 0, 0 };
-		addr().Fn<SetYawFn>(A::ChrInsSetYaw)(a_player.chr, yaw);
+		// The argument is an Euler triple about Elden Ring's X, Y, Z axes (0x461F60 multiplies [0], [1], [2] by 0.5 and
+		// rotates about the unit vectors at 0x1448062A0 / 0x1448062D0 / 0x1448064E0, read live: (1,0,0), (0,1,0), (0,0,1)).
+		// The yaw is [1]. Passed in [0] it pitched the puppet about X instead (live: physics quaternion (0.47, 0, 0, 0.88) for
+		// a 56 deg "yaw"), so prompts that check the player's facing never showed while Snake played ("Traverse the mist").
+		alignas(16) float euler[4] = { 0, a_yaw, 0, 0 };
+		addr().Fn<SetYawFn>(A::ChrInsSetYaw)(a_player.chr, euler);
 		return true;
 	}
 
@@ -442,6 +446,57 @@ namespace phantom::er::game
 			out += *it;
 		}
 		return out;
+	}
+
+	namespace
+	{
+		// A module of the player, read only once its vtable is the one whose RTTI name was checked (cached per name).
+		std::uint8_t* CheckedModule(const Player& a_player, std::uint32_t a_offset, const void*& a_vt, std::string_view a_name)
+		{
+			auto*      module = a_player ? Field(a_player.modules, a_offset) : nullptr;
+			const auto vptr = module ? SafeRead<const void*>(module) : std::nullopt;
+			if (!vptr) {
+				return nullptr;
+			}
+			if (!a_vt && RttiNameOfVtable(*vptr) == a_name) {
+				a_vt = *vptr;
+			}
+			return *vptr == a_vt ? module : nullptr;
+		}
+
+		const void* s_rideVt = nullptr;
+		const void* s_ladderVt = nullptr;
+	}
+
+	std::optional<int> LadderState(const Player& a_player)
+	{
+		auto* ladder = CheckedModule(a_player, kModLadder, s_ladderVt, "CS::CSPlayerLadderModule");
+		const auto state = ladder ? SafeRead<std::int8_t>(ladder + kLadderState) : std::nullopt;
+		if (!state) {
+			return std::nullopt;
+		}
+		return static_cast<int>(*state);
+	}
+
+	Mounted PlayerMounted(const Player& a_player)
+	{
+		if (!a_player) {
+			return Mounted::kUnknown;
+		}
+		auto* ride = CheckedModule(a_player, kModRide, s_rideVt, "CS::CSChrRideModule");
+		const auto state = LadderState(a_player);
+		if (!ride || !state) {
+			return Mounted::kUnknown;
+		}
+		const auto mounting = SafeRead<std::uint8_t>(ride + kRideMounting);
+		const auto mounted = SafeRead<std::uint8_t>(ride + kRideMounted);
+		if (!mounting || !mounted) {
+			return Mounted::kUnknown;
+		}
+		if (*mounting || *mounted) {
+			return Mounted::kTorrent;
+		}
+		return *state != -1 ? Mounted::kLadder : Mounted::kNone;
 	}
 
 	std::string RttiName(const void* a_object)

@@ -36,6 +36,9 @@ namespace phantom::er::GeomProbe
 		// AssetEnvironmentGeometryParam (tools/re/er_params.py): +0x10 i16 hp, +0x3B bits (bit0 breaks by the player's body).
 		constexpr std::uint32_t kParamHp = 0x10;
 		constexpr std::uint32_t kParamBits = 0x3B;
+		// ... +0x3C bits_3c bit 0 is_ladder (fromsoftware-rs ASSET_GEOMETORY_PARAM_ST; offline, 168 rows of this regulation.bin have it:
+		// AEG004_180.., AEG027_000.., AEG030_001.., ...).
+		constexpr std::uint32_t kParamBits3C = 0x3C;
 
 		// Where a geom ins keeps its world position: the translation row of a 4x4 matrix at +0x220 (rows +0x220/+0x230/+0x240,
 		// translation +0x250, w 1). VERIFIED live 2026-10-12 (Limgrave, m60_42_33/m60_43_37): `geom learn`'s distinct positions,
@@ -120,6 +123,36 @@ namespace phantom::er::GeomProbe
 			a_out = { v[0], v[1], v[2] };
 			return Length(a_out - a_c) <= a_r && Length(a_out) > 1e-3f;
 		}
+	}
+
+	std::vector<Asset> Ladders(const Vec3& a_centre, float a_radius)
+	{
+		std::vector<Asset> out;
+		auto* man = Manager();
+		if (!man || !g_posOffset) {
+			return out;
+		}
+		for (auto* block : Blocks(man)) {
+			for (auto* ins : Instances(block)) {
+				auto* param = SafePtr(ins + kInsParam);
+				if (!param || !(SafeRead<std::uint8_t>(param + kParamBits3C).value_or(0) & 1)) {
+					continue;
+				}
+				Vec3 p;
+				if (!Near3(ins + g_posOffset, a_centre, a_radius, p)) {
+					continue;
+				}
+				Asset a;
+				a.ins = ins;
+				a.name = NameOf(ins);
+				a.hp = SafeRead<std::int16_t>(param + kParamHp).value_or(-1);
+				a.pos = p;
+				a.posValid = true;
+				out.push_back(a);
+			}
+		}
+		std::ranges::sort(out, {}, [&](const Asset& a_a) { return Length(a_a.pos - a_centre); });
+		return out;
 	}
 
 	std::vector<Asset> Near(const Vec3& a_centre, float a_radius, bool a_breakableOnly)
@@ -246,6 +279,17 @@ namespace phantom::er::GeomProbe
 			}
 			return out;
 		}
+		if (sub == "ladders") {
+			const float radius = a_w.size() > 2 ? std::strtof(a_w[2].c_str(), nullptr) : 300.0f;
+			const auto  list = Ladders(me, radius);
+			std::string out = std::format("{} ladders (param is_ladder) within {:.0f} m of ({:.1f}, {:.1f}, {:.1f}):", list.size(), radius, me.x, me.y, me.z);
+			for (std::size_t i = 0; i < list.size() && i < 40; ++i) {
+				const auto& a = list[i];
+				out += std::format("\n {:2} {} at ({:.2f}, {:.2f}, {:.2f}) {:.1f} m (dy {:+.1f}) ins {}", i, a.name, a.pos.x, a.pos.y, a.pos.z, Length(a.pos - me),
+					a.pos.y - me.y, static_cast<void*>(a.ins));
+			}
+			return out;
+		}
 		if (sub == "dump" && a_w.size() > 2) {
 			auto*       ins = reinterpret_cast<std::uint8_t*>(std::strtoull(a_w[2].c_str(), nullptr, 0));
 			std::string out = std::format("{} {}:", static_cast<void*>(ins), NameOf(ins));
@@ -257,7 +301,7 @@ namespace phantom::er::GeomProbe
 			return out;
 		}
 		return std::format("geom: {} loaded blocks, {} assets ({} breakable); position at +{:#x}{}\n geom learn [use] | offset <hex> | near [radius [filter]] | all "
-		                   "[radius [filter]] | dump <ins>   (filter: a name substring, -substring to leave out)",
+		                   "[radius [filter]] | ladders [radius] | dump <ins>   (filter: a name substring, -substring to leave out)",
 			blocks.size(), total, breakable, g_posOffset, g_posOffset ? "" : " (unknown)");
 	}
 }

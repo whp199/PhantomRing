@@ -36,6 +36,8 @@ namespace phantom::guest::follow
 
 	// Console: whistle once on the next Update (`!whistle`), or switch following (`!follow on|off`).
 	void RequestWhistle();
+	// MGSV's Lua thread: D-Horse's whistle at once (boot, before the sandbox is ready); false if its checks failed.
+	bool WhistleHorseNow(const char* a_why);
 	void SetEnabled(bool a_on);
 	// Console: `!follow method command|restore|record` ([Buddy] FollowMethod; false = unknown name) and `!follow modes
 	// <list>` ([Buddy] FollowModes: normal stealth search intercept mode1 mode2 | all).

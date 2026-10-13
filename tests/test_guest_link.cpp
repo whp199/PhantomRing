@@ -59,7 +59,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.debugLog == d.debugLog && shipped.mapping == d.mapping);
 	CHECK(shipped.autoBoot == d.autoBoot && shipped.mission == d.mission && shipped.hasPosition == d.hasPosition && shipped.rotYDeg == d.rotYDeg);
 	CHECK(shipped.disableSoldiers == d.disableSoldiers && shipped.invincible == d.invincible && shipped.clockTime == d.clockTime &&
-	      shipped.clearMarkersSec == d.clearMarkersSec && d.clearMarkersSec == 5);
+	      shipped.clearMarkersSec == d.clearMarkersSec && d.clearMarkersSec == 5 && shipped.autoAim == d.autoAim && !d.autoAim);
 	CHECK(shipped.freezeClock == d.freezeClock && shipped.weather == d.weather && shipped.pressButtons == d.pressButtons && shipped.timeoutSec == d.timeoutSec);
 	CHECK(shipped.buddy == d.buddy && shipped.buddyAhead == d.buddyAhead && shipped.buddySide == d.buddySide && shipped.buddyFollow == d.buddyFollow &&
 	      shipped.buddyFollowDistance == d.buddyFollowDistance && shipped.buddyFollowEveryMs == d.buddyFollowEveryMs &&

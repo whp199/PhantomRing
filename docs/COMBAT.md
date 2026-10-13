@@ -48,15 +48,16 @@ is `CSTeamTypeEnemy` or `CSTemaTypeRival` (sic). Read offline, the Tarnished (te
   wherever he stands in Elden Ring (Elden Ring scales max HP with the area; measured against the Tarnished's own max HP
   -- read every frame -- a late-game soldier is as ordinary as a Limgrave one). Bigger ones are worth more lives:
   bigness t = 0 up to `big_from` (1.5) × the Tarnished's max HP, 1 from `boss_from` (5) ×, log-interpolated between;
-  reference = max HP / `boss_lives`^t (70: a 3000 HP field boss against a 522 HP Tarnished takes 18 per rifle round,
-  an assault-rifle magazine ~18%). Bosses are recognised by their HP, not by the boss bar (its entries, CSFeMan
+  reference = max HP / `boss_lives`^t (45: a 3000 HP field boss against a 522 HP Tarnished takes 14 per assault-rifle
+  round with MGSV's own share, 0.2115 -- a magazine 14%; live, Margit (4174 HP vs 572): 30 rounds 607 HP = 14.5%. The old
+  70 was set for the class table's rifle, 0.425 of a life, twice MGSV's real share: 9.8% a magazine on Margit). Bosses are recognised by their HP, not by the boss bar (its entries, CSFeMan
   +0x5BF0, are unverified). Elden Ring's guard reductions still apply (the top-up scales by what got through, below).
 - Headshot: hit above `head_fraction` of the capsule height: × `headshot_mult` (4.5 on an ordinary enemy: MGSV's
   headshots kill) down to `headshot_mult_boss` (1.5) with t, and at least a medium flinch. A lethal headshot (not stun,
   not flame) on an ordinary enemy also takes at least `headshot_min_lives` (1.05) of a soldier's life, × (1 - t): none
   on a boss. Without it the assault rifle's own share (0.2115 × 4.5 = 0.95 of a life) left a Limgrave soldier at 11 HP.
 - Targets met with MGSV's own shares: assault rifle 5 body hits / 1 head on a Limgrave soldier (219 HP: 0.2115 -> 46 a
-  hit; head 230), handgun 4, sniper (0.71) 2 / 1, field boss ~10-20% a magazine (tested). VERIFIED live with both games
+  hit; head 230), handgun 4, sniper (0.71) 2 / 1, a boss ~15% a magazine (tested; live on Margit, §8). VERIFIED live with both games
   (2026-10-12 evening): five body hits `hp 219 -> 177 ... 35 -> 9 (wanted -46)` and dead; one headshot `HEADSHOT ...
   bullet 230` on a 219 HP soldier: dead.
 - Tranquilizer: no damage, sleep build-up: `tranq_share` (head: `tranq_share_head`) of the target's own sleep resistance
@@ -137,6 +138,48 @@ is `CSTeamTypeEnemy` or `CSTemaTypeRival` (sic). Read offline, the Tarnished (te
 failing that, fromsoftware-rs's holder index), struct name and row stride all match. Offsets:
 `tools/re/er_params.py fields <STRUCT>`.
 
+### Progression: Elden Ring's levels and weapons for Snake (`[Progression]`, off by default; roadmap 2.12)
+
+Snake's damage is counted in MGSV soldiers' lives against each target's own HP (above), so it never grows with the
+Tarnished: five assault-rifle body hits kill any ordinary enemy and a magazine takes ~15% of any boss, at rune level 9 or 150.
+The option lets Elden Ring's progression count for that (`er/Progression.{h,cpp}`, the arithmetic in `er/CombatLogic.cpp`
+`ProgressionFactor`, unit-tested in `tests/test_host_combat.cpp` `TestProgression`):
+
+| `damage_scaling` | Snake's lethal damage x |
+|---|---|
+| `off` (default) | 1: MGSV's own |
+| `level` | (rune level / `level_reference`) ^ `level_exponent`: with 20 and 0.5, level 10 x0.71, 15 x0.87, 20 x1, 40 x1.41, 80 x2, 150 x2.74 |
+| `weapon` | 1 + `weapon_bonus` x upgrade / its maximum, for the right-hand armament in use: +0 x1, +12 x1.72, +25 (a somber +10) x2.5 with 1.5 |
+| `both` | level x weapon |
+
+The factor is kept within `min_factor` .. `max_factor` (0.5 .. 3) and multiplies every lethal hit Snake and his buddy land --
+rounds, CQC, blasts, D-Walker's rounds and flames (`HitRules::progression` in `FromLives`); sleep and stun build-up and the stun
+blast's fixed token stay as they are (the headshot's kill guarantee is counted in lives, so it scales too).
+Re-read twice a second while Snake plays; every change is logged (`progression (level): rune level 15, right hand 18000000 (+0 of
+25) -> Snake's damage x0.87`). `pr er progression [off|level|weapon|both]` shows the readout and switches the mode live.
+
+**Vigor needs no option.** Elden Ring's hits already cost Snake the share of the Tarnished's max HP they take (`hurt_share`,
+`combat::HurtForGuest`): a Margit hit of 300 is 52% of a 572 HP Tarnished's bar and so 52% of Snake's life; with 1200 HP it is 25%
+of either. Every Vigor point, HP talisman or Crimson Tears upgrade makes Snake exactly as much tougher as the
+Tarnished; a "Vigor -> Snake's max life" option would count it twice.
+
+What is read (each checked, else the factor stays 1 and the log says why once; fromsoftware-rs `player_game_data.rs`):
+`[PlayerIns+0x580]` PlayerGameData (RTTI `CS::PlayerGameData`), +0x14 max HP (must equal the data module's), +0x3C eight u32
+attributes Vigor .. Arcane, +0x68 the rune level (must equal their sum - 79, Elden Ring's rule), +0x31C its ChrAsm (EquipGameData
++0x2B0, +0x6C): +0x10 the right hand's slot in use (0..2), +0x7C the equipment param ids (right hand slot s at [1 + 2s]). A weapon
+id is its EquipParamWeapon row ((id / 100) x 100: base + infusion) plus the upgrade (id % 100); the maximum is how many
+ReinforceParamWeapon rows its `reinforce_type_id` (+0xDA) has (25 for most, 10 for somber: 357 and 231 base weapons in this
+regulation, unit-tested against it; Longsword type 0 -> 25, type 2200 -> 10). Both tables bind through `params::Table` (struct
+name and row size checked: 0x298, 0x80). VERIFIED live 2026-10-13 (the player's save): `rune level 15 (Vig 17 Min 10 End 13 Str 16
+Dex 13 Int 9 Fai 9 Arc 7), max HP 572` (both cross-checks pass), `right hand: slot 1 weapon 18000000` (the Halberd in his hand on
+the screenshot) `+0 of 25`; D-pad right as the Tarnished -> `slot 0 weapon 2000000` (the Longsword in his hand); the other ids
+are the Vagabond's (Heater Shield 31330000 left, unarmed 110000 elsewhere). The factor on real hits (fake MGSV's Snake on Fort
+Haight's tower, `combat shoot rifle` with MGSV's share 0.2115 at a 167 HP enemy's body, `pr er progression <mode>` between the
+shots): off `bullet 35`, level `bullet 31` (x0.87), weapon `bullet 35` (+0: x1), both `bullet 31` -- as computed. Again with the
+real MGSV (2026-10-13 morning, combined run; a 167 HP soldier in the Castleward Tunnel, `combat shoot rifle` at his body, the
+mode switched live between shots): off 35, level 31, weapon 35, both 31 (`progression (level): rune level 15, right hand 18000000
+(+0 of 25) -> Snake's damage x0.87`), and `progression off` back.
+
 ## 3. Ini flags
 
 ### Host: `PhantomRingHost.ini`
@@ -154,7 +197,7 @@ failing that, fromsoftware-rs's holder index), struct name and row stride all ma
 | `top_up` | true | complete the wanted damage with ChangeHp after ER's own (weapon-based) bullet damage (§2) |
 | `verify_ms`, `verify_failures` | 300, 3 | how long a bullet may take to land before it counts as a miss (a landed hit is topped up the next frame) |
 | `units_per_life` | 40 | class units in one soldier's life (when MGSV sends no share) |
-| `big_from`, `boss_from`, `boss_lives` | 1.5, 5, 70 | max HP / the Tarnished's: ordinary up to big_from, a boss (worth boss_lives soldiers) from boss_from |
+| `big_from`, `boss_from`, `boss_lives` | 1.5, 5, 45 | max HP / the Tarnished's: ordinary up to big_from, a boss (worth boss_lives soldiers) from boss_from (45: an assault-rifle magazine with MGSV's share takes ~15% of a boss; live, Margit, §8) |
 | `share_mult` | 1 | × MGSV's own damage share (v8) |
 | `head_fraction`, `headshot_mult`, `headshot_mult_boss` | 0.82, 4.5, 1.5 | headshots (ordinary → boss) |
 | `headshot_min_lives` | 1.05 | a lethal headshot on an ordinary enemy takes at least this many soldiers' lives (none on a boss) |
@@ -173,6 +216,8 @@ failing that, fromsoftware-rs's holder index), struct name and row stride all ma
 | `fall_hurt_speed`, `fall_lethal_speed` | 12.5, 19.8 | m/s at landing (~8 m hurts, ~20 m kills; ≥ 10% once it hurts) |
 | `guest_life_scale` | 4 | must equal the guest's `LifeScale` (fall damage is sent in ER units) |
 | `hurt_share`, `hurt_mult` | true, 1 | ER's hits cost Snake the share of his life they'd cost the Tarnished (44 of a 522 HP Tarnished = 8.4% of Snake's 7801); false = raw ER damage (× `LifeScale`: 2%, regenerated in under a second) |
+| `[Progression] damage_scaling` | off | off \| level \| weapon \| both: Elden Ring's progression scales Snake's lethal damage (§2 "Progression") |
+| `[Progression] level_reference`, `level_exponent`, `weapon_bonus`, `min_factor`, `max_factor` | 20, 0.5, 1.5, 0.5, 3 | level: x (level / reference)^exponent; weapon: x (1 + bonus x upgrade / max); the factor's range |
 | `explosion_fx` | auto | explosion visuals (§9): auto \| bullet \| sfx (no verified call: off) \| off |
 | `explosion_lethal/stun/sleep/smoke` | 10030001, 10035001, 10064001, `10033001 300192` | each look: BulletParam burst row [+ effect id instead of its own] |
 | `explosion_flame`, `explosion_breaker`, `explosion_shrapnel` | 10700000, 10030000, 10030000 | D-Walker's flames (Dragonfire), the breakers (the flying Fire Pot) |
@@ -184,7 +229,7 @@ failing that, fromsoftware-rs's holder index), struct name and row stride all ma
 | `round_flight`, `round_speed_rocket`, `round_speed_grenade` | true, 16, 80 | explosive rounds fly (m/s) from Snake's muzzle (§9) |
 | `round_speed_rocket_boost`, `round_rocket_boost_after` | 60, 1 | a rocket's motor: from 16 to 60 m/s over 0.3 s after 1 s (docs/HOST.md "Rocket motor") |
 | `flame_fx`, `flame_per_second`, `flame_speed` | true, 6, 14 | D-Walker's flamethrower drawn with Elden Ring flames |
-| `[Puppet] motion`, `catch_up`, `unstick`, `unstick_seconds` | root_motion, 0.6, true, 0.5 | docs/HOST.md "Motion" |
+| `[Puppet] motion`, `catch_up`, `unstick`, `unstick_seconds` | kinematic, 0.6, true, 0.5 | docs/HOST.md "Motion" |
 | `[Stealth] box_hide`, `speffect`, `still_speed`, `slow_speed`, `slow_grace`, `reveal_distance` | true, 20004999, 0.4, 1.8, 1.5, 2 | the cardboard box (docs/HOST.md) |
 | `[Stealth] poster`, `poster_range`, `poster_stare`, `poster_cooldown` | true, 15, 4, 12 | enemies stop and stare at a poster box |
 
@@ -272,6 +317,7 @@ pr er "combat route auto|bullet|hp|ini"
 pr er "boom lethal|stun|sleep|smoke [radius]"   an explosion visual 5 m in front of the Tarnished (§9); `boom` = status
 pr er "boom mode auto|bullet|sfx|off|ini"       `boom restore` puts the carrier rows back now
 pr er status                         the puppet line includes host falls and "DYING for Snake"
+pr er "progression [off|level|weapon|both]"   the Tarnished's level, attributes, right-hand armament and its upgrade, the factors
 ```
 
 fake_mgsv (`pr fake-mgsv`, guest console `pr lua '!…'`): `!walk on|off`, `!autofire on|off`,
@@ -402,6 +448,31 @@ attack ids.
 | Snake killed by a group | `Snake died` -> ChrIns::Kill -> YOU DIED; Snake dives and lies down in MGSV, drawn lying there in ER (`death_visual = keep`); respawn after the load, life 7801/7801 |
 | a mob near a Stake of Marika | "Choose revival location" waits for the player (dead bit already clear): Snake stays down until the respawn load |
 | bullet route | confirmed on the first hit every session; 0 hp fallbacks |
+
+**Margit, the Fell Omen** (2026-10-13, Elden Ring with fake MGSV, the player's level-15 save, 572 HP; `combat shoot rifle`
+at his chest with MGSV's assault-rifle share 0.2115, one round per 100 ms):
+
+| What | Result |
+|---|---|
+| one 30-round magazine, `boss_lives` 70 | 4174 -> 3764: 410 HP = **9.8%** (13-14 a round) |
+| the same, `boss_lives` 45 (now the default) | 4174 -> 3567: 607 HP = **14.5%** (~20 a round) |
+| Margit's hits on Snake | 143-234 HP on the hit hook -> kHEvHurt 375-614 (25-41% of Snake's life); one combo took 523 of 572 as the Tarnished |
+| Snake killed by him | `Snake died` -> ChrIns::Kill -> YOU DIED -> respawn at the Castleward Tunnel grace (closer than the Stake: no choice offered) 18.9 s later, `kHEvRespawn` + `kHEvRested 1`, Snake back; the walk to the fog and through it again (the step-aside) worked twice |
+
+Margit was never brought below 85%.
+
+**With the real MGSV** (2026-10-13, combined run, the player's save; Snake aims with LT and the right stick, RT fires the
+SVG-76 for real, the camera turned onto Margit's chest every 80 ms):
+
+| What | Result |
+|---|---|
+| 26 rounds (from 30/210 to 4/184) | 4174 -> 3644: 530 HP = **12.7%** (the bullet route confirmed: 25 landed / 0 missed, ER dealt 54% of the wanted damage, 24 topped up) |
+| a full magazine (30 rounds, auto-reload after) | 4174 -> 3574: 600 HP = **14.4%** |
+| Margit's hits on Snake, 29 hits in two fights | 11-45% of Snake's 7801 life each (11, 15, 21, 25, 29, 33, 41, 45%); MGSV regenerates ~760 life/s right after each hit (it never saw one), so Snake survived 18 hits in 70 s standing next to him, and died when hits chained (twice) |
+| death | `Snake died` -> YOU DIED -> the Castleward Tunnel grace 18.6 s later, `kHEvRespawn, kHEvRested 1`, guest `ammo: refill (respawn: magazines 36:4->30; stocks 184->210)`, life 7801; the fog again, through, the fight again |
+| sleep grenade at his feet | thrown (LT, then RT while LT is held), 2 bounces, MGSV's fuse 4.97 s, Elden Ring's sleep mist r 9 m (whether Margit's sleep build-up rose was not read) |
+
+Margit was never brought below 85% (lowest 3574 of 4174).
 
 ## 9. Explosion visuals (Elden Ring effects at MGSV's blasts)
 

@@ -41,6 +41,10 @@ namespace phantom::guest
 		// the sandbox showed in Elden Ring's HUD layer ("32m") and pulled Snake's aim onto itself (live: a launcher's aim stuck
 		// 30 deg off the Elden Ring target, its rockets flew there). 0 = never.
 		int         clearMarkersSec{ 5 };
+		// MGSV's "Auto-Aim Correction" (OPTIONS > Control Settings) while PhantomRing runs: off, because it snapped Snake's aim onto
+		// the disabled MGSV soldiers standing around the sandbox (live: an FB MR launcher aimed 3-25 deg to their side turned to
+		// them; with it off the aim stays put). In memory only, and only while MGSV's saves are blocked ([Saves] Block).
+		bool        autoAim{ false };
 		bool        invincible{ true };     // TppGameStatus S_DISABLE_PLAYER_DAMAGE: only Elden Ring hurts Snake
 		std::string clockTime{ "12:00:00" };  // empty = keep MGSV's clock
 		bool        freezeClock{ true };
@@ -83,6 +87,10 @@ namespace phantom::guest
 		// chose is left alone. Read from the walker's record once its controller is known (VERIFIED live: the call menu's
 		// Search Mode -> "D-Walker mode normal -> search", left alone 74 m away; Normal Mode -> followed again).
 		std::string buddyFollowModes{ "normal" };
+		// D-Horse ([Buddy] Type = horse): MGSV's own "Whistle (call D-Horse)" (command 17) whenever it is farther than
+		// HorseFollowDistance (m) from Snake on foot, at most every HorseWhistleEveryMs: it gallops over. 0 = never.
+		float       buddyHorseFollowDistance{ 15.0f };
+		int         buddyHorseWhistleEveryMs{ 6000 };
 
 		// [Motion]
 		HoldMode holdMode{ HoldMode::kNativeTreadmill };  // the Lua Warp turns MGSV's camera behind Snake (GUEST.md 19)
@@ -116,6 +124,13 @@ namespace phantom::guest
 		// [Combat]
 		float                      lifeScale{ 4.0f };  // MGSV life points per Elden Ring damage point (DESIGN 13b.5)
 		bool                       nativeLifeWrite{ true };
+		// MGSV's regeneration after an Elden Ring hit, the way it regenerates after its own (logic::RegenCap; live-measured):
+		// hold RegenDelaySec, then a rate growing to RegenRate life/s over RegenRampSec. RegenGate = false: MGSV regenerates
+		// from Elden Ring's hits at once (~760 life/s).
+		bool                       regenGate{ true };
+		float                      regenDelaySec{ 2.4f };
+		float                      regenRampSec{ 6.25f };
+		float                      regenRate{ 750.0f };
 		bool                       hurtFeedback{ true };   // Elden Ring hits shake MGSV's camera (PR.Hurt, Player.RequestToSetCameraNoise)
 		bool                       hurtBlood{ true };      // ...and put blood on Snake (Player.SetBloodToModel)
 		bool                       deathCollapse{ true };  // Elden Ring death: Snake dives to the ground and lies there until the respawn (Death.cpp)

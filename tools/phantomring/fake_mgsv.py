@@ -29,6 +29,9 @@ Combat by hand (docs/COMBAT.md), through the guest console (`tools/pr lua '!<cmd
     !share <s>                               (v8) MGSV's damage share sent with every !fire (pad[1] = s x 10000; 0 = unknown)
     !move <speed m/s> [yaw_deg]              walk/run at a constant speed along an absolute MGSV yaw (0 = +Z); !move 0 stops
     !ride on|off|auto                        D-Walker ridden / not / the old 4 s of every 12
+    !buddy walker|horse                      the buddy: D-Walker (BuddyType WALKER_GEAR) or D-Horse (HORSE: ridden, its gallop)
+    !stick world|camera [m/s]                the left stick moves Snake along MGSV x/z (+3 m/s), or relative to the camera as
+                                             MGSV does (up = away from it; full stick m/s on foot, default 5; ridden: the buddy's)
     !box on|off|poster                       (v8) kGuestInBox (+ kGuestBoxPoster): Snake hides in a cardboard box
     !flame [seconds]                         D-Walker's flamethrower: kGEvBuddyFire with no bullet (pad[1] = 12000 mm reach) ~8/s
     !fpv on|off                              kGuestFirstPerson
@@ -51,6 +54,10 @@ Overlay tests (er/Overlay.h):
     !boot N [text]      back to "booting" for N s: not ready, guestStatusText = text (ER shows it in a corner)
     !fail [text]        status Failed with that text; !ready to recover
     !menu on|off        kGuestInMenu (MGSV's iDroid/pause owns the pad: the host must give MGSV the whole pad, ER nothing)
+    !nvg on|off         (v10) GuestFlags.Nvg: Snake's night-vision goggles (the host recreates them on Elden Ring's frame)
+
+Protocol v10 host events are logged: kHEvRested (a = 0 grace rest, 1 respawn) refills ammo (30+120) and life;
+kHEvTarnished a = 1 parks Snake (no walking, no autofire) until a = 0.
 
     python3 -m phantomring.fake_mgsv [--seconds N] [--create] [--summary out.json] [--quiet]
 """
@@ -75,6 +82,13 @@ SANDBOX_RADIUS = 10.0     # m: Snake is warped back to the centre past this (the
 LIFE_MAX = 6000
 WEAPON_ID = 0x0123        # arbitrary fake equip id
 DWALKER_VEHICLE_ID = 0x0402
+HORSE_OBJECT_ID = 0x0403  # arbitrary fake GameObjectId of D-Horse
+# The buddy the fake runs (--buddy / !buddy): BuddyType, object id, riding speed factor on the circle walk, stick speed (m/s)
+# while ridden, status text.
+BUDDIES = {
+	"walker": (proto.BuddyType.WALKER_GEAR, DWALKER_VEHICLE_ID, 2.5, 8.0, "D-Walker deployed"),
+	"horse": (proto.BuddyType.HORSE, HORSE_OBJECT_ID, 4.0, 13.0, "D-Horse deployed"),
+}
 MESH_SNAKE, MESH_DWALKER = 0x5A4B000000000001, 0x5A4B000000000002
 TEX_SNAKE, TEX_DWALKER = 0x7E57000000000001, 0x7E57000000000002
 # !fire kinds: TppEquip bullet id, AmmoKind, pellets, explosive (GuestEvent.pad[0] = id | 0x80000000 if explosive)
@@ -198,6 +212,12 @@ class FakeGuest:
 		self.fpv = False
 		self.flame_until = 0.0
 		self.next_flame = 0.0
+		self.nvg = False          # v10: !nvg on|off -> GuestFlags.Nvg
+		self.parked = False       # v10: kHEvTarnished a=1 -> Snake parks (no walking, no autofire) until a=0
+		self.buddy = "walker"     # --buddy / !buddy walker|horse
+		self.stick_mode = "world"  # !stick world|camera: the left stick along MGSV x/z (+3 m/s), or relative to the camera like MGSV
+		self.stick_speed = 5.0     # !stick camera <m/s>: full stick on foot (MGSV's run ~4.7 m/s)
+		self.last_cam = None
 
 	def elapsed(self) -> float:
 		return time.monotonic() - self.t0
@@ -243,7 +263,7 @@ class FakeGuest:
 		h.guestNonce = self.nonce  # last: the host reads our slots only once this matches
 		self.attached = True
 		self.stats["attaches"] += 1
-		self.status(Status.Ready, "fake MGSV: in the sandbox, D-Walker deployed")
+		self.status(Status.Ready, f"fake MGSV: in the sandbox, {BUDDIES[self.buddy][4]}")
 		self.log(f"attached to session {self.nonce:#018x} (epoch {self.odo_epoch})")
 		return True
 
@@ -313,6 +333,16 @@ class FakeGuest:
 				self.life = min(LIFE_MAX, self.life + ev.a * 4)
 				st["healed"] += self.life - before
 				self.log(f"heal: {ev.a} x 4 (ER {ev.b} HP) -> life {before} -> {self.life}")
+			elif ev.type == HostEventType.Rested:
+				# v10: Elden Ring refilled the flasks (a = 0 grace rest, 1 respawn): the guest refills ammo and life.
+				before = (self.ammo, self.stock, self.life)
+				self.ammo, self.stock, self.life = 30, 120, LIFE_MAX
+				self.log(f"host: kHEvRested a={ev.a} ({'respawn' if ev.a else 'grace rest'}) -> ammo {before[0]}+{before[1]} -> 30+120, "
+					f"life {before[2]} -> {self.life}")
+			elif ev.type == HostEventType.Tarnished:
+				# v10: Tarnished mode: Snake parks (the real guest: neutral pad, no follow whistles) until a = 0.
+				self.parked = ev.a == 1
+				self.log(f"host: kHEvTarnished a={ev.a} -> Snake {'parks (Tarnished mode)' if self.parked else 'is back'}")
 		self.regen_acc += self.regen * dt  # MGSV-style regeneration
 		self.life = min(LIFE_MAX, self.life + int(self.regen_acc))
 		self.regen_acc -= int(self.regen_acc)
@@ -326,12 +356,27 @@ class FakeGuest:
 		riding = (6.0 <= (t % 12.0) < 10.0) if self.ride == "auto" else self.ride == "on"
 		if riding:
 			st["rideFrames"] += 1
-		speed = 0.0 if (self.stand or not self.walk) else 1.4 * (2.5 if riding else 1.0)
+		btype, bobject, ride_factor, ride_stick, _ = BUDDIES[self.buddy]
+		speed = 0.0 if (self.stand or not self.walk or self.parked) else 1.4 * (ride_factor if riding else 1.0)
 		self.heading += speed / 4.0 * dt
 		vx, vz = math.cos(self.heading) * speed, -math.sin(self.heading) * speed
-		vx += lx / 32767.0 * 3.0
-		vz += ly / 32767.0 * 3.0
-		if self.move:
+		if self.stick_mode == "camera" and self.last_cam and not self.parked:
+			# As MGSV moves Snake: stick up = away from the camera, right = the screen's right as Elden Ring shows it (calibrated
+			# live against ER's camera rows: with [Axes] mirror_x -1 that is (-fz, fx) in MGSV x/z).
+			fx, fz = self.root[0] - self.last_cam[0], self.root[2] - self.last_cam[2]
+			n = math.hypot(fx, fz) or 1.0
+			fx, fz = fx / n, fz / n
+			sx, sy = lx / 32767.0, ly / 32767.0
+			mag = min(1.0, math.hypot(sx, sy))
+			top = ride_stick if riding else self.stick_speed
+			if mag > 0.25:  # MGSV's dead zone
+				k = top * mag / math.hypot(sx, sy)
+				vx += (-fz * sx + fx * sy) * k
+				vz += (fx * sx + fz * sy) * k
+		else:
+			vx += lx / 32767.0 * 3.0
+			vz += ly / 32767.0 * 3.0
+		if self.move and not self.parked:
 			vx, vz = math.sin(self.move[1]) * self.move[0], math.cos(self.move[1]) * self.move[0]
 		dx, dz = vx * dt, vz * dt
 		self.odo[0] += dx
@@ -348,6 +393,7 @@ class FakeGuest:
 
 		orbit = t * self.orbit_speed + self.orbit_phase
 		cam = (self.root[0] + self.cam_dist * math.cos(orbit), self.cam_height, self.root[2] + self.cam_dist * math.sin(orbit))
+		self.last_cam = cam
 		look = (self.root[0] - cam[0], self.cam_look_y - cam[1], self.root[2] - cam[2])
 
 		gs = proto.GuestState()
@@ -360,7 +406,7 @@ class FakeGuest:
 				self.status(Status.Loading, self.boot_text)
 		elif self.boot_until or self.link.header.guestStatus != int(Status.Ready):
 			self.boot_until = 0.0
-			self.status(Status.Ready, "fake MGSV: in the sandbox, D-Walker deployed")
+			self.status(Status.Ready, f"fake MGSV: in the sandbox, {BUDDIES[self.buddy][4]}")
 		if self.aiming:
 			flags |= GuestFlags.Aiming
 		if self.in_menu:
@@ -373,6 +419,8 @@ class FakeGuest:
 			flags |= GuestFlags.InBox | (GuestFlags.BoxPoster if self.box == "poster" else 0)
 		if self.fpv:
 			flags |= GuestFlags.FirstPerson
+		if self.nvg:
+			flags |= GuestFlags.Nvg
 		if self.aim_throw and self.ready():
 			flags |= GuestFlags.ThrowAim
 			hand, vel = self.release(*self.aim_throw[:2])
@@ -394,8 +442,8 @@ class FakeGuest:
 		gs.camNear = 0.1
 		gs.life, gs.lifeMax, gs.stamina, gs.stance = self.life, LIFE_MAX, 100, 0
 		gs.weaponId, gs.ammoInClip, gs.ammoStock = WEAPON_ID, self.ammo, self.stock
-		gs.buddyType = proto.BuddyType.WALKER_GEAR
-		gs.vehicleId = DWALKER_VEHICLE_ID if riding else 0xFFFF
+		gs.buddyType = btype
+		gs.vehicleId = bobject if riding else 0xFFFF
 		gs.phase = 0
 		# v2 buddy block: D-Walker beside Snake, or under him while ridden.
 		bflags = proto.GuestBuddyFlags.Present | proto.GuestBuddyFlags.PosValid
@@ -403,19 +451,19 @@ class FakeGuest:
 			bflags |= proto.GuestBuddyFlags.Ridden
 		off = (0.0, 0.0) if riding else (1.5 * math.cos(self.yaw) - 0.5 * math.sin(self.yaw), -1.5 * math.sin(self.yaw) - 0.5 * math.cos(self.yaw))
 		gs.buddyFlags = int(bflags)
-		gs.buddyObjectId = DWALKER_VEHICLE_ID
+		gs.buddyObjectId = bobject
 		gs.buddyAmmo = self.buddy_ammo
 		gs.buddyPos[:] = [self.root[0] + off[0], 0.0, self.root[2] + off[1]]
 		gs.buddyYaw = self.yaw
 		link.seq_write(proto.OFF_GUEST_STATE, gs)
 		self.vars.update(playerPosX=self.root[0], playerPosY=self.root[1], playerPosZ=self.root[2],
 			playerRotY=int(math.degrees(self.yaw)), playerLife=self.life, playerLifeMax=LIFE_MAX,
-			buddyType=int(proto.BuddyType.WALKER_GEAR), playerVehicleGameObjectId=gs.vehicleId,
+			buddyType=int(btype), playerVehicleGameObjectId=gs.vehicleId,
 			missionCode=gs.missionCode, locationCode=gs.locationCode, frame=self.frame)
 
 		self.publish_pose()
 
-		if not self.autofire:
+		if not self.autofire or self.parked:
 			self.next_fire, self.next_buddy_fire = t + 2.0, t + 3.0
 		if t >= self.next_fire:
 			self.next_fire += 2.0
@@ -461,8 +509,9 @@ class FakeGuest:
 			cmd = chunk[1:].strip()
 			if cmd == "status":
 				st = self.stats
-				return 0, (f"fake guest: frame {self.frame}, session {self.nonce:#018x}, buddy WALKER_GEAR ammo {self.buddy_ammo}, life {self.life} "
-					f"(regen {self.regen:.0f}/s, healed {st['healed']}), menu {'open' if self.in_menu else 'closed'}, "
+				return 0, (f"fake guest: frame {self.frame}, session {self.nonce:#018x}, buddy {BUDDIES[self.buddy][0].name} ammo {self.buddy_ammo}, stick {self.stick_mode} ({self.stick_speed:.1f} m/s), life {self.life} "
+					f"(regen {self.regen:.0f}/s, healed {st['healed']}), ammo {self.ammo}+{self.stock}, nvg {'on' if self.nvg else 'off'}, "
+					f"{'PARKED (Tarnished mode), ' if self.parked else ''}menu {'open' if self.in_menu else 'closed'}, "
 					f"pad: Back {st['backPresses']} Start {st['startPresses']} in-menu presses {st['menuButtons']}, events {st['hostEvents']}")
 			return self.combat_command(cmd.split())
 		try:
@@ -472,11 +521,14 @@ class FakeGuest:
 
 	def combat_command(self, w: list[str]) -> tuple[int, str]:
 		usage = ("fake guest commands: !status !walk on|off !autofire on|off !fire <kind> [n] [yaw] [pitch] [share] !share <s> !move <speed> [yaw] "
-			"!ride on|off|auto !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !blast [r] [kind] !die "
+			"!ride on|off|auto !buddy walker|horse !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
-			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready")
+			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off")
 		if not w:
 			return 0, usage
+		if w[0] == "nvg" and len(w) > 1:
+			self.nvg = w[1] == "on"
+			return 0, f"night-vision goggles {'on' if self.nvg else 'off'} (GuestFlags.Nvg)"
 		if w[0] == "menu" and len(w) > 1:
 			self.in_menu = w[1] == "on"
 			return 0, f"MGSV menu {'open' if self.in_menu else 'closed'} (kGuestInMenu)"
@@ -514,7 +566,17 @@ class FakeGuest:
 			return 0, f"move {speed} m/s" + (f" along MGSV yaw {math.degrees(self.move[1]):.1f} deg" if self.move else " (stopped)")
 		if w[0] == "ride" and len(w) > 1 and w[1] in ("on", "off", "auto"):
 			self.ride = w[1]
-			return 0, f"ride {self.ride}"
+			return 0, f"ride {self.ride} ({BUDDIES[self.buddy][4]})"
+		if w[0] == "buddy" and len(w) > 1 and w[1] in BUDDIES:
+			self.buddy = w[1]
+			return 0, f"buddy {BUDDIES[self.buddy][0].name} ({BUDDIES[self.buddy][4]}; ridden: x{BUDDIES[self.buddy][2]} on the circle, "\
+				f"{BUDDIES[self.buddy][3]} m/s on the stick)"
+		if w[0] == "stick" and len(w) > 1 and w[1] in ("world", "camera"):
+			self.stick_mode = w[1]
+			if len(w) > 2:
+				self.stick_speed = max(0.1, float(w[2]))
+			return 0, f"stick {self.stick_mode}" + (f": full stick {self.stick_speed:.1f} m/s on foot, relative to the camera" if self.stick_mode == "camera" else
+				": MGSV x/z, 3 m/s")
 		if w[0] == "box" and len(w) > 1 and w[1] in ("on", "off", "poster"):
 			self.box = "" if w[1] == "off" else w[1]
 			return 0, f"box {w[1]} (kGuestInBox{' + kGuestBoxPoster' if self.box == 'poster' else ''})"
@@ -769,6 +831,10 @@ def main(argv=None) -> int:
 	ap.add_argument("--cam", type=float, nargs=3, metavar=("DIST", "HEIGHT", "LOOK_Y"), default=(6.0, 1.8, 1.0),
 		help="fake camera: distance from Snake, height, height of the point it looks at (m)")
 	ap.add_argument("--force", action="store_true", help="take the guest side over even if another live process holds it")
+	ap.add_argument("--buddy", choices=tuple(BUDDIES), default="walker", help="the buddy deployed: walker (D-Walker, default) or horse (D-Horse)")
+	ap.add_argument("--stick", choices=("world", "camera"), default="world", help="the left stick: MGSV x/z (default) or camera-relative like MGSV")
+	ap.add_argument("--no-walk", action="store_true", help="start with the circle walk, the periodic fire and the ride cycle off (!walk off, "
+		"!autofire off, !ride off): Snake moves only with the stick or !move, and keeps his facing")
 	args = ap.parse_args(argv)
 
 	path = args.path or proto.default_path()
@@ -786,9 +852,14 @@ def main(argv=None) -> int:
 		guest.boot_until, guest.boot_text = args.boot, "MGSV: loading Africa free roam (30020)"
 	guest.orbit_speed, guest.orbit_phase, guest.freeze = args.orbit, args.orbit_phase, args.freeze
 	guest.cam_dist, guest.cam_height, guest.cam_look_y = args.cam
+	guest.buddy, guest.stick_mode = args.buddy, args.stick
+	if args.no_walk:
+		guest.walk, guest.autofire, guest.ride = False, False, "off"
 	h = link.header
 	h.guestNonce = 0  # a new guest process: the host must treat whatever was attached before as gone
 	h.guestUnixPid = os.getpid()
+	h.guestProtocol = proto.VERSION  # who is talking, as the real guest says it (Header v11)
+	proto.set_text(h, "guestRelease", proto._release())
 	guest.status(Status.Booting, "fake MGSV: waiting for the host")
 	stop = False
 

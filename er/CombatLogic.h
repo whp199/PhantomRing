@@ -95,7 +95,7 @@ namespace phantom::er::combat
 		float unitsPerLife{ 40.0f };  // class units in one standard soldier's life (handgun 13 -> 0.33 life, rifle 17 -> 0.43)
 		float bigFrom{ 1.5f };        // max HP / the Tarnished's max HP up to which an enemy is ordinary
 		float bossFrom{ 5.0f };       // ... from which it counts as a boss
-		float bossLives{ 70.0f };     // soldiers' lives a boss is worth (an assault rifle magazine: ~18%)
+		float bossLives{ 45.0f };     // soldiers' lives a boss is worth (an assault-rifle magazine with MGSV's share: ~15%)
 		float playerMaxHp{ 0.0f };    // the Tarnished's max HP; 0 = unknown: every enemy is ordinary
 	};
 
@@ -132,6 +132,7 @@ namespace phantom::er::combat
 		float   headshotMinLives{ 1.05f };
 		float   shareMult{ 1.0f };      // x MGSV's own damage share (v8)
 		float   buddyMult{ 1.0f };
+		float   progression{ 1.0f };    // x Elden Ring's progression ([Progression], ProgressionFactor): every lethal hit's damage
 		int     tranqSleep{ 80 };
 		int     tranqSleepHead{ 200 };
 		float   tranqShare{ 0.6f };      // of the target's sleep resistance (0 = use the absolute values)
@@ -296,6 +297,60 @@ namespace phantom::er::combat
 	private:
 		std::vector<std::pair<std::int32_t, std::int32_t>> ref_;  // {npc, largest ER damage of one of our bullets}
 	};
+
+	// ---- Elden Ring's progression -> Snake's damage ([Progression] damage_scaling, off by default) -----------------
+	// Snake's damage is counted in MGSV soldiers' lives against each target's own HP, so it never grows with the Tarnished.
+	// The option makes Elden Ring's progression count: his rune level, the upgrade of the armament in his right hand, or
+	// both, as a factor on every lethal hit (shots, CQC, blasts, D-Walker); sleep and stun build-up stay as they are. Vigor
+	// needs no option: Elden Ring's hits already cost Snake the share of the Tarnished's max HP (HurtForGuest).
+	enum class ProgressionMode : std::uint8_t
+	{
+		kOff,
+		kLevel,
+		kWeapon,
+		kBoth,
+	};
+	ProgressionMode  ProgressionModeOf(std::string_view a_text);  // off|level|weapon|both; anything else off
+	std::string_view Name(ProgressionMode a_mode);
+
+	struct ProgressionRules
+	{
+		ProgressionMode mode{ ProgressionMode::kOff };
+		float           levelReference{ 20.0f };  // rune level of x1
+		float           levelExponent{ 0.5f };    // x (level / reference)^exponent
+		float           weaponBonus{ 1.5f };      // x (1 + bonus x upgrade / max upgrade)
+		float           minFactor{ 0.5f };
+		float           maxFactor{ 3.0f };
+	};
+
+	struct ProgressionStats
+	{
+		int level{ 0 };        // rune level; 0 = unknown (that part of the factor is 1)
+		int upgrade{ -1 };     // the right-hand armament's upgrade (+N); -1 = unknown
+		int maxUpgrade{ 0 };   // its maximum (25, or 10 for somber ones); 0 = unknown
+	};
+
+	float LevelFactor(int a_level, const ProgressionRules& a_rules);
+	float WeaponFactor(int a_upgrade, int a_maxUpgrade, const ProgressionRules& a_rules);
+	// The factor for this mode, kept within [minFactor, maxFactor]; 1 when off.
+	float ProgressionFactor(const ProgressionRules& a_rules, const ProgressionStats& a_stats);
+
+	// Elden Ring's rune level is the sum of the eight attributes minus 79 (Vigor .. Arcane): the reads check themselves with it.
+	bool LevelMatchesAttributes(int a_level, const int (&a_attributes)[8]);
+	// An Elden Ring weapon id is its EquipParamWeapon row (base + infusion x 100) plus the upgrade: (id / 100) x 100 and id % 100.
+	inline int WeaponRowOf(int a_weaponId) { return a_weaponId >= 0 ? (a_weaponId / 100) * 100 : -1; }
+	inline int UpgradeOf(int a_weaponId) { return a_weaponId >= 0 ? a_weaponId % 100 : -1; }
+	// The highest upgrade of a weapon of ReinforceParamWeapon type a_reinforceType: the rows reinforceType + 1, + 2, ... that
+	// exist (25 for most weapons, 10 for somber ones; 0 when it has none).
+	template <class RowExists>
+	int MaxUpgrade(int a_reinforceType, RowExists&& a_rowExists)
+	{
+		int n = 0;
+		while (n < 99 && a_rowExists(a_reinforceType + n + 1)) {
+			++n;
+		}
+		return n;
+	}
 
 	// ---- Elden Ring -> Snake ---------------------------------------------------------------------
 	// Fraction of Snake's life a landing at a_speed (m/s, downward) costs: 0 below a_hurtSpeed, 1 at or

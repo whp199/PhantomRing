@@ -245,6 +245,16 @@ static void TestKinematic()
 			return true;
 		};
 		CHECK(Enclosed({ 0, 0, 0 }, 0.8f, params, cage) == 8);
+		// Only the waist ray blocked all round (live: Snake inside a table-high plank, every move refused): boxed in too.
+		const float waist = std::max(params.stepUp + 0.1f, params.waistHeight);
+		const RayFn plank = [waist](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
+			if (std::fabs(a_from.y - waist) > 0.01f) {
+				return false;
+			}
+			a_hit = a_from + a_delta * 0.1f;
+			return true;
+		};
+		CHECK(Enclosed({ 0, 0, 0 }, 0.8f, params, plank) == 8);
 		Unstick u;
 		for (int i = 0; i < 10; ++i) {  // walks free along x
 			CHECK(!u.Update({ 0.1f * static_cast<float>(i), 0, 0 }, 0, true, 0.1 * i, 0.5f));
@@ -351,8 +361,11 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.userIndex == d.userIndex && shipped.allowButtons == d.allowButtons && shipped.menuLearn == d.menuLearn && shipped.menuUiStates.empty() &&
 	      shipped.menuLatchMs == d.menuLatchMs && shipped.promptButton == d.promptButton && shipped.interactionHudState == d.interactionHudState &&
 	      shipped.interactionMinMs == d.interactionMinMs && shipped.interactionMaxMs == d.interactionMaxMs && shipped.viewHoldMs == d.viewHoldMs && shipped.guestIdroidStartMs == d.guestIdroidStartMs && shipped.releasePrompts == d.releasePrompts && shipped.releaseMs == d.releaseMs &&
+	      shipped.startWaitMs == d.startWaitMs && shipped.chordMs == d.chordMs && shipped.restPrompts == d.restPrompts && shipped.menuKeys == d.menuKeys &&
 	      shipped.guestMenuOwnsPad == d.guestMenuOwnsPad && shipped.padGlyphDevice == d.padGlyphDevice);
 	CHECK(d.promptButton == 0x8000);  // Y: Elden Ring's event action on an Xbox pad (VERIFIED live)
+	CHECK(shipped.fallWatchSeconds == d.fallWatchSeconds && shipped.fallWatchDrop == d.fallWatchDrop && shipped.unstick == d.unstick &&
+	      shipped.unstickSeconds == d.unstickSeconds && shipped.catchUp == d.catchUp);
 	CHECK(shipped.hideMode == d.hideMode && shipped.motion == d.motion && shipped.hitHook == d.hitHook && shipped.noDead == d.noDead &&
 	      shipped.noDamage == d.noDamage && shipped.mirrorLife == d.mirrorLife && shipped.forwardHeals == d.forwardHeals &&
 	      shipped.killOnGuestDeath == d.killOnGuestDeath);
@@ -368,6 +381,14 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.collisionRadius == d.collisionRadius && shipped.collisionEaseOut == d.collisionEaseOut && shipped.verticalSmoothing == d.verticalSmoothing);
 	CHECK(shipped.actorRadius == d.actorRadius && shipped.actorMax == d.actorMax && shipped.drawSkeleton == d.drawSkeleton && shipped.drawBuddy == d.drawBuddy &&
 	      shipped.drawTracers == d.drawTracers && shipped.tracerSeconds == d.tracerSeconds && shipped.traceRange == d.traceRange);
+	CHECK(shipped.ladderPrompts == d.ladderPrompts && shipped.ladderWaitMs == d.ladderWaitMs && shipped.ladderSettleMs == d.ladderSettleMs &&
+	      shipped.ladderPressDelayMs == d.ladderPressDelayMs);
+	CHECK((d.ladderPrompts == std::vector<int>{ 5000, 5010 }));  // ActionButtonParam "Climb" / "Descend"
+	CHECK(shipped.maxSpeedHorse == d.maxSpeedHorse && shipped.stepUpHorse == d.stepUpHorse && shipped.radiusVehicle == d.radiusVehicle &&
+	      shipped.radiusHorse == d.radiusHorse && shipped.eyeHeightHorse == d.eyeHeightHorse);
+	CHECK(shipped.progression == d.progression && d.progression == "off" && shipped.levelReference == d.levelReference &&
+	      shipped.levelExponent == d.levelExponent && shipped.weaponBonus == d.weaponBonus && shipped.progressionMin == d.progressionMin &&
+	      shipped.progressionMax == d.progressionMax);
 	CHECK(shipped.render == d.render);
 	CHECK(shipped.overlay == d.overlay);
 }
@@ -468,6 +489,28 @@ static void TestInteraction()
 	in.pressed = true;
 	in.inWorld = false;
 	CHECK(!i.Update(in));
+	// A press-less start that was no screen (review: Elden Ring's "Auto" HUD): abort ends it at once.
+	Interaction k;
+	Interaction::Input kin;
+	kin.nowMs = 1000;
+	kin.pressed = true;
+	kin.hudHidden = true;
+	CHECK(k.Update(kin));
+	kin.pressed = false;
+	kin.nowMs = 2000;
+	CHECK(k.Update(kin));
+	kin.abort = true;
+	CHECK(!k.Update(kin) && !k.Active());
+
+	// Elden Ring's "Auto" HUD: explained hides never count; the second unexplained one is it, once.
+	using phantom::er::AutoHud;
+	AutoHud a;
+	CHECK(!a.Update({ true, true }) && a.Unexplained() == 0);   // a press, a menu, a grace...
+	CHECK(!a.Update({ false, false }));                        // no hide this frame
+	CHECK(!a.Update({ true, false }) && a.Unexplained() == 1 && !a.Detected());  // a one-off (a tutorial)
+	CHECK(a.Update({ true, false }) && a.Detected());
+	CHECK(!a.Update({ true, false }) && a.Detected());  // reported once, stays on
+
 }
 
 // D-Walker's orders made visible (player report: "not clear they are given or not").
@@ -547,10 +590,42 @@ static void TestMenuGroups()
 	// Out of range or no table: hidden.
 	CHECK(!GroupOpen({ 0x50 }, {}, ui));
 	CHECK(!GroupOpen({ 0x25 }, {}, {}));
+
+	// Cutscenes (review 2026-10-13): a skip press during one or its 500 ms tail never latches; one 1 s later does (it used
+	// to be swallowed for 4 s: MGSV kept the pad inside a menu opened right after a cutscene).
+	using phantom::er::MenuWatch::SwallowPress;
+	using phantom::er::MenuWatch::WindowArm;
+	CHECK(SwallowPress(true, 10000, 10000));
+	CHECK(SwallowPress(false, 10400, 10000));
+	CHECK(!SwallowPress(false, 11000, 10000));
+	CHECK(!SwallowPress(false, 11000, 0));  // no cutscene seen yet
+	// Margit's bar (0x12, 0x17) came up inside a late press's latch: never armed; the menu's own 0x25 is.
+	CHECK(WindowArm({ 0x12, 0x17 }, { 0x12, 0x17 }).empty());
+	CHECK((WindowArm({ 0x25, 0x17 }, { 0x12, 0x17 }) == std::vector<int>{ 0x25 }));
+	CHECK((WindowArm({ 0x25 }, {}) == std::vector<int>{ 0x25 }));
+	// A submenu replacing its menu (review): the map closing during Margit as the boss bar (0x12, HUD too) comes back arms
+	// nothing; the inventory's own entries do; the main menu back from the inventory with the bar arms a mixed group.
+	using phantom::er::MenuWatch::SubmenuGroup;
+	CHECK(SubmenuGroup({ 0x12 }, { 0x12, 0x17 }, {}).empty());
+	CHECK(SubmenuGroup({ 0x12, 0x17 }, { 0x12, 0x17 }, {}).empty());
+	CHECK((SubmenuGroup({ 0x1f, 0x20 }, { 0x12 }, {}) == std::vector<int>{ 0x1f, 0x20 }));
+	CHECK((SubmenuGroup({ 0x1c, 0x17, 0x12 }, { 0x12, 0x17 }, {}) == std::vector<int>{ 0x1c, 0x17, 0x12 }));
+	CHECK(SubmenuGroup({ 0x1c }, {}, { 0x1c }).empty());  // after-cutscene window entries never arm
+	CHECK(SubmenuGroup({}, {}, {}).empty());
+
+	// Full-screen menus (live 2026-10-13: Start -> Inventory handed A/B/D-pad to MGSV): the HUD hiding inside an open menu.
+	using phantom::er::MenuWatch::FullScreenMenu;
+	CHECK(FullScreenMenu(false, true, true, false, false));    // main menu open, the HUD hides: the inventory
+	CHECK(FullScreenMenu(true, false, false, false, false));   // its group closed meanwhile: still open while the HUD is hidden
+	CHECK(!FullScreenMenu(true, false, false, true, false));   // the HUD is back: closed
+	CHECK(!FullScreenMenu(false, false, true, false, false));  // the HUD hides with no menu (a grace, a dialog): not ours
+	CHECK(!FullScreenMenu(false, true, false, false, false));  // already hidden when the menu opened (no transition)
+	CHECK(!FullScreenMenu(true, true, false, false, true));    // a cutscene
 }
 
 #include "test_host_overlay.inc"
 #include "test_host_pacing.inc"
+#include "test_host_chord.inc"
 
 // The real host link + console (er/Link.cpp, er/Console.cpp) against a live guest on a_where -- fake_mgsv.py
 // or the real guest link -- driven by tools/phantomring/test_plugins.py. Prints one "PEER {json}" line.
@@ -654,6 +729,10 @@ int main(int argc, char** argv)
 	TestMenuGroups();
 	TestBuddyOrders();
 	TestPacing();
+	TestChord();
+	TestFallWatch();
+	TestLadder();
+	TestSupportedStart();
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

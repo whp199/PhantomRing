@@ -11,6 +11,7 @@
 #include "Mem.h"
 #include "Mines.h"
 #include "Params.h"
+#include "Progression.h"
 #include "Puppet.h"
 #include "Rounds.h"
 #include "Throw.h"
@@ -146,6 +147,7 @@ namespace phantom::er::Combat
 			r.headshotMinLives = c.headshotMinLives;
 			r.shareMult = c.shareMult;
 			r.buddyMult = c.buddyMult;
+			r.progression = Progression::Factor();
 			r.tranqSleep = c.tranqSleep;
 			r.tranqSleepHead = c.tranqSleepHead;
 			r.tranqShare = c.tranqShare;
@@ -948,7 +950,7 @@ namespace phantom::er::Combat
 			return Describe();
 		}
 		if (sub == "set" && a_w.size() > 3) {
-			// Live tuning of the sleep values (not saved): combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction <v>
+			// Live tuning (not saved): combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|boss_lives|boss_from|big_from|share_mult <v>
 			auto&       c = Cfg();
 			const float v = std::strtof(a_w[3].c_str(), nullptr);
 			if (a_w[2] == "tranq_share") {
@@ -961,8 +963,16 @@ namespace phantom::er::Combat
 				c.chokeShare = v;
 			} else if (a_w[2] == "sleep_correction") {
 				c.sleepCorrection = static_cast<int>(v);
+			} else if (a_w[2] == "boss_lives") {
+				c.bossLives = v;
+			} else if (a_w[2] == "boss_from") {
+				c.bossFrom = v;
+			} else if (a_w[2] == "big_from") {
+				c.bigFrom = v;
+			} else if (a_w[2] == "share_mult") {
+				c.shareMult = v;
 			} else {
-				return "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction <value>";
+				return "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|boss_lives|boss_from|big_from|share_mult <value>";
 			}
 			return std::format("{} = {}", a_w[2], v);
 		}

@@ -28,11 +28,13 @@
 namespace phantom::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x47524850;  // "PHRG"
-	inline constexpr std::uint32_t kVersion = 9;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
+	inline constexpr std::uint32_t kVersion = 11;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
 	                                              // v5: kGEvThrow, kGEvPlaced, kGEvPlacedGone, kHEvDetonate;
 	                                              // v6: GuestState aimThrow* (0xA8..0xC4) + kGuestThrowAim; v7: kGEvBuddyOrder;
 	                                              // v8: kGuestInBox, kGuestBoxPoster, kGEvFire pad[1] = MGSV damage share;
-	                                              // v9: kPlacedAgain (kGEvPlaced pad[0]: an announcement repeated)
+	                                              // v9: kPlacedAgain (kGEvPlaced pad[0]: an announcement repeated);
+	                                              // v10: kGuestNvg, kHEvRested, kHEvTarnished;
+	                                              // v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100)
 	inline constexpr wchar_t       kDefaultMapping[] = L"file:Z:\\dev\\shm\\phantomring_v1";
 
 	// ---- region offsets ---------------------------------------------------------------------
@@ -90,8 +92,15 @@ namespace phantom::proto
 		Status        guestStatus;
 		char          hostStatusText[64];   // human-readable, NUL-terminated
 		char          guestStatusText[96];  // shown in Elden Ring while MGSV boots
+		// v11, kept at these offsets in every later version: who is talking, so that two plugins of different protocol
+		// versions (which never attach) can say so in words (common/Version.h MismatchText). Zero = a plugin older than
+		// v11. The guest writes its two even while it refuses to attach; the host writes hostRelease on attach.
+		std::uint32_t guestProtocol;      // the guest's kVersion
+		char          hostRelease[14];    // the VERSION file of each plugin, e.g. "0.2.0-alpha", NUL-padded
+		char          guestRelease[14];
 	};
 	static_assert(sizeof(Header) <= 0x100);
+	static_assert(offsetof(Header, guestProtocol) == 0xE0 && offsetof(Header, guestRelease) == 0xF2);
 
 	inline constexpr std::int64_t kHeartbeatTimeoutMs = 3000;
 
@@ -141,6 +150,7 @@ namespace phantom::proto
 		kGuestThrowAim = 1u << 13,   // (v6) Snake aims a throwable: aimThrowPos/Vel/Kind are this frame's (the host draws the arc)
 		kGuestInBox = 1u << 14,      // (v8) Snake is inside a cardboard box (the host hides him from Elden Ring's enemies while he keeps still)
 		kGuestBoxPoster = 1u << 15,  // (v8) ...and it is a box with a poster/pin-up on it (MGSV: soldiers who see it are distracted)
+		kGuestNvg = 1u << 16,        // (v10) Snake's night-vision goggles are on (the host recreates the effect on Elden Ring's frame)
 	};
 
 	struct GuestState
@@ -342,6 +352,10 @@ namespace phantom::proto
 		                    // kHEvHurt units (Snake's life / LifeScale: the same share of his life), b = ER HP healed
 		kHEvDetonate = 6,   // (v5) an Elden Ring enemy came within a placed explosive's trigger radius: b = placed id; the guest
 		                    // sets it off in MGSV (its blast then comes back as kGEvExplosion with pad[1] = placed id)
+		kHEvRested = 7,     // (v10) the ER player rested at a grace or respawned (grace, Stake of Marika, death): Elden Ring refills
+		                    // flasks then, so the guest refills Snake's ammo (and life) the same way; a = 0 rest, 1 respawn
+		kHEvTarnished = 8,  // (v10) "Tarnished mode": a = 1 the player took the Tarnished (Snake parks: neutral pad, no follow
+		                    // whistles), a = 0 Snake is back
 	};
 
 	enum HurtKind : std::uint32_t

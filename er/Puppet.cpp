@@ -1,6 +1,7 @@
 #include "Puppet.h"
 
 #include "Addresses.h"
+#include "Buddy.h"
 #include "Calibration.h"
 #include "Combat.h"
 #include "CombatLogic.h"
@@ -34,7 +35,7 @@ namespace phantom::er::Puppet
 		};
 
 		bool           g_active{ false };
-		Override       g_override{ Override::kAuto };
+		std::uint8_t   g_holds{ 0 };  // Hold bits: the puppet runs only while none is set
 		std::uint8_t*  g_chr{ nullptr };  // the ChrIns we puppet (stop if the game swaps it)
 		Anchor         g_anchor;
 		KinematicState g_kin;
@@ -42,6 +43,7 @@ namespace phantom::er::Puppet
 		double         g_odoLast[3]{};
 		std::uint32_t  g_odoEpoch{ 0 };
 		bool           g_riding{ false };
+		bool           g_horse{ false };          // ...and what Snake rides is D-Horse ([Puppet] *_horse, [Camera] eye_height_horse)
 		bool           g_wasRiding{ false };
 		Saved          g_saved;
 		std::int32_t   g_hpLast{ 0 };             // the HP we set last frame (the mirror of Snake's life)
@@ -63,6 +65,13 @@ namespace phantom::er::Puppet
 		bool           g_rootMotion{ false };    // motion = root_motion and the hook is installed
 		double         g_wantedM{ 0 };            // horizontal metres Snake's motion asked for / the puppet really moved (console: puppet)
 		double         g_movedM{ 0 };
+		// Walls (both motions; the root-motion vs kinematic comparison, docs/HOST.md "Motion"): frames Snake asked to move and the
+		// puppet was blocked (kinematic: its body met geometry; root motion: the proxy moved < 30% of what it was handed), and
+		// how many times that began.
+		std::uint64_t  g_wallFrames{ 0 };
+		std::uint64_t  g_walls{ 0 };
+		bool           g_wasBlocked{ false };
+		std::uint64_t  g_bumps{ 0 };              // kinematic: object-only breakers sent where the body met something
 		// Root motion: Elden Ring's proxy moves 60-95% of what it is handed (less uphill; VERIFIED live, 2026-10-12): the shortfall
 		// is handed again ([Puppet] catch_up), and dropped when the proxy is blocked (a wall) so nothing pops round a corner.
 		Vec3           g_rmDebt;                  // Snake's motion asked for minus what the proxy did (horizontal)
@@ -70,6 +79,8 @@ namespace phantom::er::Puppet
 		Vec3           g_rmHanded;                // ...and what was handed to the proxy with the catch-up
 		ULONGLONG      g_rmStillSince{ 0 };
 		Unstick        g_unstick;                 // kinematic: boxed in -> back to where it stood free
+		FallWatch      g_fallWatch;               // a fall that never lands (a chasm's kill volume under NoDead) -> Snake dies
+		std::uint64_t  g_endlessFalls{ 0 };
 		ULONGLONG      g_lastBump{ 0 };           // kinematic: the last object-only attack against what blocked the body
 		ULONGLONG      g_rootMotionSince{ 0 };
 		// Death visuals: from the kill (or Elden Ring's own death of the puppet) until the respawn Snake
@@ -190,6 +201,7 @@ namespace phantom::er::Puppet
 			g_lastSet = g_anchor.pe;
 			g_rmDebt = g_rmAsked = g_rmHanded = {};
 			g_unstick.Reset();
+			g_fallWatch.Reset();
 			if (!(g_hiddenForDeath && g_deathChr == p.chr)) {  // else still hidden by us: g_saved has the originals
 				g_saved.renderBit = game::GetBit(p.chr + game::kChrFlags1C5, 0x08);
 				g_saved.transparencyMod = SafeRead<float>(p.chr + game::kChrTransparencyMod).value_or(0.0f);
@@ -204,6 +216,29 @@ namespace phantom::er::Puppet
 			ApplyHealthFlags(p, true);
 			g_rootMotion = Cfg().motion == "root_motion" && RootMotion::Install(p);
 			g_rootMotionSince = ::GetTickCount64();
+			if (!g_rootMotion) {
+				// The kinematic body stands on the ground under its centre; Elden Ring's capsule may stand on a rim with its centre
+				// over a drop (live: off a ladder at the top of Fort Haight's tower Snake fell 19 m down its shaft): start on ground.
+				KinematicParams kp;
+				kp.radius = Cfg().radius;
+				kp.stepUp = Cfg().stepUp;
+				kp.snapDown = Cfg().snapDown;
+				kp.chestHeight = Cfg().chestHeight;
+				const auto* ignore = p.chr;
+				const auto  filter = Cfg().rayFilter;
+				const RayFn ray = [ignore, filter](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
+					return game::CastRay(a_from, a_delta, a_hit, ignore, filter);
+				};
+				if (const auto at = SupportedStart(g_anchor.pe, kp, ray)) {
+					Log::Info("puppet: no ground under the Tarnished's centre at ({:.2f}, {:.2f}, {:.2f}) (a rim, a ladder's top) -> Snake starts "
+					          "{:.2f} m away on ground",
+						g_anchor.pe.x, g_anchor.pe.y, g_anchor.pe.z, LengthXZ(*at - g_anchor.pe));
+					game::SetPosition(p, *at);
+					g_anchor.pe = *at;
+					g_kin.pos = *at;
+					g_lastSet = *at;
+				}
+			}
 			if (Cfg().hitHook && HitHook::Install(p)) {
 				HitHook::SetCancel(true);
 			}
@@ -335,6 +370,26 @@ namespace phantom::er::Puppet
 		}
 	}
 
+	namespace
+	{
+		// FallWatch fired: Snake dies of the fall as he would have on landing (kHEvHurt lethal, then Elden Ring's death).
+		void EndlessFall(const Frame& a_f)
+		{
+			++g_endlessFalls;
+			Log::Info("puppet: falling {:.1f} s, {:.0f} m with no landing (a chasm: under NoDead Elden Ring's kill volume can't kill the puppet) -> Snake "
+			          "dies of the fall (fall #{})",
+				g_fallWatch.Seconds(), g_fallWatch.Drop(), g_endlessFalls);
+			if (a_f.guestReady) {
+				const auto& cfg = Cfg();
+				PushHost(proto::kHEvHurt, combat::FallHurtAmount(1.0f, a_f.guest.lifeMax, cfg.guestLifeScale), proto::kHurtFall, Vec3{ 0, -1, 0 }, a_f.index);
+				g_fallSentFrame = a_f.index;
+			}
+			if (Cfg().killOnGuestDeath && !g_killedByGuest) {
+				KillForGuest(a_f);
+			}
+		}
+	}
+
 	bool Usable(std::string* a_why)
 	{
 		const auto& a = Addr();
@@ -378,11 +433,17 @@ namespace phantom::er::Puppet
 		// Not while dying: the dead bit clears seconds before Elden Ring's respawn, and a puppet started then would
 		// stand Snake up (kHEvRespawn) in the middle of the death fade.
 		const bool playerOk = a_f.player && a_f.inGame && !a_f.dead && !g_deathAt;
-		const bool allowed = Cfg().puppet && g_override == Override::kAuto && Usable();
+		const bool allowed = Cfg().puppet && g_holds == 0 && Usable();
 		if (g_active) {
 			std::string_view why;
 			if (!a_f.guestAlive) {
 				why = "guest lost";
+			} else if (g_holds & static_cast<std::uint8_t>(Hold::kTarnished)) {
+				why = "Tarnished mode";
+			} else if (g_holds & static_cast<std::uint8_t>(Hold::kStepAside)) {
+				why = "stepping aside: Elden Ring walks the Tarnished";
+			} else if (g_holds & static_cast<std::uint8_t>(Hold::kLadder)) {
+				why = "a ladder: Elden Ring climbs it with the Tarnished";
 			} else if (!allowed) {
 				why = "disabled";
 			} else if (!a_f.player || a_f.player.chr != g_chr) {
@@ -414,6 +475,7 @@ namespace phantom::er::Puppet
 		g_lastSet += a_delta;
 		g_kin.pos += a_delta;
 		g_unstick.Shift(a_delta);
+		g_fallWatch.Shift(a_delta.y);
 	}
 
 	void Move(const Frame& a_f)
@@ -435,6 +497,7 @@ namespace phantom::er::Puppet
 			g_kin.vy = 0;
 			RootMotion::Clear();
 			g_rmDebt = g_rmAsked = g_rmHanded = {};
+			g_fallWatch.Reset();
 			PushHost(proto::kHEvWarped, 0, 0, Vec3{}, a_f.index);
 		}
 		if (g_rootMotion) {
@@ -455,8 +518,13 @@ namespace phantom::er::Puppet
 		const auto& g = a_f.guest;
 		const auto  motion = MotionOf(a_f);
 		g_riding = (g.flags & proto::kGuestOnVehicle) || (g.buddyFlags & proto::kBuddyRidden);
+		// The buddy type says what he rides: the sandbox has no other vehicles, and MGSV runs one buddy at a time.
+		g_horse = g_riding && g.buddyType == Buddy::kHorse;
 		if (g_riding != g_wasRiding) {
-			Log::Info("puppet: Snake {} (vehicle id {:#x}, buddy type {})", g_riding ? "mounted" : "dismounted", g.vehicleId, g.buddyType);
+			Log::Info("puppet: Snake {} (vehicle id {:#x}, buddy type {}: {}){}", g_riding ? "mounted" : "dismounted", g.vehicleId, g.buddyType,
+				Buddy::TypeName(g.buddyType),
+				g_riding ? std::format(" -> max {:.0f} m/s, step-up {:.2f} m, radius {:.2f} m", g_horse ? cfg.maxSpeedHorse : cfg.maxSpeedVehicle,
+					g_horse ? cfg.stepUpHorse : cfg.stepUpVehicle, g_horse ? cfg.radiusHorse : cfg.radiusVehicle) : std::string());
 			g_wasRiding = g_riding;
 		}
 
@@ -467,7 +535,7 @@ namespace phantom::er::Puppet
 		} else {
 			const Vec3 d{ static_cast<float>(motion.odo[0] - g_odoLast[0]), static_cast<float>(motion.odo[1] - g_odoLast[1]), static_cast<float>(motion.odo[2] - g_odoLast[2]) };
 			const float dist = LengthXZ(d);
-			const float maxStep = (g_riding ? cfg.maxSpeedVehicle : cfg.maxSpeed) * std::clamp(a_f.dt, 1.0f / 240.0f, 0.1f);
+			const float maxStep = (g_horse ? cfg.maxSpeedHorse : g_riding ? cfg.maxSpeedVehicle : cfg.maxSpeed) * std::clamp(a_f.dt, 1.0f / 240.0f, 0.1f);
 			if (!Finite(d) || dist > cfg.teleportDrop) {
 				if (++g_dropped <= 20) {
 					Log::Warn("puppet: odometer jumped {:.2f} m in one frame; ignored (teleport protection)", dist);
@@ -497,6 +565,10 @@ namespace phantom::er::Puppet
 			// What last frame's handing achieved (the proxy moved `moved` of `g_rmHanded`): the rest is still owed, unless the
 			// proxy was blocked (it moved < 30% of what it was handed: a wall, a rock) -- then the debt drains.
 			const float handed = LengthXZ(g_rmHanded);
+			const bool  blocked = handed > 1e-3f && Dot(moved, g_rmHanded) < 0.3f * handed * handed;
+			g_wallFrames += blocked ? 1 : 0;
+			g_walls += blocked && !g_wasBlocked ? 1 : 0;
+			g_wasBlocked = blocked;
 			if (handed > 1e-4f && Dot(moved, g_rmHanded) < 0.3f * handed * handed) {
 				g_rmDebt = g_rmDebt * 0.8f;
 			} else {
@@ -521,7 +593,14 @@ namespace phantom::er::Puppet
 			RootMotion::Add(g_rmHanded);
 			const float dt = std::max(a_f.dt, 1.0f / 240.0f);
 			const float vy = (now.y - g_kin.pos.y) / dt;
-			const bool  grounded = vy > -3.0f;
+			bool        grounded = vy > -3.0f;
+			if (!grounded) {
+				// A fast descent on ground is no fall (review: a downhill gallop at 12-15 m/s on a 15-degree slope, a lift going down
+				// would set off the fall watchdog after 4 s, and the flat at the bottom read as a landing): ground right under the
+				// proxy says so. A real fall reads grounded only in its last metres (the landing comes that much early).
+				Vec3 hit;
+				grounded = game::CastRay(now + Vec3{ 0.0f, 0.5f, 0.0f }, Vec3{ 0.0f, g_riding ? -3.0f : -2.0f, 0.0f }, hit, p.chr, cfg.rayFilter);
+			}
 			if (grounded && !g_kin.grounded) {
 				g_landingSpeed = std::max(0.0f, -g_kin.vy);
 				LandingDamage(a_f, g_landingSpeed);
@@ -532,6 +611,9 @@ namespace phantom::er::Puppet
 			g_kin.grounded = grounded;
 			g_kin.groundY = NAN;
 			g_kin.pos = now;
+			if (g_fallWatch.Update(grounded, now.y, a_f.dt, cfg.fallWatchSeconds, cfg.fallWatchDrop)) {
+				EndlessFall(a_f);
+			}
 			game::SetYaw(p, ErYawForHeading(heading, g_anchor.axes));
 			g_anchor.pe = now;
 			g_anchor.pm = GuestRoot(g);
@@ -540,8 +622,8 @@ namespace phantom::er::Puppet
 		}
 
 		KinematicParams params;
-		params.radius = cfg.radius;
-		params.stepUp = g_riding ? cfg.stepUpVehicle : cfg.stepUp;
+		params.radius = g_horse ? cfg.radiusHorse : g_riding ? cfg.radiusVehicle : cfg.radius;
+		params.stepUp = g_horse ? cfg.stepUpHorse : g_riding ? cfg.stepUpVehicle : cfg.stepUp;
 		params.snapDown = cfg.snapDown;
 		params.chestHeight = cfg.chestHeight;
 		params.gravity = cfg.gravity;
@@ -549,7 +631,14 @@ namespace phantom::er::Puppet
 		const auto  filter = cfg.rayFilter;
 		const RayFn ray = [ignore, filter](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) { return game::CastRay(a_from, a_delta, a_hit, ignore, filter); };
 		const auto  r = KinematicStep(g_kin, step, a_f.dt, params, ray);
+		{
+			const bool blocked = r.blocked && LengthXZ(step) > 1e-3f;
+			g_wallFrames += blocked ? 1 : 0;
+			g_walls += blocked && !g_wasBlocked ? 1 : 0;
+			g_wasBlocked = blocked;
+		}
 		if (r.blocked && LengthXZ(step) > 1e-3f && ::GetTickCount64() - g_lastBump > 400) {
+			++g_bumps;
 			// Running into a crate, a pot or a cart breaks it, as the Tarnished's own body does (Elden Ring's proxy does that by
 			// itself with root motion).
 			g_lastBump = ::GetTickCount64();
@@ -572,6 +661,9 @@ namespace phantom::er::Puppet
 		}
 		if (r.landed) {
 			LandingDamage(a_f, r.landingSpeed);
+		}
+		if (g_fallWatch.Update(g_kin.grounded, g_kin.pos.y, a_f.dt, cfg.fallWatchSeconds, cfg.fallWatchDrop)) {
+			EndlessFall(a_f);
 		}
 
 		g_wantedM += LengthXZ(step);
@@ -622,7 +714,8 @@ namespace phantom::er::Puppet
 				respawned = g_wasDead && !a_f.dead;  // a death the puppet never saw (no guest then)
 			}
 			if (respawned) {
-				Log::Info("ER player respawned{}", g_deathAt ? std::format(" ({:.1f} s after the death{})", (now - g_deathAt) / 1000.0, g_deathLoad ? ", after the load" : "") : "");
+				Log::Info("ER player respawned{} -> kHEvRespawn, kHEvRested 1 (Snake's life and ammo refilled)",
+					g_deathAt ? std::format(" ({:.1f} s after the death{})", (now - g_deathAt) / 1000.0, g_deathLoad ? ", after the load" : "") : "");
 				if (g_hiddenForDeath && !g_active && a_f.player.chr == g_deathChr) {
 					Hide(a_f.player, false);  // Elden Ring's again unless Snake takes over (the next puppet start hides it)
 				}
@@ -632,6 +725,8 @@ namespace phantom::er::Puppet
 				g_aliveSince = 0;
 				g_deathPosValid = false;
 				PushHost(proto::kHEvRespawn, 0, 0, Vec3{}, a_f.index);
+				// Elden Ring refilled the flasks: Snake's ammo too (protocol v10).
+				PushHost(proto::kHEvRested, 1, 0, Vec3{}, a_f.index);
 				g_killedByGuest = false;
 				g_killConfirmed = false;
 				g_deathPending = false;
@@ -761,12 +856,25 @@ namespace phantom::er::Puppet
 	bool          Active() { return g_active; }
 	const Anchor& CurrentAnchor() { return g_anchor; }
 	bool          Riding() { return g_active && g_riding; }
+	bool          RidingHorse() { return g_active && g_riding && g_horse; }
 	float         GroundY() { return g_active ? g_kin.groundY : NAN; }
 	float         FallSpeed() { return g_active && !g_kin.grounded ? std::max(0.0f, -g_kin.vy) : 0.0f; }
 	float         HpFrac() { return g_hpFrac; }
 	float         DeathSeconds() { return g_deathAt ? static_cast<float>(::GetTickCount64() - g_deathAt) / 1000.0f : -1.0f; }
 	bool          Dying() { return g_deathAt != 0; }
-	void          SetOverride(Override a_mode) { g_override = a_mode; }
+	void          SetOverride(Override a_mode)
+	{
+		SetHold(Hold::kConsole, a_mode == Override::kOff);
+		if (a_mode == Override::kAuto) {
+			SetHold(Hold::kStepAside, false);
+		}
+	}
+	void SetHold(Hold a_reason, bool a_on)
+	{
+		const auto bit = static_cast<std::uint8_t>(a_reason);
+		g_holds = static_cast<std::uint8_t>(a_on ? (g_holds | bit) : (g_holds & ~bit));
+	}
+	bool Held(Hold a_reason) { return (g_holds & static_cast<std::uint8_t>(a_reason)) != 0; }
 
 	std::string SetMotion(std::string_view a_mode, const Frame& a_f)
 	{
@@ -775,6 +883,7 @@ namespace phantom::er::Puppet
 		}
 		Cfg().motion = std::string(a_mode);
 		g_wantedM = g_movedM = 0;
+		g_wallFrames = g_walls = g_bumps = 0;
 		if (g_active && a_f.player && a_f.player.chr == g_chr) {
 			const bool want = a_mode == "root_motion";
 			if (want && !g_rootMotion) {
@@ -798,12 +907,27 @@ namespace phantom::er::Puppet
 		if (!g_active) {
 			std::string why;
 			const bool  usable = Usable(&why);
-			return std::format("puppet off ({}{})", g_override == Override::kOff ? "console off, " : "", usable ? "ready to start" : why);
+			std::string held;
+			if (g_holds & static_cast<std::uint8_t>(Hold::kConsole)) {
+				held += "console off, ";
+			}
+			if (g_holds & static_cast<std::uint8_t>(Hold::kTarnished)) {
+				held += "Tarnished mode, ";
+			}
+			if (g_holds & static_cast<std::uint8_t>(Hold::kStepAside)) {
+				held += "stepping aside, ";
+			}
+			if (g_holds & static_cast<std::uint8_t>(Hold::kLadder)) {
+				held += "on a ladder, ";
+			}
+			return std::format("puppet off ({}{})", held, usable ? "ready to start" : why);
 		}
-		return std::format("puppet ON {} frames ({} motion, moved {:.2f} of {:.2f} m asked, catch-up owed {:.2f} m, unstuck {}): delta {:.3f}, feet ({:.2f}, "
-		                   "{:.2f}, {:.2f}) {} vy {:.2f}, ground {:.2f}, riding {}, dropped jumps {}, host falls {}, HP {} (bar {:.0f}%), heals {} ({} HP){}\n{}; {}",
-			g_frames, g_rootMotion ? "root" : "kinematic", g_movedM, g_wantedM, LengthXZ(g_rmDebt), g_unstick.Count(), g_anchor.delta, g_kin.pos.x, g_kin.pos.y, g_kin.pos.z, g_kin.grounded ? "grounded" : "airborne",
-			g_kin.vy, g_kin.groundY, g_riding, g_dropped, g_falls, g_hpLast, g_hpFrac * 100.0f, g_heals, g_healedHp,
+		return std::format("puppet ON {} frames ({} motion, moved {:.2f} of {:.2f} m asked, catch-up owed {:.2f} m, unstuck {}, walls {} ({} frames), "
+		                   "breakers {}): delta {:.3f}, feet ({:.2f}, "
+		                   "{:.2f}, {:.2f}) {} vy {:.2f}, ground {:.2f}, riding {}, dropped jumps {}, host falls {}, endless falls {}, HP {} (bar {:.0f}%), heals {} ({} HP){}\n{}; {}",
+			g_frames, g_rootMotion ? "root" : "kinematic", g_movedM, g_wantedM, LengthXZ(g_rmDebt), g_unstick.Count(), g_walls, g_wallFrames, g_bumps,
+			g_anchor.delta, g_kin.pos.x, g_kin.pos.y, g_kin.pos.z, g_kin.grounded ? "grounded" : "airborne",
+			g_kin.vy, g_kin.groundY, g_riding ? (g_horse ? "D-Horse" : "a vehicle") : "no", g_dropped, g_falls, g_endlessFalls, g_hpLast, g_hpFrac * 100.0f, g_heals, g_healedHp,
 			g_killedByGuest ? ", DYING for Snake" : (g_deathPending ? ", death pending" : ""),
 			RootMotion::Describe(), HitHook::Describe());
 	}

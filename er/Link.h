@@ -32,6 +32,8 @@ namespace phantom::er
 		[[nodiscard]] std::string   GuestStatusText() const;
 		[[nodiscard]] std::uint32_t AttachCount() const { return attaches_; }
 		[[nodiscard]] std::uint64_t RenderBytesDiscarded() const { return renderDiscarded_; }
+		// Empty, or the player-readable text when MGSV's plugin speaks another protocol (it never attaches then); Tick's thread.
+		[[nodiscard]] const std::string& VersionMismatch() const { return versionMismatch_; }
 
 		void SetHostStatus(proto::Status a_status, std::string_view a_text);
 
@@ -85,5 +87,8 @@ namespace phantom::er
 		bool          drawValid_{ false };
 		proto::Status lastGuestStatus_{ proto::Status::kAbsent };
 		std::string   lastGuestText_;
+		std::int64_t  unattachedSince_{ 0 };  // QPC: a heartbeating guest not attached since (CheckGuestVersion)
+		std::string   versionMismatch_;
+		void          CheckGuestVersion(bool a_attached);
 	};
 }

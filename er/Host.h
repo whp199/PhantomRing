@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 namespace phantom::er
 {
@@ -44,5 +45,8 @@ namespace phantom::er
 		bool         Start();  // after system init: registers the tasks
 		const Frame& Current();
 		std::string  StatusLine();
+		// Tarnished mode (View + Start held together, er/Chord.h): the player plays the Tarnished, Snake parks.
+		bool        Tarnished();
+		std::string TarnishedCommand(std::string_view a_arg);  // console `tarnished [on|off|toggle]`
 	}
 }

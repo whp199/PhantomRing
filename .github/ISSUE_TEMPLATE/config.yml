@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Install and troubleshooting
+    url: https://github.com/whp199/PhantomRing#install
+    about: The README's Install and Troubleshooting sections, and `tools/pr doctor`, answer most setup questions.

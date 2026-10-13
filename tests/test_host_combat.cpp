@@ -111,8 +111,8 @@ static void TestDamage()
 	HitRules late = r;
 	late.scaling.playerMaxHp = 1800.0f;
 	CHECK(Near(Bigness(1500, late.scaling), 0.0f));
-	// One soldier's life on a target: its max HP when ordinary, max HP / 70 on a boss (a 3000 HP field boss: 43 HP).
-	CHECK(Near(ReferenceHp(219, s), 219.0f) && Near(ReferenceHp(3000, s), 3000.0f / 70.0f, 0.01f) && ReferenceHp(0, s) == 0.0f);
+	// One soldier's life on a target: its max HP when ordinary, max HP / 45 on a boss (a 3000 HP field boss: 67 HP).
+	CHECK(Near(ReferenceHp(219, s), 219.0f) && Near(ReferenceHp(3000, s), 3000.0f / 45.0f, 0.01f) && ReferenceHp(0, s) == 0.0f);
 	CHECK(Near(LivesOfUnits(17.0f, s), 0.425f) && Near(LivesOfUnits(-5.0f, s), 0.0f));
 	CHECK(Near(HeadshotMult(219, big), 4.5f) && Near(HeadshotMult(3000, big), 1.5f));
 
@@ -136,12 +136,16 @@ static void TestDamage()
 	CHECK(ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.9f, 400, false, r, 0.25f).damage == 450);
 	CHECK(ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 400, false, r, NAN).damage == 170);  // garbage: the table
 	CHECK(!ShotEffect(RoundClass::kExplosive, proto::kAmmoLethal, 1, 0.5f, 400, false, r, 0.25f).shared);
-	// A field boss (3000 HP against a 522 HP Tarnished): an assault rifle magazine (30) takes 10-20% off it, headshots x1.5.
+	// A field boss (3000 HP against a 522 HP Tarnished): an assault-rifle magazine (30) with MGSV's own share (0.2115) takes
+	// 10-20% off it (live, Margit 4174 HP: 9.8% at the old boss_lives 70, so 45 now), headshots x1.5; the class table's
+	// rifle (0.425 of a life, for a guest that sends no share) twice that.
+	const auto bossShare = ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 3000, false, big, 0.2115f);
+	CHECK(bossShare.damage == 14 && bossShare.damage * 30 >= 300 && bossShare.damage * 30 <= 600);
 	const auto boss = ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 3000, false, big);
-	CHECK(boss.damage == 18 && boss.damage * 30 >= 300 && boss.damage * 30 <= 600);
-	CHECK(ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.9f, 3000, false, big).damage == 27);
+	CHECK(boss.damage == 28);
+	CHECK(ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.9f, 3000, false, big).damage == 43);
 	// MGSV's headshots kill a soldier: the assault rifle's own share (0.2115) x 4.5 = 0.95 of 219 HP left him at 11 (live, session 5);
-	// at least 1.05 lives now -- on an ordinary enemy only (the boss above keeps its x1.5: 27).
+	// at least 1.05 lives now -- on an ordinary enemy only (the boss above keeps its x1.5: 43).
 	const auto arHead = ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.9f, 219, false, big, 0.2115f);
 	CHECK(arHead.headshot && arHead.damage >= 219 && arHead.damage == 230);
 	CHECK(ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 219, false, big, 0.2115f).damage == 46);  // body: 5 hits
@@ -773,6 +777,79 @@ static void TestShippedIni(const wchar_t* a_path)
 	      m.strikePoise == d.meleeStrikePoise && m.chokeSleep == d.chokeSleep);
 }
 
+// [Progression] (roadmap 2.12): Elden Ring's level / right-hand armament scale Snake's lethal damage; off by default.
+static void TestProgression(const std::string& a_dir)
+{
+	ProgressionRules r;  // defaults: off
+	ProgressionStats st{ 40, 12, 25 };
+	CHECK(r.mode == ProgressionMode::kOff && Near(ProgressionFactor(r, st), 1.0f));
+	CHECK(ProgressionModeOf("level") == ProgressionMode::kLevel && ProgressionModeOf("weapon") == ProgressionMode::kWeapon &&
+	      ProgressionModeOf("both") == ProgressionMode::kBoth && ProgressionModeOf("off") == ProgressionMode::kOff && ProgressionModeOf("x") == ProgressionMode::kOff);
+	// level: (level / 20)^0.5 -- 10 x0.71, 20 x1, 40 x1.41, 80 x2, 150 x2.74; level 1 clamps to min 0.5, 713 to max 3
+	r.mode = ProgressionMode::kLevel;
+	auto lv = [&](int a_level) { return ProgressionFactor(r, ProgressionStats{ a_level, -1, 0 }); };
+	CHECK(Near(lv(10), 0.7071f) && Near(lv(20), 1.0f) && Near(lv(40), 1.4142f) && Near(lv(80), 2.0f) && Near(lv(150), 2.7386f));
+	CHECK(Near(lv(1), 0.5f) && Near(lv(713), 3.0f) && Near(lv(0), 1.0f));  // 0 = unknown: x1
+	// weapon: 1 + 1.5 x upgrade / max -- +0 x1, +12 of 25 x1.72, +25 x2.5, somber +10 of 10 x2.5, +5 of 10 x1.75; unknown x1
+	r.mode = ProgressionMode::kWeapon;
+	auto wp = [&](int a_up, int a_max) { return ProgressionFactor(r, ProgressionStats{ 40, a_up, a_max }); };
+	CHECK(Near(wp(0, 25), 1.0f) && Near(wp(12, 25), 1.72f) && Near(wp(25, 25), 2.5f) && Near(wp(10, 10), 2.5f) && Near(wp(5, 10), 1.75f));
+	CHECK(Near(wp(-1, 25), 1.0f) && Near(wp(3, 0), 1.0f) && Near(wp(30, 25), 2.5f));
+	// both: the product, clamped
+	r.mode = ProgressionMode::kBoth;
+	CHECK(Near(ProgressionFactor(r, ProgressionStats{ 40, 12, 25 }), 1.4142f * 1.72f) && Near(ProgressionFactor(r, ProgressionStats{ 150, 25, 25 }), 3.0f));
+	// The factor multiplies every lethal hit's damage; sleep and the fixed stun-blast token stay.
+	HitRules h;
+	const auto base = ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 400, false, h);
+	h.progression = 2.0f;
+	const auto x2 = ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 400, false, h);
+	CHECK(x2.damage == 2 * base.damage);
+	CHECK(ShotEffect(RoundClass::kTranq, proto::kAmmoTranq, 1, 0.5f, 400, false, h).damage == 0);
+	CHECK(MeleeEffect(proto::kMeleePunch, 400, MeleeValues{}, h).damage == 2 * MeleeEffect(proto::kMeleePunch, 400, MeleeValues{}, HitRules{}).damage);
+	CHECK(ExplosionEffect(0.0f, 4.0f, 400, h).damage == 2 * ExplosionEffect(0.0f, 4.0f, 400, HitRules{}).damage);
+	CHECK(StunBlastEffect(h).damage == StunBlastEffect(HitRules{}).damage);
+	h.progression = std::nanf("");
+	CHECK(ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 400, false, h).damage == base.damage);  // a bad factor counts as 1
+	// The reads check themselves: rune level = the eight attributes' sum - 79 (a Vagabond's starting 15 10 11 14 13 9 9 7 = level 9).
+	const int vagabond[8]{ 15, 10, 11, 14, 13, 9, 9, 7 };
+	CHECK(LevelMatchesAttributes(9, vagabond) && !LevelMatchesAttributes(10, vagabond));
+	const int bad[8]{ 0, 10, 11, 14, 13, 9, 9, 7 };
+	CHECK(!LevelMatchesAttributes(-1, bad));
+	CHECK(WeaponRowOf(2000003) == 2000000 && UpgradeOf(2000003) == 3 && WeaponRowOf(2000112) == 2000100 && UpgradeOf(2000112) == 12 && WeaponRowOf(-1) == -1);
+	// The highest upgrade from the real ReinforceParamWeapon (25 for a Longsword, 10 for a somber reinforce type 2200).
+	auto wFile = ReadFile(a_dir + "/EquipParamWeapon.param");
+	auto rFile = ReadFile(a_dir + "/ReinforceParamWeapon.param");
+	if (wFile.empty() || rFile.empty()) {
+		std::printf("note: no EquipParamWeapon/ReinforceParamWeapon in %s: the weapon levels are not checked against the regulation\n", a_dir.c_str());
+		return;
+	}
+	const auto w = params::Parse(wFile.data(), wFile.size());
+	const auto rf = params::Parse(rFile.data(), rFile.size());
+	CHECK(w && w->structName == params::kEquipParamWeapon.structName && w->rowStride == params::kEquipParamWeapon.rowSize);
+	CHECK(rf && rf->structName == params::kReinforceParamWeapon.structName && rf->rowStride == params::kReinforceParamWeapon.rowSize);
+	if (!w || !rf) {
+		return;
+	}
+	auto exists = [&](int a_id) { return RowOf(rFile, *rf, static_cast<std::uint32_t>(a_id)) != nullptr; };
+	const auto* longsword = RowOf(wFile, *w, 2000000);
+	CHECK(longsword != nullptr);
+	if (longsword) {
+		const auto type = At<std::int16_t>(longsword, params::weapon::kReinforceTypeId);
+		CHECK(type == 0 && MaxUpgrade(type, exists) == 25);
+	}
+	CHECK(MaxUpgrade(2200, exists) == 10 && MaxUpgrade(100, exists) == 25);
+	int somber = 0, regular = 0;
+	for (const auto& [id, off] : w->rows) {
+		if (id % 10000 == 0 && id >= 1000000) {
+			const int m = MaxUpgrade(At<std::int16_t>(wFile.data() + off, params::weapon::kReinforceTypeId), exists);
+			somber += m == 10;
+			regular += m == 25;
+		}
+	}
+	CHECK(somber > 50 && regular > 300);
+	std::printf("weapon levels: %d regular (+25) and %d somber (+10) base weapons\n", regular, somber);
+}
+
 int main(int argc, char** argv)
 {
 	phantom::Log::Init(L"test_host_combat.log", "test");
@@ -784,6 +861,7 @@ int main(int argc, char** argv)
 	TestThrowLogic();
 	TestStealthAndRounds();
 	TestParams(argc >= 3 ? argv[2] : "er_params");
+	TestProgression(argc >= 3 ? argv[2] : "er_params");
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

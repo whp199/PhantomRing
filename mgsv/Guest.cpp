@@ -1,5 +1,6 @@
 #include "Guest.h"
 
+#include "Ammo.h"
 #include "Blast.h"
 #include "Camera.h"
 #include "Capture.h"
@@ -28,6 +29,7 @@
 #include "Throw.h"
 #include "Skeleton.h"
 #include "State.h"
+#include "Version.h"
 #include "Vars.h"
 #include "Verify.h"
 
@@ -92,9 +94,9 @@ namespace phantom::guest
 			const auto cmd = a_line.substr(1);
 			if (cmd == "status" || cmd.empty()) {
 				const auto centre = state::Centre();
-				return std::format("status: {}\nboot: {}\npump: {}\nframe: {}\ndeath: {}\nfollow: {}\n{}\n{}\nsteam saves guarded: {}  host alive: {}  centre: {}\n", link::CurrentStatusText(),
-					state::BootName(state::CurrentBoot()), pump::Describe(), frame::Describe(), death::Describe(), follow::Describe(), menu::Describe(), blast::Describe(), throwing::Describe(), placed::Describe(),
-					saves::SteamGuarded(), link::HostAlive(), centre ? std::format("{:.2f},{:.2f},{:.2f}", centre->x, centre->y, centre->z) : std::string("none"));
+				return std::format("status: {}\nboot: {}\npump: {}\nframe: {}\ndeath: {}\nfollow: {}\n{}\n{}\n{}\n{}\n{}\n{}  tarnished mode: {}\nsteam saves guarded: {}  host alive: {}  centre: {}\n", link::CurrentStatusText(),
+					state::BootName(state::CurrentBoot()), pump::Describe(), frame::Describe(), death::Describe(), follow::Describe(), skeleton::DescribeBuddy(), menu::Describe(), blast::Describe(), throwing::Describe(), placed::Describe(),
+					ammo::Describe(), state::Parked() ? "on (Snake parked)" : "off", saves::SteamGuarded(), link::HostAlive(), centre ? std::format("{:.2f},{:.2f},{:.2f}", centre->x, centre->y, centre->z) : std::string("none"));
 			}
 			if (cmd == "boot") {
 				state::RequestBootRestart();
@@ -186,6 +188,39 @@ namespace phantom::guest
 				state::RequestHold(r);
 				return std::format("hold request: {} radius {}", mode, r.radius);
 			}
+			if (cmd == "buddy" || cmd.starts_with("buddy ")) {
+				// !buddy [walker|horse|dog|quiet|none]: another buddy in session (Pump.cpp re-runs its deployment), or its state
+				if (cmd == "buddy") {
+					return std::format("buddy {}: {}\n{}", Cfg().buddy, follow::Describe(), skeleton::DescribeBuddy());
+				}
+				const auto type = std::string(cmd.substr(6));
+				if (type != "walker" && type != "horse" && type != "dog" && type != "quiet" && type != "none") {
+					return "usage: !buddy [walker|horse|dog|quiet|none]";
+				}
+				state::RequestBuddy(type);
+				return "buddy switch requested: " + type;
+			}
+			if (cmd == "regen on" || cmd == "regen off") {
+				// !regen on|off: MGSV's post-hit regeneration curve for Elden Ring's hits ([Combat] RegenGate), for A/B tests
+				MutableCfg().regenGate = cmd.ends_with("on");
+				return std::format("regen gate {}", Cfg().regenGate ? "on" : "off");
+			}
+			if (cmd.starts_with("loc ")) {
+				// !loc <GameObject id>: the player location manager's object for another id (EXPERIMENT, D-Horse)
+				return hold::DescribeLocation(static_cast<std::uint16_t>(std::strtoul(std::string(cmd.substr(4)).c_str(), nullptr, 0)));
+			}
+			if (cmd.starts_with("placeobj")) {
+				// !placeobj <id> <x> <y> <z> [yaw rad]: that object's set-position on the next game frame (EXPERIMENT)
+				std::istringstream in{ std::string(cmd.substr(8)) };
+				std::string        id;
+				float              x = 0, y = 0, z = 0, yaw = 0;
+				if (!(in >> id >> x >> y >> z)) {
+					return "usage: !placeobj <id> <x> <y> <z> [yaw]; last: " + hold::LastPlaceResult();
+				}
+				in >> yaw;
+				hold::RequestPlaceObject(static_cast<std::uint16_t>(std::strtoul(id.c_str(), nullptr, 0)), { x, y, z }, yaw);
+				return "place requested (next frame); last: " + hold::LastPlaceResult();
+			}
 			if (cmd == "whistle") {
 				follow::RequestWhistle();
 				return "whistle requested (next Lua update): " + follow::Describe();
@@ -250,6 +285,17 @@ namespace phantom::guest
 			if (cmd == "menu") {
 				return menu::Describe();
 			}
+			if (cmd == "refill") {
+				// Dev: what the host's kHEvRested does (magazines, ammo stocks, items to full; docs/GUEST.md 18.11)
+				ammo::Request("console");
+				return "refill requested (next Lua update): " + ammo::Describe();
+			}
+			if (cmd == "ammo") {
+				return ammo::Describe();
+			}
+			if (cmd == "ammo drain") {
+				return ammo::Drain();
+			}
 			if (cmd == "sound" || cmd.starts_with("sound ")) {
 				return sound::Command(std::string(cmd.size() > 5 ? cmd.substr(6) : std::string_view{}));
 			}
@@ -275,7 +321,7 @@ namespace phantom::guest
 				Log::SetDebug(cmd.ends_with("on"));
 				return std::string(cmd);
 			}
-			return "guest commands: !status !boot !treadmill on|off !centre !pulse <a+b..> [ms] !pad !sandbox <mission> [x y z rot] !hold <mode> [radius] !whistle !follow ... !blast !menu !sound [volume g] !capture [probe N|...] !window !debug on|off   (anything else is Lua)";
+			return "guest commands: !status !boot !treadmill on|off !centre !pulse <a+b..> [ms] !pad !sandbox <mission> [x y z rot] !hold <mode> [radius] !whistle !follow ... !blast !menu !refill !ammo !sound [volume g] !capture [probe N|...] !window !debug on|off   (anything else is Lua)";
 		}
 
 		DWORD WINAPI Maintenance(void*)
@@ -319,6 +365,7 @@ namespace phantom::guest
 	void OnProcessAttach(HMODULE a_self)
 	{
 		Log::Init(ModuleDir() + L"PhantomRingGuest.log", "guest");
+		Log::Info("PhantomRing guest (dinput8.dll) {}", version::Describe());
 		const auto id = CheckExe();
 		if (!EnvActivated()) {
 			Log::Info("PHANTOMRING is not 1: plain dinput8 proxy");
@@ -331,7 +378,7 @@ namespace phantom::guest
 		}
 		MutableCfg().Load(ModuleDir() + L"PhantomRingGuest.ini");
 		Log::SetDebug(Cfg().debugLog);
-		Log::Info("PhantomRing guest {} activating in {}", "0.1.0", Narrow(id.path));
+		Log::Info("PhantomRing guest activating in {}", Narrow(id.path));
 		g_active.store(true);
 		link::SetStatus(proto::Status::kBooting, "MGSV: starting");
 
@@ -347,6 +394,11 @@ namespace phantom::guest
 			lua::SetPump(&pump::Run);
 			state::SetLuaThreadWork(&LuaWork);
 			state::SetLuaTickWork(&LuaTickWork);
+			state::SetBuddyHooks({ .pose = [](logic::Vec3& p, float& yaw) { return skeleton::BuddyPose(p, yaw); },
+				.hint = [](const logic::Vec3& at, float r, std::uint64_t ms) { skeleton::HintBuddy(at, r, ms); },
+				.whistleHorse = &follow::WhistleHorseNow,
+				.forget = &skeleton::ForgetBuddy });
+			state::SetCommandResultSink(&ammo::OnResults);
 		} else {
 			link::SetStatus(proto::Status::kFailed, "MGSV: Lua hook unavailable (see PhantomRingGuest.log)");
 		}
@@ -362,6 +414,7 @@ namespace phantom::guest
 		blast::Install();
 		throwing::Install();
 		placed::Init();
+		ammo::Init();
 		sound::Install();
 		menu::Install();
 		if (Cfg().capture) {

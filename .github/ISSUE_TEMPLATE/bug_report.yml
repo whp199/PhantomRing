@@ -1,0 +1,83 @@
+name: Bug report
+description: Something went wrong while playing or installing PhantomRing
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying PhantomRing. Two commands collect almost everything we need (Linux, from the PhantomRing folder):
+
+        ```bash
+        tools/pr doctor          # checks Steam, both game versions, me3, gamescope, Proton, the build, your saves
+        tools/pr collect-logs    # zips both plugins' logs, the last launch's logs, the inis, the versions and pr doctor
+        ```
+
+        `pr collect-logs` writes `logs/phantomring-logs-<time>.zip`. Your home folder, user name, host name and Steam ids
+        are replaced by `~`, `<user>`, `<host>`, `<steamid>`; **look it over before you attach it anyway**. It never
+        contains saves or game files.
+
+        **Never attach** saves (`*.sl2`, MGSV's `TPP_GAME_DATA`), `pr record` captures (`*.prrec`: they contain MGSV's
+        assets) or any game file.
+
+        **Windows** (never tested there yet): attach `PhantomRingHost.log` (next to `PhantomRingHost.dll`),
+        `PhantomRingGuest.log` (in MGSV's `MGS_TPP` folder) and `BUILD.txt` from the zip, and look them over for your
+        user name first.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Screenshots or a short clip help.
+      placeholder: |
+        1. tools/pr launch
+        2. loaded my character at the Stormhill grace, waited for "Snake is in control"
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PhantomRing version
+      description: The first line of `tools/pr --version` (or the first line of BUILD.txt)
+      placeholder: PhantomRing v0.2.0-alpha (commit 0123456789ab, protocol 11)
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux (Proton)
+        - Steam Deck
+        - Windows
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `tools/pr doctor`
+      description: Linux only. Paste it whole; it is read-only and redacts nothing, so trim your user name if you like.
+      render: text
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      description: Distro, desktop (Wayland/X11), GPU and driver version, Proton version, native or Flatpak Steam
+      placeholder: Arch Linux, KDE Plasma 6.4 (Wayland), RTX 4070 / NVIDIA 580.x, Proton Experimental, native Steam
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Drag the zip from `tools/pr collect-logs` here (Windows: the two .log files and BUILD.txt)."
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Elden Ring ran offline through PhantomRing (`tools/pr launch`), never online
+          required: true
+        - label: I looked over the logs and attached no saves, `.prrec` captures or game files
+          required: true

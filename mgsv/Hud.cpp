@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <format>
 #include <mutex>
@@ -40,6 +41,15 @@ namespace phantom::guest::capture::hud
 		std::atomic<bool>          g_enabled{ true };
 		std::atomic<bool>          g_failed{ false };
 		std::atomic<int>           g_every{ 1 };
+		std::atomic<std::uint64_t> g_skipPs{ 0 };  // dev: `!capture hud skip <ps hash>` leaves those UI draws out (0 = none)
+		std::atomic<std::uint64_t> g_skippedPs{ 0 };
+		// The night-vision overlay: the one UI pixel shader whose draws covered the whole layer with the goggles on (VERIFIED live
+		// 2026-10-13: layer coverage 100% with them on, 4.6% -- weapon box, item box, prompts -- with this shader left out, 2.2%
+		// with them off). Its textures (g_ReflectionTexture, g_tex_mesh) say it is a filter, not a HUD element; it is also drawn
+		// with the goggles off and is kept then.
+		constexpr std::uint64_t    kNvgOverlayPs = 0xae282a7fe2bdbdd9;
+		std::atomic<bool>          g_nightVision{ false };
+		std::atomic<std::uint64_t> g_nvgLeftOut{ 0 };
 		std::atomic<std::uint64_t> g_jobs{ 0 }, g_uiDraws{ 0 }, g_mirrored{ 0 }, g_skippedTarget{ 0 }, g_windowDraws{ 0 }, g_published{ 0 }, g_skippedEmpty{ 0 },
 			g_notReady{ 0 };
 
@@ -355,6 +365,14 @@ namespace phantom::guest::capture::hud
 			return;
 		}
 		g_mainMatched.fetch_add(1, std::memory_order_relaxed);
+		if (const auto skip = g_skipPs.load(std::memory_order_relaxed); skip && a_s.psInfo && a_s.psInfo->hash == skip) {
+			g_skippedPs.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
+		if (g_nightVision.load(std::memory_order_relaxed) && a_s.psInfo && a_s.psInfo->hash == kNvgOverlayPs) {
+			g_nvgLeftOut.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
 		auto* t = TargetFor(rt.width, rt.height, rt.formats[0]);
 		if (!t) {
 			return;
@@ -457,6 +475,8 @@ namespace phantom::guest::capture::hud
 		a_imm->ClearRenderTargetView(t->rtv, kClear);
 	}
 
+	void SetNightVision(bool a_on) { g_nightVision.store(a_on, std::memory_order_relaxed); }
+
 	std::string Command(std::string_view a_args)
 	{
 		while (!a_args.empty() && a_args.front() == ' ') {
@@ -466,6 +486,9 @@ namespace phantom::guest::capture::hud
 			g_enabled.store(a_args == "on");
 		} else if (a_args.starts_with("every")) {
 			g_every.store(std::max(1, std::atoi(std::string(a_args.substr(5)).c_str())));
+		} else if (a_args.starts_with("skip")) {
+			g_skipPs.store(std::strtoull(std::string(a_args.substr(4)).c_str(), nullptr, 16));
+			g_skippedPs.store(0);
 		} else if (a_args == "reset") {
 			g_failed.store(false);
 			g_mainSize.store(0);
@@ -478,10 +501,10 @@ namespace phantom::guest::capture::hud
 		const auto* t = g_target.load(std::memory_order_acquire);
 		const auto  main = g_mainSize.load();
 		return std::format("hud: hooked {} enabled {} failed {} every {}; ui jobs {} ui draws {} mirrored {} (other targets {}); main target {}x{}; layer {}; "
-		                   "published {} (empty skipped {}, copies not ready {})",
+		                   "published {} (empty skipped {}, copies not ready {}); night vision {} ({} overlay draws left out); dev skip ps {:#x} ({} left out)",
 			g_hooked.load(), g_enabled.load(), g_failed.load(), g_every.load(), g_jobs.load(), g_uiDraws.load(), g_mirrored.load(), g_skippedTarget.load(), main >> 32,
 			main & 0xFFFFFFFF, t ? std::format("{}x{} {}", t->width, t->height, d3d::FormatName(t->rtvFormat)) : std::string("none"), g_published.load(),
-			g_skippedEmpty.load(), g_notReady.load());
+			g_skippedEmpty.load(), g_notReady.load(), g_nightVision.load() ? "on" : "off", g_nvgLeftOut.load(), g_skipPs.load(), g_skippedPs.load());
 	}
 
 	std::string ProbeLine(const d3d::ContextState& a_s, const d3d::DrawArgs& a_a)
@@ -515,6 +538,12 @@ namespace phantom::guest::capture::hud
 			for (unsigned i = 0; i < 4; ++i) {
 				if (const auto* r = a_s.psInfo->TextureAt(i)) {
 					tex += std::format("{}t{}:{} ", tex.empty() ? "" : "", i, r->name);
+					// Which texture: a full-screen overlay (night vision noise) shows by its texture, not its shader.
+					ID3D11Texture2D*     t = nullptr;
+					D3D11_TEXTURE2D_DESC d{};
+					if (d3d::SrvTexture(a_s.psSrv[i], &t, &d)) {
+						tex += std::format("[{} {}x{} {}] ", static_cast<void*>(t), d.Width, d.Height, d3d::FormatName(d.Format));  // not ours to release
+					}
 				}
 			}
 		}

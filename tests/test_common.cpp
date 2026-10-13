@@ -3,9 +3,13 @@
 #include "Ini.h"
 #include "Log.h"
 #include "Mapping.h"
+#include "Version.h"
+#include "phantomring_protocol.h"
 
 #include <cstdio>
+#include <cstring>
 #include <fstream>
+#include <string>
 
 using namespace phantom;
 
@@ -28,6 +32,31 @@ struct Payload
 int main()
 {
 	Log::Init(L"test_common.log", "test");
+
+	// version (common/Version.h): the build tag pr --version reads, the header fields, the mismatch text
+	{
+		const std::string tag(version::BuildTag());
+		CHECK(tag.starts_with("PHANTOMRING_BUILD release=" + std::string(version::Release()) + " commit=" + std::string(version::Commit())));
+		CHECK(tag.ends_with(" protocol=" + std::to_string(proto::kVersion)));
+		CHECK(!version::Release().empty() && !version::Commit().empty());
+		CHECK(version::Describe().starts_with("v" + std::string(version::Release())));
+		char field[14];
+		std::memset(field, 'x', sizeof(field));
+		version::WriteField(field, sizeof(field), "0.2.0-alpha");
+		CHECK(version::ReadField(field, sizeof(field)) == "0.2.0-alpha" && field[13] == 0);
+		version::WriteField(field, sizeof(field), "0.123.456-rc.12345");  // truncated, still terminated
+		CHECK(version::ReadField(field, sizeof(field)) == "0.123.456-rc." && field[13] == 0);
+		const char raw[4] = { '1', '\n', 'x', 'y' };  // no NUL, a control character: read safely
+		CHECK(version::ReadField(raw, sizeof(raw)) == "1?xy");
+		CHECK(version::MismatchText("0.2.0-alpha", 11, "0.3.0", 12) ==
+			"PhantomRing versions differ: Elden Ring plugin v0.2.0-alpha, MGSV plugin v0.3.0 -- reinstall both");
+		CHECK(version::MismatchText("0.2.0-alpha", 11, "0.2.0-alpha", 12) ==
+			"PhantomRing versions differ: Elden Ring plugin v0.2.0-alpha (protocol 11), MGSV plugin v0.2.0-alpha (protocol 12) -- reinstall both");
+		CHECK(version::MismatchText("0.2.0-alpha", 11, "", 0) ==
+			"PhantomRing versions differ: Elden Ring plugin v0.2.0-alpha, MGSV plugin from before v0.2.0-alpha -- reinstall both");
+		CHECK(version::MismatchText("", 10, "0.2.0-alpha", 11) ==
+			"PhantomRing versions differ: Elden Ring plugin from before v0.2.0-alpha (protocol 10), MGSV plugin v0.2.0-alpha -- reinstall both");
+	}
 
 	// mapping (file-backed and named) + seqlock across two views of the same file
 	{

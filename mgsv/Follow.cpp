@@ -6,11 +6,13 @@
 #include "Hook.h"
 #include "Link.h"
 #include "Log.h"
+#include "Skeleton.h"
 #include "State.h"
 #include "Verify.h"
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -42,6 +44,7 @@ namespace phantom::guest::follow
 		// our whistles kept putting D-Walker back into assault mode). Our own commands are marked on the calling thread.
 		BuddyCommandFn                g_command{ nullptr };
 		bool                          g_commandHooked{ false };  // our detour sits on its first bytes (checked before hooking)
+		bool                          g_horseSite{ false };      // command 17's case is the horse whistle analysed
 		thread_local bool             t_ourCommand{ false };
 		std::atomic<bool>             g_playerHold{ false };
 		std::atomic<int>              g_playerLast{ -1 };
@@ -416,7 +419,9 @@ namespace phantom::guest::follow
 				g_playerCommands.fetch_add(1, std::memory_order_relaxed);
 				// The whistle and "Normal Mode" (21: disengage from the current mode) both leave the walker in Normal Mode, the
 				// mode our whistles don't change: following resumes. Any other command (a mode, another buddy's) holds it.
-				const bool hold = a_command != addr::kBuddyWhistle && a_command != addr::kBuddyNormalMode && Cfg().buddyFollowRespectCommands;
+				// D-Horse's whistle resumes it the same way; its "Stay back" (18) holds it.
+				const bool hold = a_command != addr::kBuddyWhistle && a_command != addr::kBuddyNormalMode && a_command != addr::kBuddyHorseWhistle &&
+				                  a_command != 19 && Cfg().buddyFollowRespectCommands;
 				if (hold != g_playerHold.exchange(hold, std::memory_order_acq_rel)) {
 					Log::Info("follow: the player's buddy command {} (arg {}) -> {}", a_command, a_arg,
 						hold ? "auto-follow paused until the player whistles" : "auto-follow resumed");
@@ -448,6 +453,21 @@ namespace phantom::guest::follow
 			t_ourCommand = false;
 			++g_whistles;
 			Log::Debug("follow: whistle #{} ({})", g_whistles, a_why);
+		}
+
+		// D-Horse's whistle (command 17, byte-checked case): it gallops to Snake. Its skin is learned beside him if not known.
+		void HorseWhistle(const std::string& a_why)
+		{
+			g_last = ::GetTickCount64();  // every horse whistle counts for the interval (boot's, the iDroid's, the console's)
+			t_ourCommand = true;
+			reinterpret_cast<BuddyCommandFn>(addr::kBuddyCommand.va)(reinterpret_cast<void*>(addr::kBuddySystem), addr::kBuddyHorseWhistle, 0);
+			t_ourCommand = false;
+			++g_whistles;
+			const auto fr = state::Frame();
+			if (fr.valid) {
+				skeleton::HintBuddy(fr.root, 6.0f, 20000);
+			}
+			Log::Info("follow: D-Horse whistled #{} ({})", g_whistles, a_why);
 		}
 
 		// FollowMethod = record: what the whistle case does to the record, minus the mode reset -- destination at +0x30, the
@@ -495,9 +515,76 @@ namespace phantom::guest::follow
 		}
 	}
 
+	namespace
+	{
+		void InstallCommandHook()
+		{
+			if (g_commandHooked) {
+				return;
+			}
+			if (Matches(addr::kBuddyCommand, "buddy command") &&
+				Hooks::Create("buddy command", reinterpret_cast<void*>(addr::kBuddyCommand.va), &CommandDetour, &g_command)) {
+				g_commandHooked = true;
+				Log::Info("follow: the player's own buddy commands {}", Cfg().buddyFollowRespectCommands ? "pause auto-follow (until a whistle or Normal Mode)" : "are logged");
+			}
+			if (Matches(addr::kVoicePost, "voice post")) {
+				Hooks::Create("voice post", reinterpret_cast<void*>(addr::kVoicePost.va), &VoiceDetour, &g_voice);
+			}
+		}
+
+		// D-Horse: MGSV's horse doesn't follow by itself either; its whistle (command 17) makes it gallop to Snake and stop
+		// beside him (live). No spot, no modes: whistle when it is far from Snake on foot (or not known: its skin is then
+		// learned near Snake once it arrives, Skeleton.cpp).
+		void HorseUpdate(std::uint64_t a_nowMs)
+		{
+			const auto& c = Cfg();
+			if (g_ok < 0) {
+				g_ok = Check() ? 1 : 0;
+			}
+			if (g_ok != 1 || !g_horseSite) {
+				return;
+			}
+			const auto lua = state::Lua();
+			const auto fr = state::Frame();
+			if (!lua.InGame() || !fr.valid || lua.buddyId == 0xFFFF || lua.buddyActive != state::kBuddyTypeHorse || state::BuddyMissing()) {
+				return;
+			}
+			const bool known = lua.buddyPosValid;
+			const float dist = known ? (lua.buddyPos - fr.root).LengthXZ() : -1.0f;
+			g_lastDist = dist;
+			if (g_requested.exchange(false)) {
+				g_last = a_nowMs;
+				HorseWhistle("console");
+				return;
+			}
+			const bool riding = lua.ridden != 0xFFFF || (lua.flags & state::kLVehicle);
+			const bool busy = (lua.flags & (state::kLMenu | state::kLDemo | state::kLDead | state::kLCqc)) != 0 || death::Down();
+			if (!g_enabled || !c.buddyFollow || c.buddyHorseFollowDistance <= 0.0f || riding || busy || g_playerHold.load(std::memory_order_acquire) ||
+				state::Parked()) {
+				return;
+			}
+			// A treadmill jump left it behind (it can't be moved with Snake): at once, unless it is right beside him.
+			if (g_soon.exchange(false) && known && dist > 5.0f && a_nowMs - g_last >= 1000) {
+				g_last = a_nowMs;
+				HorseWhistle(std::format("{:.1f} m from Snake after a treadmill jump", dist));
+				return;
+			}
+			const auto every = static_cast<std::uint64_t>(std::max(1000, c.buddyHorseWhistleEveryMs));
+			if (known ? dist <= c.buddyHorseFollowDistance || a_nowMs - g_last < every : a_nowMs - g_last < 2 * every) {
+				return;
+			}
+			g_last = a_nowMs;
+			HorseWhistle(known ? std::format("{:.1f} m from Snake", dist) : std::string("not seen yet"));
+		}
+	}
+
 	void Install()
 	{
-		if (Cfg().buddy != "walker" || !Cfg().buddyFollow || !SpotWanted()) {
+		// The command hook (the player's orders shown in Elden Ring, their holds) and the voice counter serve every buddy; the
+		// walker's handler detour only D-Walker (installed for any type: `!buddy` switches buddies in session).
+		g_horseSite = Matches(addr::kBuddyCommandHorseWhistle, "buddy command: horse whistle case");
+		InstallCommandHook();
+		if (!Cfg().buddyFollow || !SpotWanted()) {
 			return;
 		}
 		if (!Matches(addr::kWalkerMessageHandler, "walker message handler") || !Matches(addr::kWalkerWhistleRecord, "walker whistle record") ||
@@ -516,14 +603,6 @@ namespace phantom::guest::follow
 			g_restoreSites ? "known" : g_modeSites ? "known, whistle reset differs: restore off" : "unknown: command method only", Cfg().buddyFollowModes,
 			g_modeMask.load());
 		g_hooked = Hooks::Create("walker message handler", reinterpret_cast<void*>(addr::kWalkerMessageHandler.va), &HandlerDetour, &g_handler);
-		if (Matches(addr::kBuddyCommand, "buddy command") &&
-			Hooks::Create("buddy command", reinterpret_cast<void*>(addr::kBuddyCommand.va), &CommandDetour, &g_command)) {
-			g_commandHooked = true;
-			Log::Info("follow: the player's own buddy commands {}", Cfg().buddyFollowRespectCommands ? "pause auto-follow (until a whistle or Normal Mode)" : "are logged");
-		}
-		if (Matches(addr::kVoicePost, "voice post")) {
-			Hooks::Create("voice post", reinterpret_cast<void*>(addr::kVoicePost.va), &VoiceDetour, &g_voice);
-		}
 		Log::Info("follow: {}", g_hooked ? std::format("whistles send D-Walker {:.1f} m ahead / {:.1f} m right of Snake", Cfg().buddyFollowAhead,
 			                                               Cfg().buddyFollowSide)
 		                                 : std::string("message handler hook refused -- whistles bring D-Walker to Snake himself"));
@@ -532,6 +611,10 @@ namespace phantom::guest::follow
 	void Update(std::uint64_t a_nowMs, bool a_ready)
 	{
 		const auto& c = Cfg();
+		if (a_ready && c.buddy == "horse") {
+			HorseUpdate(a_nowMs);
+			return;
+		}
 		if (!a_ready || c.buddy != "walker") {
 			return;
 		}
@@ -598,7 +681,7 @@ namespace phantom::guest::follow
 			g_stuckSince = a_nowMs;
 		}
 		g_lastDist = dist;
-		if (!g_enabled || !c.buddyFollow || riding || busy || g_playerHold.load(std::memory_order_acquire)) {
+		if (!g_enabled || !c.buddyFollow || riding || busy || g_playerHold.load(std::memory_order_acquire) || state::Parked()) {
 			return;
 		}
 		if (!modeOurs) {
@@ -675,6 +758,18 @@ namespace phantom::guest::follow
 	}
 
 	void RequestWhistle() { g_requested = true; }
+
+	bool WhistleHorseNow(const char* a_why)
+	{
+		if (g_ok < 0) {
+			g_ok = Check() ? 1 : 0;
+		}
+		if (g_ok != 1 || !g_horseSite) {
+			return false;
+		}
+		HorseWhistle(a_why);
+		return true;
+	}
 	void SetEnabled(bool a_on) { g_enabled = a_on; }
 
 	std::string Describe()

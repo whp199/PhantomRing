@@ -83,6 +83,17 @@ TppWeather = { ForceRequestWeather = function() end }
 
 static lua_State* g_L = nullptr;
 
+// The save guards (mgsv/WindowHidden.cpp, SaveGuard.cpp, not linked here): incomplete in this test, so the boot must leave MGSV's
+// Auto-Aim Correction as it is (review: it was gated on [Saves] Block alone).
+namespace phantom::guest::hidden
+{
+	bool SavesBlocked() { return false; }
+}
+namespace phantom::guest::saves
+{
+	bool SteamGuarded() { return true; }
+}
+
 static bool MockLog(const char* a_entry)
 {
 	lua_getglobal(g_L, "MOCK");
@@ -146,6 +157,7 @@ int main()
 	g_L = luaL_newstate();
 	luaL_openlibs(g_L);
 	CHECK(luaL_dostring(g_L, kMock) == 0);
+	CHECK(luaL_dostring(g_L, "vars.optionSelectedIndices = { [11] = 0 }") == 0);  // Auto-Aim Correction ON
 	lua::UseApiForTests({ reinterpret_cast<void*>(&lua_pcall), reinterpret_cast<void*>(&luaL_loadbuffer), reinterpret_cast<void*>(&lua_gettop),
 		reinterpret_cast<void*>(&lua_settop), reinterpret_cast<void*>(&lua_tolstring), reinterpret_cast<void*>(&lua_type),
 		reinterpret_cast<void*>(&lua_tonumber), reinterpret_cast<void*>(&lua_toboolean), reinterpret_cast<void*>(&lua_pushvalue),
@@ -190,6 +202,9 @@ int main()
 	const auto centre = state::Centre();
 	CHECK(centre && centre->x == 10.0f && centre->z == -4.0f);
 	CHECK(link::CurrentStatusText() == "MGSV: ready (Mother Base, D-Walker deployed)");
+	// [Boot] AutoAim = false with the save guards incomplete: left as it is (it could be saved).
+	CHECK(luaL_dostring(g_L, "return vars.optionSelectedIndices[11]") == 0 && lua_tonumber(g_L, -1) == 0);
+	lua_pop(g_L, 1);
 	const auto lua = state::Lua();
 	CHECK(lua.InGame() && lua.mission == 30050 && lua.buddyActive == 4 && lua.buddyId == 0x2001);
 	CHECK(lua.buddyPosValid && lua.buddyPos.x == 7.0f && lua.buddyPos.z == -2.0f);

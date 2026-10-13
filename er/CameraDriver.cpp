@@ -116,7 +116,9 @@ namespace phantom::er::CameraDriver
 			// From Snake's eye -- no higher than the camera when MGSV lowers it (crouched, prone), so the ray doesn't dive
 			// into the slope behind him -- to the camera, plus rays to points collision_radius around the camera (its near
 			// plane needs room, and a thin trunk then pulls it in for all the frames it crosses, not every other one).
-			const float eyeY = Puppet::Riding() ? Cfg().eyeHeightVehicle : std::clamp(pos.y - anchor.pe.y, 0.6f, Cfg().eyeHeight);
+			const float eyeY = Puppet::RidingHorse() ? Cfg().eyeHeightHorse :
+			                   Puppet::Riding()      ? Cfg().eyeHeightVehicle :
+			                                           std::clamp(pos.y - anchor.pe.y, 0.6f, Cfg().eyeHeight);
 			const Vec3  eye = anchor.pe + Vec3{ 0, eyeY, 0 };
 			const Vec3  seg = pos - eye;
 			const float len = Length(seg);

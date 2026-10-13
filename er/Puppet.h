@@ -35,6 +35,7 @@ namespace phantom::er
 		[[nodiscard]] bool          Active();
 		[[nodiscard]] const Anchor& CurrentAnchor();  // valid while Active()
 		[[nodiscard]] bool          Riding();
+		[[nodiscard]] bool          RidingHorse();  // ...D-Horse (its own speed, step-up, radius and eye height)
 		[[nodiscard]] float         GroundY();
 		[[nodiscard]] float         FallSpeed();
 		[[nodiscard]] float         HpFrac();
@@ -52,7 +53,19 @@ namespace phantom::er
 			kAuto,
 			kOff
 		};
-		void        SetOverride(Override a_mode);
+		void        SetOverride(Override a_mode);  // console `puppet off|auto` (auto also ends a step-aside)
+		// What else keeps the puppet off while it would run: the player took the Tarnished (Tarnished mode, er/Host.cpp), Elden
+		// Ring walks him through the mist ([Input] release_prompts), or he climbs a ladder (er/Ladder.h). Each is its own reason;
+		// the puppet runs when none holds.
+		enum class Hold : std::uint8_t
+		{
+			kConsole = 1,
+			kTarnished = 2,
+			kStepAside = 4,
+			kLadder = 8,
+		};
+		void               SetHold(Hold a_reason, bool a_on);
+		[[nodiscard]] bool Held(Hold a_reason);
 		// Console `puppet motion kinematic|root_motion`: switches [Puppet] motion live (the root-motion hook installed or
 		// removed on the running puppet).
 		std::string SetMotion(std::string_view a_mode, const Frame& a_frame);

@@ -80,6 +80,17 @@ namespace phantom::er
 		// guest plays a fall/faint animation), cut (gone at once).
 		std::string deathVisual{ "keep" };  // the guest plays Snake's collapse ([Combat] DeathCollapse)
 		int         deathFadeMs{ 900 };
+		// MGSV's night-vision goggles recreated on Elden Ring's frame (GuestState kGuestNvg, er/RenderNvg.h): its tone-mapped
+		// scene (Snake included) before its HUD becomes a bright green picture.
+		bool        nvg{ true };
+		float       nvgGain{ 5.0f };           // luminance^curve x this, then soft highlight compression: 1 - exp(-gain * L^curve)
+		float       nvgCurve{ 0.6f };          // < 1 lifts the dark more than the light (1 = linear: a dark tunnel stayed near black)
+		float       nvgFloor{ 0.025f };        // black level lift (share of full brightness)
+		float       nvgTint[3]{ 0.30f, 1.0f, 0.40f };  // linear RGB of full brightness
+		float       nvgGrain{ 0.07f };         // per-pixel noise, changing every frame (share of full brightness)
+		float       nvgVignette{ 0.35f };      // darkening toward the corners (0 = off)
+		float       nvgScanlines{ 0.0f };      // darkening of every other line pair (0 = off)
+		int         nvgFadeMs{ 250 };          // in/out as the goggles go on and off
 
 		bool operator==(const RenderConfig&) const = default;
 	};
@@ -145,6 +156,14 @@ namespace phantom::er
 		int           guestIdroidStartMs{ 1200 };  // ...sent to MGSV as Start held this long (MGSV: Back = pause menu, Start held ~1 s = iDroid, VERIFIED live)
 		bool          guestMenuOwnsPad{ true };  // kGuestInMenu: MGSV gets the whole pad, Elden Ring nothing
 		int           padGlyphDevice{ 0 };       // Elden Ring's glyph device while Snake plays: 0 pad, 1 keyboard; -1 = leave it to ER
+		int           startWaitMs{ 150 };        // Start (and View in Tarnished mode) reaches Elden Ring this long after it went down: room for the chord
+		int           chordMs{ 1000 };           // View + Start held together this long toggles Tarnished mode (er/Chord.h); 0 = off
+		std::vector<int> restPrompts{ 6101 };    // ActionButtonParam ids of "Rest at site of grace": its HUD hiding after it = a rest (kHEvRested 0)
+		std::vector<int> menuKeys{ 0x1B, 0x47 }; // keyboard keys that open Elden Ring menus (Esc, G = map): count like a Start press (VK codes)
+		std::vector<int> ladderPrompts{ 5000, 5010 };  // ActionButtonParam ids "Climb" / "Descend" (ladders, er/Ladder.h): Elden Ring climbs
+		int              ladderPressDelayMs{ 100 };    // ...the puppet steps aside on the press, which reaches Elden Ring this much later
+		int              ladderWaitMs{ 1500 };         // ...until the climb starts (at most this long after the press)
+		int              ladderSettleMs{ 300 };        // ...and back this long after the Tarnished got off the ladder
 
 		// [Puppet]
 		std::string hideMode{ "render_flag" };  // render_flag | fade | none
@@ -153,6 +172,8 @@ namespace phantom::er
 		                            // is handed, less uphill: the shortfall is handed again, up to this much); 0 = off
 		bool  unstick{ true };      // kinematic: a puppet that is boxed in (inside a cart, a rock) or stuck for unstick_seconds goes back to
 		float unstickSeconds{ 0.5f };  // where it last stood free
+		float fallWatchSeconds{ 4.0f };  // a fall with no landing after this long (s) ... (NoDead: a chasm's kill volume can't kill the puppet)
+		float fallWatchDrop{ 60.0f };    // ... or this deep (m) is Snake's death (YOU DIED); 0 = that check off
 		bool  hitHook{ true };     // catch ER hits in ReceiveDamage and cancel them (re-backlog E2)
 		bool  noDead{ true };
 		bool  noDamage{ false };   // NoDamage hides hits from us (we detect hits by HP loss), so off by default
@@ -161,11 +182,15 @@ namespace phantom::er
 		bool  killOnGuestDeath{ true };
 		float maxSpeed{ 12.0f };          // m/s on foot; larger single-frame odometer jumps are clamped
 		float maxSpeedVehicle{ 32.0f };   // m/s while riding (D-Walker dash/hover)
+		float maxSpeedHorse{ 32.0f };     // m/s while riding D-Horse (its gallop)
 		float teleportDrop{ 4.0f };       // an odometer jump larger than this (m) in one frame is a guest warp: ignored
 		float resyncDistance{ 1.5f };     // ER moved the puppet further than this from where we put it: re-anchor
 		float radius{ 0.35f };
 		float stepUp{ 0.5f };
 		float stepUpVehicle{ 0.8f };
+		float stepUpHorse{ 0.8f };
+		float radiusVehicle{ 0.35f };     // the kinematic body's radius while riding D-Walker (or another vehicle)
+		float radiusHorse{ 0.45f };       // ... and D-Horse (longer than Snake: its head and tail)
 		float snapDown{ 0.6f };
 		float chestHeight{ 1.3f };
 		float gravity{ 9.81f };
@@ -189,6 +214,7 @@ namespace phantom::er
 		bool  syncCompassCam{ true };   // and into chr_cam again right before ER computes its HUD compass from it (CameraDriver::ApplyCompass)
 		float eyeHeight{ 1.6f };
 		float eyeHeightVehicle{ 2.2f };
+		float eyeHeightHorse{ 2.4f };
 		float collisionMargin{ 0.25f };
 		float collisionRadius{ 0.15f };   // extra rays this far around the camera (0 = the centre ray only)
 		float collisionEaseOut{ 0.2f };   // s: back out after a pull-in (in is immediate)
@@ -224,7 +250,7 @@ namespace phantom::er
 		float         unitsPerLife{ 40.0f };      // class-table units (no MGSV share) in one soldier's life
 		float         bigFrom{ 1.5f };            // max HP / the Tarnished's max HP up to which an enemy is ordinary (reference = its max HP)
 		float         bossFrom{ 5.0f };           // ... from which it is boss-like (worth boss_lives soldiers)
-		float         bossLives{ 70.0f };
+		float         bossLives{ 45.0f };       // MGSV's assault-rifle share (0.2115 a round): a magazine ~15% of a boss (live, Margit)
 		float         shareMult{ 1.0f };          // x MGSV's own damage share (protocol v8)
 		float         headFraction{ 0.82f };
 		float         headshotMult{ 4.5f };       // ordinary enemies (MGSV: a headshot kills a soldier)
@@ -339,6 +365,14 @@ namespace phantom::er
 		float mineArmSeconds{ 1.5f };            // after placing, before an enemy can set one off
 		float mineBodyRadius{ 0.07f };
 		float mineLightRadius{ 0.035f };
+
+		// [Progression] (docs/COMBAT.md "Progression"): Elden Ring's progression scales Snake's damage. Off by default.
+		std::string progression{ "off" };     // off | level | weapon | both
+		float       levelReference{ 20.0f };  // the Tarnished's rune level at which Snake deals MGSV's own damage (x1)
+		float       levelExponent{ 0.5f };    // level: x (level / level_reference)^level_exponent
+		float       weaponBonus{ 1.5f };      // weapon: x (1 + weapon_bonus x upgrade / max upgrade): +25 (+10 somber) = x2.5
+		float       progressionMin{ 0.5f };   // the factor is kept within these
+		float       progressionMax{ 3.0f };
 
 		RenderConfig  render;
 		OverlayConfig overlay;

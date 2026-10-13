@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(PhantomRing VERSION 0.1.0 LANGUAGES C CXX)
+# The one version source is the VERSION file (e.g. 0.2.0-alpha): CMake's project version is its numeric part; both DLLs
+# (common/Version.h), `pr --version` and the packages' BUILD.txt read the whole of it.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" PHANTOM_RELEASE LIMIT_COUNT 1)
+string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" PHANTOM_VERSION_CORE "${PHANTOM_RELEASE}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS VERSION)
+project(PhantomRing VERSION ${PHANTOM_VERSION_CORE} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,14 +25,24 @@ add_library(minhook STATIC
 	extern/minhook/src/hde/hde64.c)
 target_include_directories(minhook PUBLIC extern/minhook/include)
 
-# ---- shared core: mapping, rings, log, ini, hooks ---------------------------------------------
+# ---- version: VERSION + the commit id, regenerated on every build (cmake/version.cmake) ---------------
+set(PHANTOM_VERSION_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/phantomring_version.h)
+add_custom_target(phantom_version
+	COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_CURRENT_SOURCE_DIR} -DOUT=${PHANTOM_VERSION_HEADER} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake
+	BYPRODUCTS ${PHANTOM_VERSION_HEADER}
+	VERBATIM)
+
+# ---- shared core: mapping, rings, log, ini, hooks, version --------------------------------------
 add_library(phantom_common STATIC
 	common/Mapping.cpp
 	common/Log.cpp
 	common/Ini.cpp
 	common/Hook.cpp
-	common/Platform.cpp)
+	common/Platform.cpp
+	common/Version.cpp)
+add_dependencies(phantom_common phantom_version)
 target_include_directories(phantom_common PUBLIC common protocol)
+target_include_directories(phantom_common PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(phantom_common PUBLIC minhook)
 target_compile_definitions(phantom_common PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE _WIN32_WINNT=0x0A00)
 target_compile_options(phantom_common PUBLIC -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers)
@@ -100,7 +115,7 @@ target_link_options(verify_er_addresses PRIVATE ${PHANTOM_STATIC_LINK} -Wl,--ima
 set(PHANTOM_WINEPREFIX "$ENV{WINEPREFIX}" CACHE PATH "Wine prefix for the offline tests (empty: wine's default)")
 # An empty prefix must not reach wine as WINEPREFIX= (wine refuses it): leave the variable out then.
 if(PHANTOM_WINEPREFIX)
-	set(PHANTOM_WINE_ENV ${PHANTOM_WINE_ENV})
+	set(PHANTOM_WINE_ENV "WINEPREFIX=${PHANTOM_WINEPREFIX}")
 else()
 	set(PHANTOM_WINE_ENV "--unset=WINEPREFIX")
 endif()
