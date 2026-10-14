@@ -150,6 +150,9 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 - Applies the odometer to a puppet position.
 - Prints guest state, odometer, pose bone count, fire and buddy-fire events, draw lists, render-ring meshes and textures, and HUD frames.
 - Answers `pr er` with canned data: `help`, `ping`, `status`, `peek player.pos`, `peek <addr>`.
+- `--actors near` + `pr er actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew` and `pr er actors`: the two actors' flags,
+  places (MGSV metres from Snake) and handles for ActorProxy / Fulton tests (docs/GUEST.md 20.4-20.5); a kGEvFulton a=1 takes that
+  actor out of the table, as the host takes the enemy out of Elden Ring. `pr record` takes `--actors` too.
 
 **fake_mgsv**:
 - Waits for a host session, then publishes Snake walking a circle in a 10 m sandbox (treadmill warp kept out of the odometer), plus the pad's left stick.
@@ -176,7 +179,7 @@ python3 tools/phantomring/test_plugins.py    # the plugins' real C++ link code u
 cmake --build build --target check_windows   # Windows players (docs/WINDOWS.md): platform decisions, Steam lookup, guest install,
                                              # both link codes over Local\PhantomRing_v1 + the launcher end to end, the hidden
                                              # window, DLL imports (tools/check_imports.py)
-python3 -I tools/package_windows.py          # dist/PhantomRing-<version>-windows.zip (me3 profile, both DLLs, inis, README-WINDOWS.md)
+python3 -I tools/package_windows.py          # dist/PhantomRing-<version>-windows.zip (me3 profile, both DLLs, inis, collect-logs.cmd, README-WINDOWS.md)
 python3 -I tools/package_linux.py            # dist/PhantomRing-<version>-linux.tar.gz (the checkout's layout: build/ DLLs, inis, tools/pr)
                                              # both: reproducible, BUILD.txt (version, commit, protocol, game versions, sha256
                                              # of every file) inside, <archive>.sha256 next to it; refuse DLLs of another commit

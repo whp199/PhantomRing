@@ -639,6 +639,270 @@ static void TestExplosionRows(const std::string& a_dir, const std::vector<std::u
 	std::printf("explosion looks and carriers checked (%d param files scanned)\n", scanned);
 }
 
+// ---- damage_route = speffect: the damage ladder and the split between Elden Ring's own hit and it --------------
+static void TestDamageLadder()
+{
+	const DamageLadder l;  // 20010640, 4 digits
+	CHECK(DamageLadderRows(l) == 36 && DamageLadderMax(l) == 9999);
+	// Row selection: base + 9 x place + (digit - 1).
+	CHECK(DamageRungRow(0, 1, l) == 20010640 && DamageRungRow(0, 9, l) == 20010648 && DamageRungRow(1, 1, l) == 20010649 &&
+	      DamageRungRow(3, 9, l) == 20010675);
+	CHECK(DamageRungRow(4, 1, l) == -1 && DamageRungRow(0, 0, l) == -1 && DamageRungRow(0, 10, l) == -1 && DamageRungRow(-1, 1, l) == -1);
+	CHECK(DamageRungValue(20010640, l) == 1 && DamageRungValue(20010648, l) == 9 && DamageRungValue(20010649, l) == 10 &&
+	      DamageRungValue(20010661, l) == 400 && DamageRungValue(20010675, l) == 9000);
+	CHECK(DamageRungValue(20010639, l) == 0 && DamageRungValue(20010676, l) == 0 && DamageRungValue(25000, l) == 0);
+	for (int k = 0; k < DamageLadderRows(l); ++k) {  // every row round-trips
+		const int place = k / 9, digit = k % 9 + 1;
+		CHECK(DamageRungRow(place, digit, l) == l.base + k && DamageRungValue(l.base + k, l) == digit * static_cast<int>(std::pow(10, place)));
+	}
+	// Exact in 4 slots, largest place first: the live soldier's 46 per rifle round, a headshot's 230, Margit's ~20.
+	CHECK((DamageRungs(46, l) == std::vector<std::int32_t>{ 20010652, 20010645 }));  // 40 + 6
+	CHECK(DamageOfRungs(DamageRungs(46, l), l) == 46 && DamageOfRungs(DamageRungs(230, l), l) == 230 && DamageRungs(20, l).size() == 1);
+	CHECK(DamageOfRungs(DamageRungs(9999, l), l) == 9999 && DamageRungs(9999, l).size() == 4);
+	CHECK(DamageOfRungs(DamageRungs(1234, l), l) == 1234 && DamageRungs(1234, l).size() == 4);
+	for (int a = 0; a <= 9999; ++a) {  // every amount exactly, in at most 4 rows
+		const auto rows = DamageRungs(a, l);
+		if (DamageOfRungs(rows, l) != a || rows.size() > 4) {
+			CHECK(false);
+			break;
+		}
+	}
+	CHECK(DamageRungs(0, l).empty() && DamageRungs(-5, l).empty());
+	CHECK(DamageOfRungs(DamageRungs(12000, l), l) == 9999);  // clamped to the ladder's top (max_damage is 9999)
+	// Rounding when the sleep rungs left fewer slots: the nearest value with that many non-zero digits, half up.
+	CHECK(DamageRoundToSlots(1234, 2, l) == 1200 && DamageRoundToSlots(1250, 2, l) == 1300 && DamageRoundToSlots(1234, 1, l) == 1000);
+	CHECK(DamageRoundToSlots(46, 1, l) == 50 && DamageRoundToSlots(44, 1, l) == 40 && DamageRoundToSlots(46, 0, l) == 0);
+	CHECK(DamageRoundToSlots(995, 2, l) == 1000);   // carries into the next place
+	CHECK(DamageRoundToSlots(9960, 1, l) == 9000);  // 10000 has no rung: rounds down instead
+	CHECK(DamageRoundToSlots(9960, 2, l) == 9900 && DamageRoundToSlots(9950, 3, l) == 9950);
+	CHECK(DamageRungs(1234, l, 2).size() == 2 && DamageOfRungs(DamageRungs(1234, l, 2), l) == 1200);
+	// Another size: 2 digits = 18 rows, 1..99.
+	const DamageLadder small{ 500, 2 };
+	CHECK(DamageLadderRows(small) == 18 && DamageLadderMax(small) == 99 && DamageOfRungs(DamageRungs(150, small), small) == 99);
+	CHECK(DamageRungs(5, DamageLadder{ 0, 4 }).empty());  // no base: no ladder
+	CHECK(DamageLadderRows(DamageLadder{ 1, 9 }) == 9 * kDamageLadderMaxDigits);  // digits clamped
+}
+
+namespace
+{
+	// Elden Ring as far as the ladder sees it: its own bullet hit is its weapon's full hit (a_ref) x the correction, a raised
+	// shield lets a_shield of that through, and the ladder rows deal exactly what they carry -- unless a_dropOnGuard (Elden
+	// Ring drops a guarded hit's SpEffects) or a_noLadder (the rows never apply).
+	struct ErModel
+	{
+		int   ref{ 42 };  // live: ~42 per bullet at 100% on a 219 HP Gatefront soldier
+		bool  guarding{ false };
+		float shield{ 5.0f / 42.0f };  // live: 5 of 42 through a soldier's shield
+		bool  dropOnGuard{ false };
+		bool  noLadder{ false };
+	};
+	struct HitResult
+	{
+		NativePlan    plan;
+		std::int32_t  carried{ 0 };
+		std::int32_t  dealt{ 0 };
+		NativeOutcome outcome;
+	};
+	HitResult LadderHit(NativeDamage& a_n, std::int32_t a_npc, const void* a_chr, std::int32_t a_wanted, double a_now, const ErModel& a_er,
+		std::int32_t& a_hp, std::size_t a_slots = 5, bool a_ladderConfirmed = true)
+	{
+		static const DamageLadder     l;
+		static const NativeDamage::Rules rules;
+		HitResult                     r;
+		r.plan = a_n.Plan(a_npc, a_chr, a_wanted, a_now, rules);
+		r.carried = DamageOfRungs(DamageRungs(r.plan.ladder, l, a_slots), l);
+		double er = a_er.ref * r.plan.correction / 100.0;
+		if (a_er.guarding) {
+			er *= a_er.shield;
+		}
+		const bool rows = !a_er.noLadder && !(a_er.guarding && a_er.dropOnGuard);
+		r.dealt = std::min<std::int32_t>(a_hp, static_cast<std::int32_t>(std::lround(er)) + (rows ? r.carried : 0));
+		a_hp -= r.dealt;
+		if (a_hp > 0) {  // Combat.cpp learns only from hits that did not kill (a dead target's HP tells nothing)
+			r.outcome = a_n.Learn(a_npc, a_chr, r.plan.correction, r.carried, r.dealt, a_now, a_ladderConfirmed);
+		}
+		return r;
+	}
+}
+
+static void TestNativeDamage()
+{
+	int soldierChr = 0, otherChr = 0;
+	const std::int32_t soldier = 43114010;
+	// The wanted damage as today: MGSV's assault-rifle share on a 219 HP Limgrave soldier (Tarnished 522): 46 a body hit.
+	HitRules r;
+	r.scaling.playerMaxHp = 522.0f;
+	const auto body = ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 219, false, r, 0.2115f).damage;
+	CHECK(body == 46);
+
+	// Plan before anything is known: the first correction (10%), the ladder carries all of it.
+	{
+		NativeDamage n;
+		const auto   p = n.Plan(soldier, &soldierChr, 46, 0.0, {});
+		CHECK(p.correction == 10 && p.erExpected == 0 && p.ladder == 46 && p.guardFactor == 1.0f);
+		CHECK(n.Plan(soldier, &soldierChr, 0, 0.0, {}).ladder == 0);
+		// ER dealt 4 (its 42 x 10%) + the 46 carried: the reference becomes 40 (4 / 10%), the ladder confirmed.
+		const auto o = n.Learn(soldier, &soldierChr, 10, 46, 50, 0.0, false);
+		CHECK(o.ladderLanded && o.erPart == 4 && !o.guarded && n.Reference(soldier) == 40);
+		// Now ER's part is aimed at 10% of the wanted damage: 4.6 of 40 at 100% -> 12%, ~5 expected, the ladder the rest.
+		const auto q = n.Plan(soldier, &soldierChr, 46, 100.0, {});
+		CHECK(q.correction == 12 && q.erExpected == 5 && q.ladder == 41);
+		// Per kind of enemy: another one starts from scratch.
+		CHECK(n.Plan(60100010, &otherChr, 46, 100.0, {}).correction == 10 && n.Reference(60100010) == 0);
+		// A share of 0 still flies a 1% bullet (the flinch needs a hit); a share of 1 lets ER deal it all (up to 100%).
+		NativeDamage::Rules all;
+		all.bulletShare = 1.0f;
+		CHECK(n.Plan(soldier, &soldierChr, 46, 100.0, all).correction == 100 && n.Plan(soldier, &soldierChr, 46, 100.0, all).ladder == 6);
+		NativeDamage::Rules none;
+		none.bulletShare = 0.0f;
+		CHECK(n.Plan(soldier, &soldierChr, 46, 100.0, none).correction == 1 && n.Plan(soldier, &soldierChr, 46, 100.0, none).ladder == 46);
+		// The reference is a moving average of unguarded hits (a counter hit's 1.6x moves it a quarter of the way).
+		n.Learn(soldier, &soldierChr, 12, 41, 41 + 8, 200.0, true);  // 8 / 12% = 66.7
+		CHECK(n.Reference(soldier) == 47);                       // 0.75 x 40 + 0.25 x 66.7
+	}
+
+	// Kills per magazine stay as COMBAT §8's table: a Limgrave soldier dies to the 5th body hit (top-up: ER 42 + 4), whatever
+	// ER's own part does, because the ladder carries the rest exactly.
+	{
+		NativeDamage n;
+		std::int32_t hp = 219;
+		int          hits = 0;
+		while (hp > 0 && hits < 30) {
+			const auto h = LadderHit(n, soldier, &soldierChr, body, 100.0 * hits, ErModel{}, hp);
+			CHECK(hp == 0 || (h.dealt >= body - 1 && h.dealt <= body + 4));  // the first hit overshoots by ER's part (nothing known yet)
+			++hits;
+		}
+		CHECK(hits == 5);
+		// The headshot: 230 on a 219 HP soldier, one round.
+		NativeDamage n2;
+		hp = 219;
+		LadderHit(n2, soldier, &soldierChr, ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.9f, 219, false, r, 0.2115f).damage, 0.0, ErModel{}, hp);
+		CHECK(hp == 0);
+	}
+	// Margit (4174 HP, a 572 HP Tarnished): ~20 a round, a 30-round magazine ~14.4% (live with the top-up: 600 HP = 14.4%).
+	{
+		HitRules m;
+		m.scaling.playerMaxHp = 572.0f;
+		const auto   round = ShotEffect(RoundClass::kRifle, proto::kAmmoLethal, 1, 0.5f, 4174, false, m, 0.2115f).damage;
+		NativeDamage n;
+		std::int32_t hp = 4174;
+		ErModel      margit;
+		margit.ref = 11;  // live (COMBAT §8): ER's own hit dealt 54% of the wanted ~20 at 100% on him
+		for (int i = 0; i < 30; ++i) {
+			LadderHit(n, 1 /* any npc id */, &otherChr, round, 100.0 * i, margit, hp);
+		}
+		const int taken = 4174 - hp;
+		CHECK(round == 20 && taken >= 30 * round - 2 && taken <= 30 * round + 5);
+		CHECK(taken * 1000 / 4174 >= 140 && taken * 1000 / 4174 <= 150);  // 14.0 .. 15.0%
+	}
+
+	// Guard: Elden Ring still delivers the ladder on a guarded hit (kApplies) -> the target's next hits carry only what its
+	// shield let through, like the top-up's guard rule; its shield down -> full again.
+	{
+		NativeDamage n;
+		std::int32_t hp = 5000;
+		ErModel      er;
+		for (int i = 0; i < 3; ++i) {
+			LadderHit(n, soldier, &soldierChr, body, 100.0 * i, er, hp);  // learn the reference first
+		}
+		CHECK(n.Guard() == NativeDamage::GuardRule::kUnknown);
+		er.guarding = true;
+		const auto g = LadderHit(n, soldier, &soldierChr, body, 1000.0, er, hp);
+		CHECK(g.outcome.guarded && g.outcome.ladderLanded && n.Guard() == NativeDamage::GuardRule::kApplies);
+		CHECK(g.outcome.guardShare < 0.5f);
+		// The next hit 0.3 s later: the ladder is scaled to the shield's share (the first guarded hit went through in full:
+		// nothing tells us before it lands).
+		const auto g2 = LadderHit(n, soldier, &soldierChr, body, 1300.0, er, hp);
+		CHECK(g2.plan.guardFactor < 0.5f && g2.carried < body / 2 && g2.outcome.guarded);
+		// Another target is not shielded by this one's guard.
+		CHECK(n.Plan(soldier, &otherChr, body, 1300.0, {}).guardFactor == 1.0f);
+		// The memory runs out (1.5 s after the last guarded hit) ...
+		CHECK(n.Plan(soldier, &soldierChr, body, 1300.0 + 1600.0, {}).guardFactor == 1.0f);
+		// ... and an unguarded hit clears it at once.
+		er.guarding = false;
+		LadderHit(n, soldier, &soldierChr, body, 1400.0, er, hp);
+		CHECK(n.Plan(soldier, &soldierChr, body, 1500.0, {}).guardFactor == 1.0f);
+	}
+	// Guard: Elden Ring drops a guarded hit's SpEffects itself (kSkipped) -> nothing to scale, and it is no route failure.
+	{
+		NativeDamage n;
+		std::int32_t hp = 5000;
+		ErModel      er;
+		for (int i = 0; i < 3; ++i) {
+			LadderHit(n, soldier, &soldierChr, body, 100.0 * i, er, hp);
+		}
+		er.guarding = true;
+		er.dropOnGuard = true;
+		const auto g = LadderHit(n, soldier, &soldierChr, body, 1000.0, er, hp);
+		CHECK(g.outcome.guarded && !g.outcome.ladderLanded && n.Guard() == NativeDamage::GuardRule::kSkipped);
+		CHECK(g.dealt <= 1);  // ER's own part through the shield: the hit is blocked as Elden Ring blocks it
+		CHECK(n.Plan(soldier, &soldierChr, body, 1100.0, {}).guardFactor == 1.0f);
+		// RouteMonitor (as Combat.cpp feeds it, ReportLadder): a guarded miss is neither a failure nor a confirmation, and no
+		// top-up -- the ladder stays as it was (confirmed by the three hits before, unconfirmed on a fresh monitor).
+		RouteMonitor m(3);
+		CHECK(!ReportLadder(m, g.outcome, g.carried) && m.Current() == RouteMonitor::State::kUnknown && m.Missed() == 0 && m.Landed() == 0);
+		RouteMonitor c(3);
+		CHECK(!c.Report(true) && !ReportLadder(c, g.outcome, g.carried) && c.Current() == RouteMonitor::State::kConfirmed);
+	}
+	// Review 2026-10-14: rows that never arrive and a shield (or one of Elden Ring's 1 HP parts read as guarded) in between.
+	// The guarded miss used to confirm the ladder for the session: no later hit was topped up, every one dealt ER's ~10%.
+	// Now only arrived rows confirm it, the unguarded misses still give it up, each of them topped up, and the dead ladder
+	// never records "Elden Ring drops it on a guarded hit".
+	{
+		NativeDamage n;
+		RouteMonitor m(3);
+		std::int32_t hp = 5000;
+		ErModel      er;
+		er.noLadder = true;
+		int fills = 0, guardedMisses = 0;
+		for (int i = 0; i < 8 && m.Current() != RouteMonitor::State::kFailed; ++i) {
+			er.guarding = i == 1 || i == 3;  // the second and fourth hits on a raised shield
+			const auto h = LadderHit(n, soldier, &soldierChr, body, 100.0 * i, er, hp, 5, m.Current() == RouteMonitor::State::kConfirmed);
+			guardedMisses += h.outcome.guarded && !h.outcome.ladderLanded ? 1 : 0;
+			fills += ReportLadder(m, h.outcome, h.carried) ? 1 : 0;
+			CHECK(m.Current() != RouteMonitor::State::kConfirmed);
+		}
+		CHECK(guardedMisses >= 1 && m.Current() == RouteMonitor::State::kFailed && fills == 3 && m.Landed() == 0);
+		CHECK(n.Guard() != NativeDamage::GuardRule::kSkipped);
+		// Nothing carried tests nothing (a shield's share of 0).
+		RouteMonitor z(3);
+		NativeOutcome none;
+		CHECK(!ReportLadder(z, none, 0) && z.Missed() == 0 && z.Current() == RouteMonitor::State::kUnknown);
+	}
+	// The rows never apply at all (the live question this route has to answer): three unguarded misses give it up.
+	{
+		NativeDamage n;
+		RouteMonitor m(3);
+		std::int32_t hp = 5000;
+		ErModel      er;
+		er.noLadder = true;
+		int fills = 0;
+		for (int i = 0; i < 4 && m.Current() != RouteMonitor::State::kFailed; ++i) {
+			const auto h = LadderHit(n, soldier, &soldierChr, body, 100.0 * i, er, hp);
+			CHECK(!h.outcome.ladderLanded && !h.outcome.guarded);  // ER's part alone is no guard: it is what we planned
+			fills += ReportLadder(m, h.outcome, h.carried) ? 1 : 0;
+		}
+		CHECK(m.Current() == RouteMonitor::State::kFailed && fills == 3);  // each one topped up until then
+	}
+	// A small ER part (a boss's ~20 a round: 2 HP expected) never judges a guard from ER's rounding.
+	{
+		NativeDamage n;
+		n.Learn(2, &otherChr, 10, 20, 24, 0.0, false);  // 4 / 10% = 40
+		const auto p = n.Plan(2, &otherChr, 20, 100.0, {});
+		CHECK(p.erExpected == 2 && p.ladder == 18);
+		const auto o = n.Learn(2, &otherChr, p.correction, 18, 18, 100.0, true);  // ER rounded its part to 0
+		CHECK(!o.guarded && o.ladderLanded);
+	}
+	// Fewer free slots (a hit that also carries sleep rungs): the ladder rounds, never more rows than slots.
+	{
+		NativeDamage n;
+		std::int32_t hp = 5000;
+		const auto   h = LadderHit(n, soldier, &soldierChr, 1234, 0.0, ErModel{}, hp, 2);
+		CHECK(h.carried == 1200);
+	}
+	CHECK(Name(NativeDamage::GuardRule::kSkipped).find("drops") != std::string_view::npos);
+}
+
 static void TestParams(const std::string& a_dir)
 {
 	auto fake = FakeParam();
@@ -699,6 +963,94 @@ static void TestParams(const std::string& a_dir)
 			CHECK(At<std::uint16_t>(s, params::speffect::kStateInfo) == 436);
 			CHECK(At<std::int32_t>(s, params::speffect::kSleepAttackPower) == n * d.sleepSpEffectStep);
 		}
+	}
+	// The damage ladder (damage_route = speffect). The field offsets, on rows whose values are known: 99441 (10 HP once, every
+	// target), the hemorrhage proc 1490001 (100 HP + 15%, its effect and cycle row), 14303 (100 HP, replaced by 14302), the sleep
+	// rung 25000 (60 s, every 65 s; its target bits are the carriers' -- our hit bullet lands it on enemies, VERIFIED live).
+	{
+		namespace s = params::speffect;
+		const auto* r10 = RowOf(spFile, *sp, 99441);
+		const auto* bleed = RowOf(spFile, *sp, 1490001);
+		const auto* r100 = RowOf(spFile, *sp, 14303);
+		const auto* sleepRow = RowOf(spFile, *sp, 25000);
+		CHECK(r10 && bleed && r100 && sleepRow);
+		if (r10 && bleed && r100 && sleepRow) {
+			CHECK(At<std::int32_t>(r10, s::kChangeHpPoint) == 10 && At<float>(r10, s::kChangeHpRate) == 0.0f && At<float>(r10, s::kEffectEndurance) == 0.0f);
+			CHECK(At<std::uint8_t>(r10, s::kTargetBits) == 127 && At<std::uint8_t>(r10, s::kTargetBits2) == 7 && At<std::uint8_t>(r10, s::kBits259) == 0);
+			CHECK(At<std::int32_t>(bleed, s::kChangeHpPoint) == 100 && At<float>(bleed, s::kChangeHpRate) == 15.0f && At<std::uint16_t>(bleed, s::kStateInfo) == 6);
+			CHECK(At<std::int32_t>(bleed, s::kVfxId) == 6 && At<std::int32_t>(bleed, s::kCycleSpEffectId) == 500);
+			CHECK(At<std::int32_t>(r100, s::kChangeHpPoint) == 100 && At<std::int32_t>(r100, s::kReplaceSpEffectId) == 14302);
+			CHECK(At<float>(sleepRow, s::kEffectEndurance) == 60.0f && At<float>(sleepRow, s::kMotionInterval) == 65.0f && At<std::int32_t>(sleepRow, s::kVfxId) == 8400);
+			CHECK(At<std::uint8_t>(sleepRow, s::kTargetBits) == s::kLadderTargetBits && At<std::uint8_t>(sleepRow, s::kTargetBits2) == s::kLadderTargetBits2);
+		}
+		// The carriers: blank in this regulation (every byte as 99441 but its damage, priority and target bits, which is
+		// Elden Ring's default row), so writing them changes nothing else, and no Bullet / AtkParam_Pc / SpEffectParam row
+		// refers to them (spEffectId slots, replace / cycle ids) -- in this regulation, nothing applies them but our bullet.
+		const DamageLadder l{ d.damageSpEffectBase, d.damageSpEffectDigits };
+		CHECK(l.base == 20010640 && DamageLadderRows(l) == 36);
+		std::vector<std::uint8_t> blank;
+		if (r10) {
+			blank.assign(r10, r10 + params::kSpEffect.rowSize);
+			std::memset(blank.data() + s::kChangeHpPoint, 0, 4);
+			blank[0x140] = 0;  // category_priority (101 on 99441)
+			blank[s::kTargetBits] = 0;
+			blank[s::kTargetBits2] = 4;  // the default row's self_target bit
+		}
+		int carriers = 0;
+		for (int k = 0; k < DamageLadderRows(l); ++k) {
+			const auto* c = RowOf(spFile, *sp, static_cast<std::uint32_t>(l.base + k));
+			CHECK(c != nullptr);
+			if (c && !blank.empty()) {
+				const bool same = std::memcmp(c, blank.data(), blank.size()) == 0;
+				CHECK(same);
+				CHECK(At<std::int32_t>(c, s::kChangeHpPoint) == 0 && At<std::uint16_t>(c, s::kStateInfo) == 0 && At<std::int32_t>(c, s::kVfxId) == -1 &&
+				      At<std::uint8_t>(c, s::kTargetBits) == 0 && (At<std::uint8_t>(c, s::kBits259) & 0x12) == 0);
+				carriers += same ? 1 : 0;
+			}
+		}
+		auto isCarrier = [&](std::int32_t a_id) { return a_id >= l.base && a_id < l.base + DamageLadderRows(l); };
+		int  refs = 0;
+		for (const auto& [id, off] : bullet->rows) {
+			for (int slot = 0; slot < params::bullet::kSpEffectSlots; ++slot) {
+				refs += isCarrier(At<std::int32_t>(bulletFile.data() + off, params::bullet::kSpEffectId0 + 4 * slot)) ? 1 : 0;
+			}
+		}
+		for (const auto& [id, off] : atk->rows) {
+			for (int slot = 0; slot < 5; ++slot) {
+				refs += isCarrier(At<std::int32_t>(atkFile.data() + off, params::atk::kSpEffectId0 + 4 * slot)) ? 1 : 0;
+			}
+		}
+		for (const auto& [id, off] : sp->rows) {
+			refs += isCarrier(At<std::int32_t>(spFile.data() + off, s::kReplaceSpEffectId)) ? 1 : 0;
+			refs += isCarrier(At<std::int32_t>(spFile.data() + off, s::kCycleSpEffectId)) ? 1 : 0;
+		}
+		CHECK(refs == 0);
+		// And no i32 anywhere in any other param names one (as the explosion carriers are checked; needs every .param extracted).
+		int scanned = 0;
+		for (const auto& entry : std::filesystem::directory_iterator(a_dir)) {
+			if (entry.path().extension() != ".param") {
+				continue;
+			}
+			const auto file = ReadFile(entry.path().string());
+			const auto p = params::Parse(file.data(), file.size());
+			if (!p || p->rowStride < 4) {
+				continue;
+			}
+			++scanned;
+			const auto name = entry.path().filename().string();
+			for (const auto& [rowId, offset] : p->rows) {
+				for (std::uint32_t o = 0; o + 4 <= p->rowStride && offset + o + 4 <= file.size(); o += 4) {
+					std::int32_t v;
+					std::memcpy(&v, file.data() + offset + o, 4);
+					if (isCarrier(v)) {
+						std::printf("FAIL damage ladder row %d referenced by %s row %u +0x%x\n", v, name.c_str(), rowId, o);
+						++refs;
+					}
+				}
+			}
+		}
+		CHECK(refs == 0);
+		std::printf("damage ladder: %d of %d carrier rows blank, %d references to them (%d param files scanned)\n", carriers, DamageLadderRows(l), refs, scanned);
 	}
 	std::printf("regulation params checked (%u AtkParam_Pc, %u Bullet, %u SpEffectParam rows)\n", atk->rowCount, bullet->rowCount, sp->rowCount);
 	TestExplosionRows(a_dir, bulletFile, *bullet, atkFile, *atk);
@@ -762,6 +1114,15 @@ static void TestShippedIni(const wchar_t* a_path)
 	      s.capsuleHeight == d.capsuleHeight);
 	CHECK(s.fallDamage == d.fallDamage && s.fallHurtSpeed == d.fallHurtSpeed && s.fallLethalSpeed == d.fallLethalSpeed && s.guestLifeScale == d.guestLifeScale);
 	CHECK(s.hurtShare == d.hurtShare && s.hurtMult == d.hurtMult && s.topUp == d.topUp);
+	CHECK(s.damageRoute == d.damageRoute && d.damageRoute == "topup" && s.damageSpEffectBase == d.damageSpEffectBase &&
+	      s.damageSpEffectDigits == d.damageSpEffectDigits && s.speffectBulletShare == d.speffectBulletShare &&
+	      s.speffectFirstCorrection == d.speffectFirstCorrection && s.speffectGuardMs == d.speffectGuardMs);
+	{
+		const NativeDamage::Rules nr;  // the logic's own defaults are the ini's
+		CHECK(nr.bulletShare == d.speffectBulletShare && nr.firstCorrection == d.speffectFirstCorrection && nr.guardMemoryMs == d.speffectGuardMs);
+		const DamageLadder dl;
+		CHECK(dl.base == d.damageSpEffectBase && dl.digits == d.damageSpEffectDigits);
+	}
 	CHECK(s.explosionFx == d.explosionFx && s.explosionTemplate == d.explosionTemplate && s.explosionSfx == d.explosionSfx &&
 	      s.explosionCarrier == d.explosionCarrier && s.explosionMaxBursts == d.explosionMaxBursts && s.explosionPerSecond == d.explosionPerSecond &&
 	      s.explosionCloudRepeat == d.explosionCloudRepeat && s.explosionGround == d.explosionGround);
@@ -860,6 +1221,8 @@ int main(int argc, char** argv)
 	TestExplosionLogic();
 	TestThrowLogic();
 	TestStealthAndRounds();
+	TestDamageLadder();
+	TestNativeDamage();
 	TestParams(argc >= 3 ? argv[2] : "er_params");
 	TestProgression(argc >= 3 ? argv[2] : "er_params");
 	if (argc >= 2) {

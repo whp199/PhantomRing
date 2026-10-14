@@ -298,6 +298,105 @@ namespace phantom::er::combat
 		std::vector<std::pair<std::int32_t, std::int32_t>> ref_;  // {npc, largest ER damage of one of our bullets}
 	};
 
+	// ---- Damage Elden Ring itself carries ([Combat] damage_route = speffect; off by default, UNVERIFIED live) ---------
+	// The top-up (above) writes HP directly, which a networked session never sees: the session host owns its enemies' HP
+	// (DESIGN §14c, ROADMAP §4 C1). The alternative puts the wanted damage on the hit bullet itself, as fixed-damage
+	// SpEffect rows in its BulletParam spEffectId slots (the slots the sleep ladder already uses): Elden Ring applies them
+	// with the hit, so whatever carries the hit to the enemy's owner carries them too.
+	//
+	// The ladder: 9 x a_digits rows from a_base, one per decimal digit of each place -- row base + 9 p + (d - 1) takes
+	// d x 10^p HP (SpEffectParam changeHpPoint; positive = damage, as Elden Ring's own hemorrhage rows). One hit carries one
+	// row per non-zero digit, so 4 digits deal any 0..9999 exactly in at most 4 of the 5 slots (MGSV's max_damage is 9999).
+	// The rows are carriers: blank rows of this regulation (20010640.., unreferenced by any param) that every
+	// PhantomRing install writes the same fixed values into while Snake plays, so both ends of a session agree on them.
+	struct DamageLadder
+	{
+		std::int32_t base{ 20010640 };
+		int          digits{ 4 };
+	};
+	inline constexpr int kDamageLadderMaxDigits = 5;
+	int          DamageLadderRows(const DamageLadder& a_l);   // 9 x digits (digits clamped to 1..kDamageLadderMaxDigits)
+	std::int32_t DamageLadderMax(const DamageLadder& a_l);    // 10^digits - 1
+	std::int32_t DamageRungRow(int a_place, int a_digit, const DamageLadder& a_l);  // -1 out of range (digit 1..9)
+	std::int32_t DamageRungValue(std::int32_t a_row, const DamageLadder& a_l);     // HP of a ladder row; 0 if not one
+	// a_amount (clamped to 0..max) as the nearest value with at most a_slots non-zero digits (half rounds up; a round-up
+	// past the ladder's top rounds down instead). Exact when it already fits.
+	std::int32_t DamageRoundToSlots(std::int32_t a_amount, std::size_t a_slots, const DamageLadder& a_l);
+	// The rows for a_amount (DamageRoundToSlots first), largest place first, at most a_slots.
+	std::vector<std::int32_t> DamageRungs(std::int32_t a_amount, const DamageLadder& a_l, std::size_t a_slots = 4);
+	std::int32_t              DamageOfRungs(const std::vector<std::int32_t>& a_rows, const DamageLadder& a_l);
+
+	// How one hit is split between Elden Ring's own bullet damage and the ladder, and what its outcome teaches.
+	//  - The bullet still flies with a small AtkParam correction: Elden Ring's own hit (its weapon x the correction) gives the
+	//    flinch, poise, aggro and the guard reaction and is aimed at bulletShare of the wanted damage. Its 100% damage on
+	//    this kind of enemy (the reference) is learned from landed hits (ER's part / correction); before one is known the
+	//    bullet flies with firstCorrection and the ladder carries all of the wanted damage (a few HP over, once).
+	//  - The ladder carries the rest: wanted - ER's expected part.
+	//  - Guard: a raised shield cuts Elden Ring's part (a hit of less than half the expected part = guarded, as TopUp). Whether
+	//    Elden Ring also drops a bullet's SpEffects on a guarded hit is UNKNOWN until seen live, so it is learned: a guarded
+	//    hit whose ladder damage arrived anyway (kApplies) makes this target's next hits within guardMemoryMs carry only the
+	//    share of a normal hit its shield let through; a guarded hit whose ladder damage did not arrive (kSkipped) shows
+	//    Elden Ring blocks it itself, and nothing is scaled. Until a guard is seen: kUnknown, scaled as kApplies.
+	struct NativePlan
+	{
+		std::uint16_t correction{ 100 };  // the bullet's AtkParam correction (%)
+		std::int32_t  erExpected{ 0 };    // Elden Ring's own part we expect (0: no reference yet)
+		std::int32_t  ladder{ 0 };        // HP the SpEffect rows should carry (before DamageRoundToSlots)
+		float         guardFactor{ 1.0f };  // < 1: this target was seen guarding a moment ago
+	};
+	struct NativeOutcome
+	{
+		std::int32_t erPart{ 0 };         // Elden Ring's own damage of the bullet
+		bool         ladderLanded{ false };  // the carried rows' damage arrived
+		bool         guarded{ false };
+		float        guardShare{ 1.0f };  // of a normal hit that got through (guarded only)
+	};
+	class NativeDamage
+	{
+	public:
+		enum class GuardRule : std::uint8_t
+		{
+			kUnknown,
+			kApplies,  // a guarded hit still delivers the ladder: we scale it by the shield's share
+			kSkipped,  // Elden Ring drops a guarded hit's SpEffects itself
+		};
+		struct Rules
+		{
+			float         bulletShare{ 0.1f };      // Elden Ring's own part of the wanted damage
+			std::uint16_t firstCorrection{ 10 };    // correction before the reference is known
+			double        guardMemoryMs{ 1500.0 };  // a target seen guarding is treated as guarding this long
+		};
+		static constexpr double kMinGuardJudge = 4.0;  // ER's expected part (HP) below which no guard is judged
+		[[nodiscard]] NativePlan Plan(std::int32_t a_npc, const void* a_chr, std::int32_t a_wanted, double a_nowMs, const Rules& a_rules) const;
+		// A hit flown with a_correction carrying a_carried (the rows' sum) dealt a_dealt HP in all. a_ladderConfirmed: the
+		// ladder's rows have arrived on some hit before (its RouteMonitor is kConfirmed). Only then does a guarded hit whose rows
+		// did not arrive teach kSkipped -- with rows that never work, a guarded miss tells nothing about guards (review).
+		NativeOutcome Learn(std::int32_t a_npc, const void* a_chr, std::uint16_t a_correction, std::int32_t a_carried, std::int32_t a_dealt, double a_nowMs,
+			bool a_ladderConfirmed);
+		[[nodiscard]] std::int32_t Reference(std::int32_t a_npc) const;  // ER's 100% hit on this kind of enemy (0 unknown)
+		[[nodiscard]] GuardRule    Guard() const { return guard_; }
+		void                       Reset() { *this = NativeDamage(); }
+
+	private:
+		struct Shield
+		{
+			const void* chr{ nullptr };
+			double      atMs{ 0 };
+			float       share{ 1.0f };
+		};
+		std::vector<std::pair<std::int32_t, float>> ref_;  // {npc, ER's 100% hit (moving average of unguarded hits)}
+		std::vector<Shield>                         shields_;
+		GuardRule                                   guard_{ GuardRule::kUnknown };
+	};
+	std::string_view Name(NativeDamage::GuardRule a_rule);
+
+	// One landed ladder hit for the ladder's RouteMonitor (Combat.cpp Tick): true when it is to be topped up (the ladder still
+	// unconfirmed and its rows missing). Only rows that arrived confirm the ladder (COMBAT.md "Did it arrive?"). A guarded hit
+	// whose rows did not arrive is no evidence either way -- Elden Ring may drop a guarded hit's SpEffects, or the rows never
+	// work at all -- so it is neither counted nor topped up (the shield blocked it). It used to confirm the ladder: with broken
+	// rows one shield (or one of Elden Ring's 1 HP parts read as guarded) then left every later hit at ER's ~10% for the session.
+	bool ReportLadder(RouteMonitor& a_monitor, const NativeOutcome& a_outcome, std::int32_t a_carried);
+
 	// ---- Elden Ring's progression -> Snake's damage ([Progression] damage_scaling, off by default) -----------------
 	// Snake's damage is counted in MGSV soldiers' lives against each target's own HP, so it never grows with the Tarnished.
 	// The option makes Elden Ring's progression count: his rune level, the upgrade of the armament in his right hand, or

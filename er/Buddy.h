@@ -33,6 +33,12 @@ namespace phantom::er
 		};
 
 		void        Update(const Frame& a_frame);  // WorldChrMan_PostPhysics, after the draw list was acquired
+		// MGSV has no buddy out (2026-10-14, the player: "buddy changing and dismissing"): its buddy type is NONE, or the buddy
+		// it had out is gone (kBuddyPresent cleared, not loading). Its draws are left out and it is not placed.
+		[[nodiscard]] bool Absent();
+		// Pure (tests): the corner message for a buddy change seen in GuestState, or "" for none. a_before/a_after: buddy type
+		// and whether one is out (Present or Loading).
+		std::string ChangeText(std::uint16_t a_typeBefore, bool a_outBefore, std::uint16_t a_typeAfter, bool a_outAfter);
 		void        Draw();
 		const char* TypeName(std::uint16_t a_type);
 		[[nodiscard]] bool  HasEstimate();

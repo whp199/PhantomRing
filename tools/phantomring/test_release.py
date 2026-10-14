@@ -177,8 +177,47 @@ def packages(build: Path) -> None:
 		with zipfile.ZipFile(Path(tmp) / "a" / f"PhantomRing-{ver}-windows.zip") as z:
 			names = z.namelist()
 			build_txt = z.read("PhantomRing/BUILD.txt").decode()
-		check("PhantomRing/mgsv/dinput8.dll" in names and "PhantomRing/phantomring.me3" in names, "Windows package complete")
+			collect = z.read("PhantomRing/collect-logs.cmd")
+		check("PhantomRing/mgsv/dinput8.dll" in names and "PhantomRing/phantomring.me3" in names and "PhantomRing/collect-logs.cmd" in names,
+			"Windows package complete")
+		check(collect_logs_ok(collect), "collect-logs.cmd: CRLF, the cmd/PowerShell header, every file it gathers", collect_logs_ok(collect, why=True))
 		check(f"PhantomRing {ver} for Windows" in build_txt and "\r\n" in build_txt, "Windows BUILD.txt (CRLF)")
+
+
+def collect_logs_ok(data: bytes, why: bool = False):
+	"""tools/windows/collect-logs.cmd as packed: CRLF only (cmd.exe), the batch part hidden from PowerShell in <# ... #>
+	(cmd reads line 1 as a label), the batch part hands the file to PowerShell, and the script gathers what
+	docs/WINDOWS.md "For testers" promises. True, or (why=True) the reasons it isn't."""
+	text = data.decode("utf-8", "replace")
+	problems = []
+	if b"\n" in data.replace(b"\r\n", b"") or not data.endswith(b"\r\n"):
+		problems.append("not CRLF throughout")
+	lines = text.split("\r\n")
+	if not lines[0].startswith("<# :"):
+		problems.append("line 1 is not '<# :'")
+	try:
+		end = lines.index("#>")
+	except ValueError:
+		end = -1
+		problems.append("no '#>' line")
+	batch = lines[1:end] if end > 0 else []
+	if not any("powershell.exe" in line and "PR_SELF" in line for line in batch) or not any(line.startswith("exit /b") for line in batch):
+		problems.append("the batch part does not run PowerShell and exit")
+	if any(c in line for line in batch if line.lower().startswith("rem ") for c in "<>|&"):
+		problems.append("a rem line in the batch part has < > | &")
+	script = "\n".join(lines[end + 1:]) if end > 0 else ""
+	for need in ("PhantomRingHost.log", "PhantomRingHost.ini", "BUILD.txt", "PhantomRingGuest.log", "PhantomRingGuest.ini", "dxdiag.exe",
+			"launcher: MGSV is", "MgsvExe", "libraryfolders.vdf", "Compress-Archive", "GetFolderPath('Desktop')", "Redact", "<steamid>"):
+		if need not in script:
+			problems.append(f"the script lacks {need!r}")
+	# Review 2026-10-14: dxdiag's raw report (PC name, user paths) was written into $work, the folder the zip packs whole; a
+	# slow dxdiag or a locked file left it there. It must be written outside $work and removed in a finally.
+	dx = next((line for line in script.split("\n") if line.lstrip().startswith("$dx =")), "")
+	if not dx or "$work" in dx or "GetTempPath()" not in dx:
+		problems.append("dxdiag's raw report is not written outside $work")
+	if "finally { Remove-Item -LiteralPath $dx" not in script:
+		problems.append("dxdiag's raw report is not removed in a finally")
+	return problems if why else not problems
 
 
 def shipped_inis() -> None:

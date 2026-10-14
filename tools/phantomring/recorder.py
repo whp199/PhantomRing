@@ -169,6 +169,8 @@ def main(argv=None) -> int:
 	ap.add_argument("--pad", default="neutral", help="fixed pad during the recording (fake_er pad-file syntax, e.g. 'ly=32767')")
 	ap.add_argument("--pad-file", help="live pad file instead of --pad")
 	ap.add_argument("--hud-every", type=float, default=0.1, help="keep the HUD layer at most this often (s); -1 = never")
+	ap.add_argument("--actors", choices=["fixed", "near"], default="fixed", help="the two published actors, as fake_er's --actors "
+		"(near: standing still beside Snake's start, moved/flagged with `pr er actor ...`; Fulton recordings, docs/GUEST.md 20.4)")
 	ap.add_argument("--force", action="store_true", help="take the host side over even if another live process holds it")
 	ap.add_argument("--quiet", action="store_true")
 	args = ap.parse_args(argv)
@@ -207,6 +209,7 @@ def main(argv=None) -> int:
 	os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
 	w = Writer(args.out)
 	host = RecordHost(link, w, args.warmup, args.hud_every, args.quiet)
+	host.actors_mode = args.actors
 	if args.pad_file:
 		host.pad_file = fake_er.PadFile(args.pad_file)
 	else:

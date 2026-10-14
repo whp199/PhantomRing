@@ -1,7 +1,9 @@
 #include "Pump.h"
+#include "ActorProxy.h"
 
 #include "Addresses.h"
 #include "Config.h"
+#include "FultonAnchor.h"
 #include "GuestScript.h"
 #include "Ini.h"
 #include "Link.h"
@@ -69,11 +71,16 @@ namespace phantom::guest::pump
 			ULONGLONG   boxWait{ 0 };         // kBox: next step not before this
 			std::string boxStatus;
 			ULONGLONG   markersClearedAt{ 0 };  // kReady: MGSV's markers last turned off ([Boot] ClearMarkersSec)
+			int         proxyAutoAim{ -1 };       // kReady + [Proxies]: the auto-aim state last written (-1: not yet)
+			ULONGLONG   proxyAutoAimAt{ 0 };
 			ULONGLONG   buddyGoneSince{ 0 };  // kReady: the deployed buddy's object is gone (destroyed in MGSV's world)
 			ULONGLONG   buddyRetryAt{ 0 };
 			int         buddyRevivals{ 0 };
 			ULONGLONG   buddyWhistledAt{ 0 };
 			int         adoptedType{ -1 };   // MGSV's active BuddyType the guest knows as its own (-1: not seen yet)
+			ULONGLONG   menuSeenAt{ 0 };     // kReady: an MGSV menu (the iDroid) was last open then
+			ULONGLONG   buddyHintAt{ 0 };    // D-Dog / Quiet: their skin last looked for near Snake
+			bool        noneLogged{ false }; // the buddy type went NONE without the iDroid: said once
 			ULONGLONG   otherSince{ 0 };     // ...another one has been active since then
 			bool        switching{ false };  // the buddy step runs for an in-session switch (Snake keeps the pad meanwhile)
 			ULONGLONG   switchStarted{ 0 };
@@ -154,6 +161,16 @@ namespace phantom::guest::pump
 		}
 
 		// "return PhantomRing.X(...)" -> its first result as text (or the error).
+		// PhantomRing.ProxyPool, soldiers nearest the sandbox centre first (only those near Snake are realized when enabled).
+		std::string ProxyPoolCall()
+		{
+			const auto  centre = state::Centre();
+			const auto& c = Cfg();
+			return centre        ? std::format("return PhantomRing.ProxyPool({}, {})", centre->x, centre->z)
+			       : c.hasPosition ? std::format("return PhantomRing.ProxyPool({}, {})", c.position[0], c.position[2])
+			                       : std::string("return PhantomRing.ProxyPool()");
+		}
+
 		std::string Call(const lua::Ctx& a_ctx, const std::string& a_code)
 		{
 			const int   top = a_ctx.Top();
@@ -438,12 +455,24 @@ namespace phantom::guest::pump
 		}
 
 		// kReady: the player deployed another buddy through MGSV's iDroid (Buddy Support > "Request deployment of D-Horse",
-		// live 2026-10-13: the walker went, D-Horse came): follow that choice -- the buddy type every buddy path keys on
-		// becomes the new one (until the next boot, which deploys the ini's again), its skin is learned anew.
-		void AdoptBuddy(const lua::Ctx& a_ctx, ULONGLONG a_now, const state::LuaView& a_lua)
+		// live 2026-10-13: the walker went, D-Horse came) or sent it away (Buddy Support > DISMISS D-WALKER, [Menu] BuddyDismiss;
+		// live 2026-10-14: the walker is fultoned out and MGSV's active buddy type becomes NONE): follow that choice -- the buddy
+		// type every buddy path keys on becomes the new one, or "none" (no revival, no follow), until the next boot, which deploys
+		// the ini's again. A new buddy's place is learned anew: D-Horse is whistled over, D-Dog's and Quiet's skins are looked for
+		// near Snake (they answer no GetPosition either).
+		void AdoptBuddy(const lua::Ctx& a_ctx, ULONGLONG a_now, const state::LuaView& a_lua, const state::FrameView& a_fr)
 		{
 			auto& c = MutableCfg();
-			if (c.buddy == "none" || a_lua.buddyActive < 0 || a_lua.buddyActive == g_boot.adoptedType) {
+			if (state::MenuOpen()) {
+				g_boot.menuSeenAt = a_now;
+			}
+			// D-Dog / Quiet out and their place not known: their skin near Snake (Skeleton.cpp, as D-Horse's), looked for every 5 s.
+			if ((c.buddy == "dog" || c.buddy == "quiet") && a_lua.buddyActive > state::kBuddyTypeNone && a_lua.buddyId != kNullId && !a_lua.buddyPosValid &&
+				a_fr.valid && a_now - g_boot.buddyHintAt > 5000) {
+				g_boot.buddyHintAt = a_now;
+				state::HintBuddy(a_fr.root, 12.0f, 6000);
+			}
+			if (a_lua.buddyActive < 0 || a_lua.buddyActive == g_boot.adoptedType) {
 				g_boot.otherSince = 0;
 				return;
 			}
@@ -452,6 +481,35 @@ namespace phantom::guest::pump
 				return;
 			}
 			if (a_now - g_boot.otherSince < 2000) {
+				return;
+			}
+			if (g_boot.adoptedType < 0 && c.buddy == "none") {
+				// [Buddy] Type = none: what MGSV has out when the sandbox is ready stays MGSV's; a change after that is the player's.
+				g_boot.adoptedType = a_lua.buddyActive;
+				g_boot.otherSince = 0;
+				return;
+			}
+			if (a_lua.buddyActive == state::kBuddyTypeNone) {
+				g_boot.otherSince = 0;
+				const bool fromMenu = g_boot.menuSeenAt && a_now - g_boot.menuSeenAt < 15000;
+				if (c.buddy != "none" && (!c.buddyDismiss || !fromMenu)) {
+					// Not the iDroid's DISMISS (or it isn't allowed): MGSV lost it by itself -- ReviveBuddy calls it back.
+					if (!g_boot.noneLogged) {
+						g_boot.noneLogged = true;
+						Log::Info("boot: MGSV has no buddy out any more ({} expected, no iDroid DISMISS seen) -- calling it back", BuddyName(c.buddy));
+					}
+					return;
+				}
+				g_boot.adoptedType = state::kBuddyTypeNone;
+				g_boot.noneLogged = false;
+				if (c.buddy != "none") {
+					Log::Info("boot: the player dismissed {} from the iDroid -- no buddy until another is deployed", BuddyName(c.buddy));
+					c.buddy = "none";
+					state::ForgetBuddy("dismissed (iDroid)");
+					state::SetBuddyMissing(false);
+					g_boot.buddyStatus = "dismissed (iDroid)";
+					g_boot.buddyGoneSince = 0;
+				}
 				return;
 			}
 			// Asked once it has been active 2 s (right after the change MGSV can still report it half-loaded: live, nil).
@@ -467,13 +525,18 @@ namespace phantom::guest::pump
 			}
 			g_boot.otherSince = 0;
 			g_boot.adoptedType = a_lua.buddyActive;
+			g_boot.noneLogged = false;
 			Log::Info("boot: the player deployed {} from the iDroid (was {}) -- following that choice", BuddyName(kind), BuddyName(c.buddy));
 			c.buddy = kind;
 			state::ForgetBuddy("another buddy (iDroid)");
 			state::SetBuddyMissing(false);
 			g_boot.buddyStatus = "active (iDroid)";
+			g_boot.buddyGoneSince = 0;
 			if (kind == "horse") {
 				state::WhistleHorse("deployed from the iDroid");  // it gallops over; its skin is learned beside Snake
+			} else if ((kind == "dog" || kind == "quiet") && a_fr.valid) {
+				g_boot.buddyHintAt = a_now;
+				state::HintBuddy(a_fr.root, 12.0f, 20000);  // dropped beside Snake: its skin there
 			}
 		}
 
@@ -709,7 +772,7 @@ namespace phantom::guest::pump
 					const auto onOff = [](bool a_on) { return a_on ? "on" : "off"; };
 					Log::Info("boot: audio (music {}, ambience {}, radio {}): {}", onOff(c.music == MusicMode::kKeep), onOff(c.ambience), onOff(c.radio),
 						Call(a_ctx, std::format("return PhantomRing.Audio('{}', '{}', '{}')", onOff(c.music == MusicMode::kKeep), onOff(c.ambience), onOff(c.radio))));
-					Log::Info("boot: menus: {}", Call(a_ctx, std::format("return PhantomRing.Menus({}, {})", c.safePauseMenu, c.blockMissions)));
+					Log::Info("boot: menus: {}", Call(a_ctx, std::format("return PhantomRing.Menus({}, {}, {})", c.safePauseMenu, c.blockMissions, c.buddyDismiss)));
 					// MGSV's Auto-Aim Correction ([Boot] AutoAim): never changed while MGSV could save it -- [Saves] Block alone is
 					// not enough (review): the file guards may be incomplete (InstallFileGuards) or the Steam swap incomplete
 					// (PollSteam kIncomplete), and the guest carries on with saves live. Both guards must really be in place.
@@ -718,6 +781,17 @@ namespace phantom::guest::pump
 						Log::Info("boot: auto-aim correction: {}", guarded ? Call(a_ctx, "return PhantomRing.AutoAim(false)") :
 							!c.blockSaves ? std::string("left as it is ([Saves] Block = false: it would be saved)") :
 							                std::string("left as it is (the save guards are incomplete: it could be saved)"));
+					}
+					fulton::Reset("sandbox setup");  // its anchor soldiers are looked for again (FultonAnchor.cpp)
+					// ActorProxy v0 ([Proxies], docs/GUEST.md 20): the sandbox's soldiers and hostages, for the frame thread to place.
+					if (const char* why = c.ProxiesRun() ? proxy::plan::PoolRefusal(c.disableSoldiers) : nullptr) {
+						Log::Warn("boot: no proxy pool: {}", why);
+					} else if (c.ProxiesRun()) {
+						const auto pool = Call(a_ctx, ProxyPoolCall());
+						const auto parsed = proxy::plan::ParsePool(pool);
+						Log::Info("boot: proxy pool: {} soldiers, {} hostages", parsed.soldiers.size(), parsed.hostages.size());
+						proxy::SetPool(parsed);
+						g_boot.proxyAutoAim = -1;
 					}
 					// [Loadout] weapons the loaded mission doesn't have: into the sortie loadout and the sandbox once more, so MGSV
 					// loads their models (a weapon given mid-mission can't be drawn). Once per boot.
@@ -803,9 +877,41 @@ namespace phantom::guest::pump
 							}
 							break;
 						}
-						AdoptBuddy(a_ctx, a_now, lua);
+						AdoptBuddy(a_ctx, a_now, lua, fr);
 						ReviveBuddy(a_ctx, a_now, lua, fr);
-						if (c.clearMarkersSec > 0 && a_now - g_boot.markersClearedAt >= static_cast<ULONGLONG>(c.clearMarkersSec) * 1000) {
+						// MGSV's Fulton on a sleeping Elden Ring enemy through an anchor soldier ([Fulton], FultonAnchor.cpp, docs/GUEST.md 20.4).
+						fulton::LuaStep(a_now, [&](const std::string& a_code) { return Call(a_ctx, a_code); });
+						if (!proxy::TakePoolRequest()) {
+						} else if (const char* why = proxy::plan::PoolRefusal(c.disableSoldiers)) {
+							Log::Warn("boot: no proxy pool (asked for): {}", why);
+						} else {
+							const auto parsed = proxy::plan::ParsePool(Call(a_ctx, ProxyPoolCall()));
+							Log::Info("boot: proxy pool (asked for): {} soldiers, {} hostages", parsed.soldiers.size(), parsed.hostages.size());
+							proxy::SetPool(parsed);
+							g_boot.proxyAutoAim = -1;
+						}
+						// ActorProxy v1: the slot soldiers' enable/puppet/sleep/disable and MGSV's Fulton on them (ActorProxyGame.cpp).
+						proxy::LuaStep(a_now, [&](const std::string& a_code) { return Call(a_ctx, a_code); });
+						// ActorProxy: MGSV's Auto-Aim Correction on only while every pool soldier is placed (a disabled soldier left standing
+						// pulls the aim, 18.13), and only with the save guards complete (as [Boot] AutoAim). Checked once a second.
+						// [Boot] AutoAim = true keeps MGSV's own setting, proxies or not.
+						if (!c.proxies && g_boot.proxyAutoAim == 1 && !c.autoAim) {
+							// Proxies turned off in session (`!proxy off`): the setting goes back to off as [Boot] AutoAim wants.
+							Log::Info("boot: proxies off: auto-aim correction {}", Call(a_ctx, "return PhantomRing.AutoAim(false)"));
+							g_boot.proxyAutoAim = 0;
+						}
+						if (c.proxies && c.proxyAutoAim && !c.autoAim && a_now - g_boot.proxyAutoAimAt >= 1000) {
+							g_boot.proxyAutoAimAt = a_now;
+							const bool guarded = c.blockSaves && hidden::SavesBlocked() && saves::SteamGuarded();
+							const int  want = proxy::AutoAimWanted(guarded) ? 1 : 0;
+							if (guarded && want != g_boot.proxyAutoAim) {
+								Log::Info("boot: proxies: auto-aim correction {}", Call(a_ctx, want ? "return PhantomRing.AutoAim(true)" : "return PhantomRing.AutoAim(false)"));
+								g_boot.proxyAutoAim = want;
+							}
+						}
+						// Markers stay only while every pool soldier is placed: a marked soldier left at his post pulled the aim (18.13).
+						const bool keepMarkers = c.proxies && c.proxyKeepMarkers && proxy::AllPlaced();
+						if (!keepMarkers && c.clearMarkersSec > 0 && a_now - g_boot.markersClearedAt >= static_cast<ULONGLONG>(c.clearMarkersSec) * 1000) {
 							// D-Walker's Search Mode and Snake's own looking mark MGSV soldiers again: kept off.
 							g_boot.markersClearedAt = a_now;
 							const auto r = Call(a_ctx, "return PhantomRing.ClearMarkers()");

@@ -5,6 +5,7 @@
 
 #include "Addresses.h"
 #include "Config.h"
+#include "DebugLayer.h"
 #include "Host.h"
 #include "Ini.h"
 #include "InputBridge.h"
@@ -34,6 +35,11 @@ namespace
 			Log::Warn("PhantomRingHost.ini not found next to the DLL; using defaults");
 		}
 		Log::SetDebug(cfg.debug);
+		// [Render] debug_layer (off by default): before Elden Ring's D3D12 device exists, so first of all, even before the
+		// exe check (it only asks d3d12.dll for its debug layer; nothing in the game is touched).
+		if (cfg.render.enabled && cfg.render.debugLayer) {
+			DebugLayer::Enable(cfg.render.gpuValidation);
+		}
 
 		if (!CheckExeIdentity(cfg.verifySha256)) {
 			return 0;

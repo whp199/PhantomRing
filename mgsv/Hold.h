@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace phantom::guest::hold
@@ -24,6 +25,14 @@ namespace phantom::guest::hold
 	// Its set-position (vf 0x68), as for Snake: D-Horse answers no Lua SetPosition (live), the treadmill moves it this way.
 	bool PlaceObject(std::uint16_t a_id, const logic::Vec3& a_pos, const std::array<float, 4>& a_rot);
 	std::string DescribeLocation(std::uint16_t a_id);
+	// The set-position of a location object found otherwise (ActorProxy v1: a realized soldier's), if it still is one (vtable
+	// addr::kLocationVtable, setter inside the exe). a_pos is the point 0.8 m above the feet, as for Snake.
+	bool PlaceLocation(std::uintptr_t a_loc, const logic::Vec3& a_pos, const std::array<float, 4>& a_rot);
+	// Snake's own location object (0 when it can't be resolved): ActorProxy never takes it for a soldier's.
+	std::uintptr_t PlayerLocation();
+	// The position a location object holds (loc+0x20, xyz of a Vec4): what MGSV's own readers take from it (e.g. 0x14103FAF0
+	// copies loc+0x20..0x2F after the same lookup; static analysis, UNVERIFIED live). ActorProxy reads its placements back.
+	std::optional<logic::Vec3> LocationPosition(std::uint16_t a_id);
 	// Console (`!placeobj`): placed on the game thread at the next camera frame (ServicePending from Frame.cpp).
 	void        RequestPlaceObject(std::uint16_t a_id, const logic::Vec3& a_pos, float a_yaw);
 	void        ServicePending();

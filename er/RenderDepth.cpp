@@ -291,7 +291,11 @@ namespace phantom::er::RenderDepth
 						}
 						if (match) {
 							pass = RenderBind::Pass::kGbuffer;
-							g_kinds[a_self] |= kListGbuffer;
+							auto& k = g_kinds[a_self];
+							k |= kListGbuffer;
+							if (k & kListDepthClear) {
+								k |= kListGbufAfterClear;
+							}
 							for (int i = 0; i < kGbufferTargets; ++i) {
 								g_gbFrame[i] = { rt[i], fmt[i] };
 							}
@@ -320,6 +324,13 @@ namespace phantom::er::RenderDepth
 				++u.clears;
 				u.fullClears += a_n == 0 ? 1 : 0;
 				u.clearDepth = a_depth;
+				// The scene depth cleared in full: Elden Ring's G-buffer starts from here (stage C's draw point, Renderer).
+				if (a_n == 0 && g_target[kDepth].resource) {
+					if (const auto it = g_views.find(a_h.ptr); it != g_views.end() && it->second.resource == g_target[kDepth].resource) {
+						auto& k = g_kinds[a_self];
+						k = static_cast<std::uint8_t>((k | kListDepthClear) & ~kListGbufAfterClear);
+					}
+				}
 			}
 			g_clearDsv(a_self, a_h, a_flags, a_depth, a_stencil, a_n, a_rects);
 		}
@@ -502,6 +513,28 @@ namespace phantom::er::RenderDepth
 		return -1;
 	}
 
+	bool HasKind(ID3D12CommandList* a_list, ListKind a_kind)
+	{
+		std::scoped_lock lock(g_lock);
+		const auto       it = g_kinds.find(a_list);
+		return it != g_kinds.end() && (it->second & a_kind);
+	}
+
+	int NthIndex(ListKind a_kind, int a_nth, UINT a_count, ID3D12CommandList* const* a_lists)
+	{
+		std::scoped_lock lock(g_lock);
+		int              found = -1, seen = 0;
+		for (UINT i = 0; i < a_count; ++i) {
+			if (const auto it = g_kinds.find(a_lists[i]); it != g_kinds.end() && (it->second & a_kind)) {
+				found = static_cast<int>(i);
+				if (++seen >= a_nth) {
+					break;
+				}
+			}
+		}
+		return found;
+	}
+
 	void EndFrame(UINT a_bbWidth, UINT a_bbHeight)
 	{
 		if (!g_installed.load() || a_bbHeight == 0) {
@@ -619,7 +652,13 @@ namespace phantom::er::RenderDepth
 			static std::string s_logged;
 			if (s_logged != g_fiveRtSeen) {
 				s_logged = g_fiveRtSeen;
-				Log::Warn("render: 5-target binds that are not the G-buffer stage C expects: {}", g_fiveRtSeen);
+				// Right after Elden Ring recreated its targets (no G-buffer bind seen since) these are its other 5-target passes
+				// of that frame: information, not a problem (a warning in the player's session 6, at a resize).
+				if (g_gbLastFrame == 0) {
+					Log::Info("render: 5-target binds that are not the G-buffer stage C expects (before its G-buffer was seen): {}", g_fiveRtSeen);
+				} else {
+					Log::Warn("render: 5-target binds that are not the G-buffer stage C expects: {}", g_fiveRtSeen);
+				}
 			}
 		}
 		g_fiveRtSeen.clear();

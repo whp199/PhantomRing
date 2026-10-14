@@ -1,6 +1,7 @@
 #include "WorldShift.h"
 
 #include "Explosion.h"
+#include "Fulton.h"
 #include "Game.h"
 #include "Host.h"
 #include "Log.h"
@@ -56,6 +57,7 @@ namespace phantom::er::WorldShift
 			Rounds::OnWorldShift(*d);
 			Puppet::OnWorldShift(*d);
 			Explosion::OnWorldShift(*d);
+			Fulton::OnWorldShift(*d);
 		}
 
 		void OnEnd(float)

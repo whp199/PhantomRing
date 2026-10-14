@@ -680,4 +680,197 @@ namespace phantom::er::combat
 		const auto it = std::ranges::find_if(ref_, [&](const auto& a_r) { return a_r.first == a_npc; });
 		return it == ref_.end() ? 0 : it->second;
 	}
+
+	// ---- damage Elden Ring carries: the SpEffect ladder ([Combat] damage_route = speffect) -----------------------
+	namespace
+	{
+		int LadderDigits(const DamageLadder& a_l) { return std::clamp(a_l.digits, 1, kDamageLadderMaxDigits); }
+
+		std::int32_t Pow10(int a_p)
+		{
+			std::int32_t v = 1;
+			while (a_p-- > 0) {
+				v *= 10;
+			}
+			return v;
+		}
+
+		std::size_t NonZeroDigits(std::int64_t a_v)
+		{
+			std::size_t n = 0;
+			for (; a_v > 0; a_v /= 10) {
+				n += (a_v % 10) != 0;
+			}
+			return n;
+		}
+	}
+
+	int DamageLadderRows(const DamageLadder& a_l) { return 9 * LadderDigits(a_l); }
+
+	std::int32_t DamageLadderMax(const DamageLadder& a_l) { return Pow10(LadderDigits(a_l)) - 1; }
+
+	std::int32_t DamageRungRow(int a_place, int a_digit, const DamageLadder& a_l)
+	{
+		if (a_l.base <= 0 || a_place < 0 || a_place >= LadderDigits(a_l) || a_digit < 1 || a_digit > 9) {
+			return -1;
+		}
+		return a_l.base + 9 * a_place + (a_digit - 1);
+	}
+
+	std::int32_t DamageRungValue(std::int32_t a_row, const DamageLadder& a_l)
+	{
+		if (a_l.base <= 0 || a_row < a_l.base || a_row >= a_l.base + DamageLadderRows(a_l)) {
+			return 0;
+		}
+		const int k = a_row - a_l.base;
+		return (k % 9 + 1) * Pow10(k / 9);
+	}
+
+	std::int32_t DamageRoundToSlots(std::int32_t a_amount, std::size_t a_slots, const DamageLadder& a_l)
+	{
+		const int          digits = LadderDigits(a_l);
+		const std::int32_t top = DamageLadderMax(a_l);
+		const std::int32_t amount = std::clamp(a_amount, 0, top);
+		if (a_slots == 0) {
+			return 0;
+		}
+		// Drop the low places one by one (rounding half up) until the rest fits the slots.
+		for (int p = 0; p <= digits; ++p) {
+			const std::int64_t unit = Pow10(p);
+			std::int64_t       r = (amount + unit / 2) / unit * unit;
+			if (r > top) {
+				r = amount / unit * unit;  // 9960 in one slot: 9000, not 10000 (no such rung)
+			}
+			if (NonZeroDigits(r) <= a_slots) {
+				return static_cast<std::int32_t>(r);
+			}
+		}
+		return 0;
+	}
+
+	std::vector<std::int32_t> DamageRungs(std::int32_t a_amount, const DamageLadder& a_l, std::size_t a_slots)
+	{
+		std::vector<std::int32_t> out;
+		if (a_l.base <= 0) {
+			return out;
+		}
+		const std::int32_t r = DamageRoundToSlots(a_amount, a_slots, a_l);
+		for (int p = LadderDigits(a_l) - 1; p >= 0; --p) {
+			const int d = (r / Pow10(p)) % 10;
+			if (d) {
+				out.push_back(DamageRungRow(p, d, a_l));
+			}
+		}
+		return out;
+	}
+
+	std::int32_t DamageOfRungs(const std::vector<std::int32_t>& a_rows, const DamageLadder& a_l)
+	{
+		std::int32_t sum = 0;
+		for (const auto id : a_rows) {
+			sum += DamageRungValue(id, a_l);
+		}
+		return sum;
+	}
+
+	NativePlan NativeDamage::Plan(std::int32_t a_npc, const void* a_chr, std::int32_t a_wanted, double a_nowMs, const Rules& a_rules) const
+	{
+		NativePlan p;
+		p.correction = std::clamp<std::uint16_t>(a_rules.firstCorrection, 1, 100);
+		if (a_wanted <= 0) {
+			return p;
+		}
+		if (const auto ref = Reference(a_npc); ref > 0) {
+			const double want = std::max(0.0, static_cast<double>(a_rules.bulletShare)) * a_wanted;
+			p.correction = static_cast<std::uint16_t>(std::clamp<long>(std::lround(100.0 * want / ref), 1, 100));
+			p.erExpected = static_cast<std::int32_t>(std::lround(ref * p.correction / 100.0));
+		}
+		p.ladder = std::max(0, a_wanted - p.erExpected);
+		if (guard_ != GuardRule::kSkipped) {
+			for (const auto& s : shields_) {
+				if (s.chr == a_chr && a_nowMs - s.atMs <= a_rules.guardMemoryMs) {
+					p.guardFactor = std::clamp(s.share, 0.0f, 1.0f);
+					p.ladder = static_cast<std::int32_t>(std::lround(p.ladder * p.guardFactor));
+					break;
+				}
+			}
+		}
+		return p;
+	}
+
+	NativeOutcome NativeDamage::Learn(std::int32_t a_npc, const void* a_chr, std::uint16_t a_correction, std::int32_t a_carried, std::int32_t a_dealt,
+		double a_nowMs, bool a_ladderConfirmed)
+	{
+		NativeOutcome o;
+		const std::int32_t dealt = std::max(0, a_dealt);
+		// The rows are exact and ER's own part is >= 0, so a total short of what was carried means the rows did not apply
+		// (a little slack: a regeneration tick may land in between).
+		const std::int32_t slack = std::max(1, a_carried / 20);
+		o.ladderLanded = a_carried > 0 && dealt >= a_carried - slack;
+		o.erPart = o.ladderLanded ? std::max(0, dealt - a_carried) : dealt;
+		const auto   ref = Reference(a_npc);
+		const double expected = ref > 0 ? ref * a_correction / 100.0 : 0.0;
+		// A guard is judged only when ER's part is big enough to tell it from its rounding (a 4 HP part dealing 1-2 is guarded;
+		// a 2 HP part dealing 1 may be ER's variance).
+		if (expected >= NativeDamage::kMinGuardJudge && o.erPart < expected / 2.0) {
+			o.guarded = true;
+			o.guardShare = static_cast<float>(std::clamp(o.erPart / expected, 0.0, 1.0));
+			if (a_carried > 0 && o.ladderLanded) {
+				guard_ = GuardRule::kApplies;
+			} else if (a_carried > 0 && a_ladderConfirmed) {
+				guard_ = GuardRule::kSkipped;  // the rows work (they arrived before): this shield dropped them
+			}
+			auto it = std::ranges::find_if(shields_, [&](const Shield& a_s) { return a_s.chr == a_chr; });
+			if (it == shields_.end()) {
+				shields_.push_back({ a_chr, a_nowMs, o.guardShare });
+				if (shields_.size() > 64) {
+					shields_.erase(shields_.begin());
+				}
+			} else {
+				*it = { a_chr, a_nowMs, o.guardShare };
+			}
+			return o;
+		}
+		std::erase_if(shields_, [&](const Shield& a_s) { return a_s.chr == a_chr; });  // its shield is down
+		if (a_correction > 0 && o.erPart > 0) {
+			const float sample = static_cast<float>(o.erPart) * 100.0f / a_correction;
+			auto        it = std::ranges::find_if(ref_, [&](const auto& a_r) { return a_r.first == a_npc; });
+			if (it == ref_.end()) {
+				ref_.emplace_back(a_npc, sample);
+				if (ref_.size() > 256) {
+					ref_.erase(ref_.begin());
+				}
+			} else {
+				// ER's hits vary (counter hits, the part hit, its rounding of a small part): a moving average.
+				it->second = 0.75f * it->second + 0.25f * sample;
+			}
+		}
+		return o;
+	}
+
+	std::int32_t NativeDamage::Reference(std::int32_t a_npc) const
+	{
+		const auto it = std::ranges::find_if(ref_, [&](const auto& a_r) { return a_r.first == a_npc; });
+		return it == ref_.end() ? 0 : static_cast<std::int32_t>(std::lround(it->second));
+	}
+
+	bool ReportLadder(RouteMonitor& a_monitor, const NativeOutcome& a_outcome, std::int32_t a_carried)
+	{
+		if (a_carried <= 0 || (a_outcome.guarded && !a_outcome.ladderLanded)) {
+			return false;  // nothing carried tests nothing; a guarded miss is no evidence (and Elden Ring's block stands)
+		}
+		return a_monitor.Report(a_outcome.ladderLanded);
+	}
+
+	std::string_view Name(NativeDamage::GuardRule a_rule)
+	{
+		switch (a_rule) {
+		case NativeDamage::GuardRule::kApplies:
+			return "a guarded hit still delivers it (scaled by the shield)";
+		case NativeDamage::GuardRule::kSkipped:
+			return "Elden Ring drops it on a guarded hit";
+		default:
+			return "not seen on a guarded hit yet";
+		}
+	}
 }

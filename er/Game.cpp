@@ -275,7 +275,29 @@ namespace phantom::er::game
 		SafeWrite<std::uint32_t>(state + 0x10, *flags | (1u << 8) | (1u << 9));
 	}
 
-	std::vector<Character> Characters(std::size_t a_max)
+	Player ChrAsPlayer(std::uint8_t* a_chr)
+	{
+		const auto vptr = a_chr ? SafeRead<void*>(a_chr) : std::nullopt;
+		if (!vptr || !IsChrVtable(*vptr)) {
+			return {};
+		}
+		auto* modules = Field(a_chr, kChrModules);
+		auto* data = Field(modules, kModData);
+		auto* phys = Field(modules, kModPhysics);
+		auto* ctrl = Field(a_chr, kChrCtrl);
+		if (!HasVtable(data, addr()[A::VtData]) || !HasVtable(phys, addr()[A::VtPhysics]) || !ctrl) {
+			return {};
+		}
+		Player p;
+		p.chr = a_chr;
+		p.modules = modules;
+		p.data = data;
+		p.phys = phys;
+		p.ctrl = ctrl;
+		return p;
+	}
+
+	std::vector<Character> Characters(std::size_t a_max, bool a_includeDisabled)
 	{
 		std::vector<Character> out;
 		auto*                  wcm = WorldChrMan();
@@ -309,6 +331,10 @@ namespace phantom::er::game
 			c.npcParam = SafeRead<std::int32_t>(c.chr + kChrNpcParam).value_or(0);
 			c.chrType = SafeRead<std::int32_t>(c.chr + kChrType).value_or(0);
 			c.dead = (SafeRead<std::uint8_t>(c.chr + kChrFlags1C5).value_or(0) & 0x80) != 0;
+			c.disabled = (SafeRead<std::uint32_t>(c.chr + kChrDebugFlags).value_or(0) & kChrDebugDisabled) != 0;
+			if (c.disabled && !a_includeDisabled) {
+				continue;
+			}
 			c.hp = SafeRead<std::int32_t>(data + kDataHp).value_or(0);
 			c.maxHp = SafeRead<std::int32_t>(data + kDataMaxHp).value_or(0);
 			float v[8]{};

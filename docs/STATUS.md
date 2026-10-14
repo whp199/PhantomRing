@@ -1,4 +1,4 @@
-# Status (2026-10-13, 0.2.0-alpha)
+# Status (2026-10-14, 0.3.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,47 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## Combined run, 2026-10-14 afternoon (real MGSV + Elden Ring, both on the default mapping; 0.3.0-alpha)
+
+Three launches (`pr launch --er-headless 3840x2160`, the virtual pad; one Elden Ring relaunch for a fix), ~2.5 hours, the
+player's save: their spot in front of Stormveil's main gate (the Erdtree over the castle), the Stormveil Main Gate grace, the
+Roundtable Hold and its basement stairs, Gatefront. Every item checked by frames and both logs; the save was put back afterwards.
+The player's session-6 reports, item by item:
+- **See-through Snake and D-Walker: fixed.** `render set gbuffer_point last` (the old point) / `clear` (the default) a second
+  apart, same frame otherwise: at the player's spot at 03:00 and at noon the brazier and its pillar show through D-Walker and
+  Snake is dark with `last`, both solid and lit with `clear`; at the grace at noon and 23:00 the gate's lattice shows through
+  Snake's back and legs with `last`, never with `clear`; the player's haze view (fog, rubble, the brazier) is solid now. The
+  Tarnished (Tarnished mode) at the same spots and times is lit by the same light.
+- **Stuck under the Roundtable Hold's basement stairs: fixed.** The staircase found by a floor scan (HOST.md "Low ceilings");
+  four lanes under it: standing, Snake stops where 1.85-2.01 m of room is left, crouched where 1.32-1.57 m is, standing up there
+  and walking out works in every lane; corner pushes end in `stuck at ... back to ... where he stood free`. Found and fixed on the
+  way: a crouched Snake crept under the treads through the seams between them (to a 0.57 m ceiling) and was then held for good
+  by a lower stringer; a free one could take moves ending under a 1.6 m underside.
+- **View, then Start: the chord.** Start 550 ms after View: MGSV's iDroid flashes open for ~1 s and closes by itself, Tarnished
+  mode 1.0 s after Start (three times); Start then View: Snake back; View held alone: the iDroid, Start closes it.
+- **Buddies from MGSV's menu.** Dismiss D-Walker, deploy D-Horse, D-Dog, D-Walker again, each with the iDroid through the pad
+  (the host's corner: "D-Walker dismissed -- no buddy now", "Buddy: D-Dog is out"); D-Dog follows and marks Elden Ring's enemies.
+- **Fulton of a sleeping Elden Ring soldier: works.** Gatefront: two darts, walk up, MGSV's Fulton prompt and "ZZZ" marker over
+  him, Y held -> 5 s later Elden Ring's balloon lifts him away, gone, +64 runes (HOST.md "Fulton"). Elden Ring's sleep lasts ~50 s.
+- **Full proxies (`!proxy on`, off by default): not ready.** With the real host MGSV went to alert phase 3 within 80 s and an MGSV
+  riot-shield reinforcement shot Snake on the apron (GUEST.md 20.5); kept off, the guest now warns when MGSV's alert phase leaves 0.
+- **How to play pass** (README, scripted with the pad): A crouch/stand, A held prone, run, X dive (5.7 m), camera, D-pad up/down
+  (rifle, pistol), LT aim, RB first person while aiming, RT fires (ammo 8 -> 7, the dart into Elden Ring's world), B reload, D-pad
+  right + LT (the arc) + RT throw, LB order (`the player's order 20 -- "D-Walker: Whistle"`), Start menu + B, View map + B, View
+  held iDroid + Start, the chord both ways, NVG (green night vision), the cardboard box on and off (RT), Y mounts D-Walker, a
+  17.5 m ride, Y held gets off, a rest at the grace (`kHEvRested 0`, grenades 7 -> 8), fast travel (six), two deaths at
+  Gatefront and the respawns (`kHEvRespawn, kHEvRested 1`).
+- **10 minutes of continuous play** at the Stormveil Main Gate grace (the player's spot; scripted, 602 s: 65 walks/runs, 49
+  pans, 21 stance changes, 2 dives, 15 weapon switches, 12 reloads, 13 aimed shots (4 in first person), 7 grenades, 10 item
+  uses (box/NVG), 7 LB orders, 10 Tarnished-mode round trips, 6 Elden Ring menus, 10 maps, 10 iDroids): Snake in control after
+  every action, **0 warnings and 0 errors in both logs** -- the whole Elden Ring session (the stairs tests, the regression pass,
+  the play) and the whole second MGSV session (2.5 hours of it).
+- **Review fixes** (2026-10-14): damage_route speffect's guarded misses no longer confirm the ladder, collect-logs.cmd never zips
+  dxdiag's raw report, the proxies are suspended while the frame skips them and refused without `[Boot] DisableSoldiers`.
+- Found: D-Dog's coat sometimes in false colours (orange/green), D-Walker right next to the camera in magenta (MGSV's near-camera
+  fade); the cardboard box drawn very dark; the stage C "no G-buffer bind seen yet" after every ResizeBuffers was a warning (20 in
+  the player's session 6): now info, warned only if it lasts 120 frames.
 
 ## Combined run, 2026-10-13 morning (real MGSV + Elden Ring, both on the default mapping; release 0.2.0-alpha)
 
@@ -207,7 +248,14 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
 - Regeneration after Elden Ring's hits now follows MGSV's own curve (fixed; Margit kills a Snake who stands still in ~12 s);
   life can tick up by up to ~2% for a moment before the curve's first write after a hit.
 - D-Horse: no treadmill while riding (nothing found moves the horse in MGSV), so MGSV's own map limits a ride, and after a
-  far dismount the horse jumps back in Elden Ring and gallops in. Galloping off a ledge hurts as a fall. D-Dog, Quiet: untested.
+  far dismount the horse jumps back in Elden Ring and gallops in. Galloping off a ledge hurts as a fall. Quiet: untested.
+- D-Dog's coat is sometimes drawn in false colours (orange/green; normal grey at other times), and D-Walker right next to the
+  camera in magenta/orange (MGSV's near-camera fade): materials the capture doesn't map yet. The cardboard box looks very dark.
+- Low ceilings: Snake stops ~0.2 m short of an underside lower than him (his ahead probe), also at table edges and overhangs.
+- Fulton: Elden Ring's balloon goes up ~5 s after Y is let go (it waits for MGSV's balloon to lift the stand-in); Elden Ring's
+  sleep lasts ~50 s, and a soldier that wakes meanwhile can't be fultoned.
+- Full proxies (`[Proxies] Enabled`, off by default): with the real Elden Ring they set MGSV on alert (an MGSV reinforcement
+  shot Snake on the apron) and can't stand at heights the apron doesn't have: not for play yet.
 - Ladders: walking on into the hole at a ladder's top drops Snake down the shaft (face it and press Y on "Descend").
 - Flasks, spirit ashes, Torrent and jumps need Tarnished mode (ladders: Snake's Y hands the climb to Elden Ring).
 - Skipping a boss's intro cutscene: fixed (e226ea5, 6b6ac58) and unit-tested, not re-tried live (Margit's plays once).

@@ -7,6 +7,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <mutex>
@@ -344,6 +345,36 @@ namespace phantom::guest::link
 	{
 		auto* base = g_base.load(std::memory_order_acquire);
 		return base && Attached() && SeqRead(At<HostState>(base, kOffHostState), a_out);
+	}
+
+	bool ReadActors(proto::ActorRecord* a_out, std::uint32_t a_max, std::uint32_t& a_count, std::uint32_t& a_seq)
+	{
+		auto* base = g_base.load(std::memory_order_acquire);
+		if (!base || !Attached() || !a_out) {
+			return false;
+		}
+		// The host's WriteActors: seq odd while it writes count and the used records, even after (er/Link.cpp).
+		auto* table = At<ActorTable>(base, kOffActors);
+		auto  seq = Atomic(table->seq);
+		for (int attempt = 0; attempt < 16; ++attempt) {
+			const auto s1 = seq.load(std::memory_order_acquire);
+			if (s1 == 0) {
+				return false;
+			}
+			if (s1 & 1) {
+				YieldProcessor();
+				continue;
+			}
+			const auto n = std::min({ Atomic(table->count).load(std::memory_order_relaxed), a_max, kMaxActors });
+			std::memcpy(a_out, table->actors, sizeof(ActorRecord) * n);
+			std::atomic_thread_fence(std::memory_order_acquire);
+			if (seq.load(std::memory_order_relaxed) == s1) {
+				a_count = n;
+				a_seq = s1;
+				return true;
+			}
+		}
+		return false;
 	}
 
 	bool PopHostEvent(proto::HostEvent& a_out)

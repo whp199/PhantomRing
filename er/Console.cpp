@@ -10,6 +10,7 @@
 #include "ConsoleExpr.h"
 #include "DebugDraw.h"
 #include "Explosion.h"
+#include "Fulton.h"
 #include "Game.h"
 #include "HitHook.h"
 #include "Hud.h"
@@ -566,6 +567,7 @@ namespace phantom::er::Console
 			"throw [status | arc on|off|auto|ini]   Snake's thrown grenades we fly (er/Throw.h); arc on = draw it without MGSV aiming\n"
 			"mines [detonate <id>]                   Snake's placed explosives (er/Mines.h)\n"
 			"stealth [hide on|off | speffect <id>]   Snake in MGSV's cardboard box (er/Stealth.h)\n"
+			"fulton [status | nearest [fail] | 0x<handle> [fail] | forget]   MGSV's Fulton on an Elden Ring enemy, as kGEvFulton (er/Fulton.h)\n"
 			"geom [learn [use] | near|all [radius] | ladders [radius] | dump <ins>]   map assets around the player (er/GeomProbe.h)\n"
 			"progression [off|level|weapon|both]   the Tarnished's level and right-hand armament, Snake's damage factor ([Progression]; switch live)\n"
 			"call setpos x y z | setyaw rad | ray x y z dx dy dz | kill yes\n"
@@ -679,6 +681,13 @@ namespace phantom::er::Console
 		}
 		if (cmd == "stealth") {
 			return Stealth::Console(w, a_f);
+		}
+		if (cmd == "fulton") {
+			std::string rest;
+			for (std::size_t i = 1; i < w.size(); ++i) {
+				rest += (i > 1 ? " " : "") + std::string(w[i]);
+			}
+			return Fulton::Command(a_f, rest);
 		}
 		if (cmd == "geom") {
 			return GeomProbe::Command(w, a_f);

@@ -1,5 +1,6 @@
 #include "Actors.h"
 
+#include "Combat.h"
 #include "Config.h"
 #include "Game.h"
 #include "Host.h"
@@ -39,11 +40,13 @@ namespace phantom::er::Actors
 			r = {};
 			r.handle = c.handle;
 			r.flags = 0;
-			if (c.isEnemy && c.team != myTeam) {
+			if (c.isEnemy && c.team != myTeam && Combat::HostileToPlayer(a_f, c.team)) {
 				r.flags |= proto::kActorHostile;
 			}
 			if (c.dead) {
 				r.flags |= proto::kActorDead;
+			} else if (Combat::Asleep(c.chr)) {
+				r.flags |= proto::kActorAsleep;  // the guest's Fulton anchor stands a sleeping soldier in for him (docs/GUEST.md 20)
 			}
 			const Vec3 p = anchor.PointToMgsv(c.pos);
 			r.pos[0] = p.x;

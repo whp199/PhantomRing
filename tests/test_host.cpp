@@ -7,6 +7,8 @@
 #include "ConsoleExpr.h"
 #include "Host.h"
 #include "Interaction.h"
+#include "Buddy.h"
+#include "Fulton.h"
 #include "Kinematic.h"
 #include "Link.h"
 #include "Revival.h"
@@ -361,7 +363,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.userIndex == d.userIndex && shipped.allowButtons == d.allowButtons && shipped.menuLearn == d.menuLearn && shipped.menuUiStates.empty() &&
 	      shipped.menuLatchMs == d.menuLatchMs && shipped.promptButton == d.promptButton && shipped.interactionHudState == d.interactionHudState &&
 	      shipped.interactionMinMs == d.interactionMinMs && shipped.interactionMaxMs == d.interactionMaxMs && shipped.viewHoldMs == d.viewHoldMs && shipped.guestIdroidStartMs == d.guestIdroidStartMs && shipped.releasePrompts == d.releasePrompts && shipped.releaseMs == d.releaseMs &&
-	      shipped.startWaitMs == d.startWaitMs && shipped.chordMs == d.chordMs && shipped.restPrompts == d.restPrompts && shipped.menuKeys == d.menuKeys &&
+	      shipped.startWaitMs == d.startWaitMs && shipped.chordMs == d.chordMs && shipped.chordWindowMs == d.chordWindowMs && shipped.restPrompts == d.restPrompts && shipped.menuKeys == d.menuKeys &&
 	      shipped.guestMenuOwnsPad == d.guestMenuOwnsPad && shipped.padGlyphDevice == d.padGlyphDevice);
 	CHECK(d.promptButton == 0x8000);  // Y: Elden Ring's event action on an Xbox pad (VERIFIED live)
 	CHECK(shipped.fallWatchSeconds == d.fallWatchSeconds && shipped.fallWatchDrop == d.fallWatchDrop && shipped.unstick == d.unstick &&
@@ -626,6 +628,7 @@ static void TestMenuGroups()
 #include "test_host_overlay.inc"
 #include "test_host_pacing.inc"
 #include "test_host_chord.inc"
+#include "test_host_motion.inc"
 
 // The real host link + console (er/Link.cpp, er/Console.cpp) against a live guest on a_where -- fake_mgsv.py
 // or the real guest link -- driven by tools/phantomring/test_plugins.py. Prints one "PEER {json}" line.
@@ -733,6 +736,10 @@ int main(int argc, char** argv)
 	TestFallWatch();
 	TestLadder();
 	TestSupportedStart();
+	TestCeiling();
+	TestStall();
+	TestBuddyChange();
+	TestFulton();
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

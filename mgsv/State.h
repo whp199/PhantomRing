@@ -43,6 +43,9 @@ namespace phantom::guest::state
 	// 3 is QUIET). LuaView::buddyActive holds whichever buddy is out, not necessarily ours.
 	inline constexpr int kBuddyTypeWalker = 4;
 	inline constexpr int kBuddyTypeHorse = 1;  // BuddyType.HORSE (live 2026-10-13: GetActiveBuddyType 1 with D-Horse out)
+	inline constexpr int kBuddyTypeNone = 0;   // BuddyType.NONE: no buddy out (live 2026-10-14: 0 after the iDroid's DISMISS D-WALKER)
+	inline constexpr int kBuddyTypeDog = 2;    // BuddyType.DOG (live 2026-10-14: 2 with D-Dog deployed from the iDroid)
+	inline constexpr int kBuddyTypeQuiet = 3;
 
 	struct LuaView
 	{

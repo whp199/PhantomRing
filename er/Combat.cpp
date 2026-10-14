@@ -89,6 +89,12 @@ namespace phantom::er::Combat
 			ULONGLONG     due{ 0 };
 			bool          fallback{ false };  // route auto: give it the HP route if it didn't land
 			bool          nonLethal{ false };
+			// damage_route = speffect: the damage rides on the bullet as ladder rows (combat::NativeDamage), no top-up.
+			bool          ladder{ false };
+			std::int32_t  carried{ 0 };       // the ladder rows' sum
+			std::int32_t  erExpected{ 0 };    // Elden Ring's own part we planned for
+			bool          ladderFallback{ false };  // the ladder is unconfirmed: a missing ladder gets the top-up
+			ULONGLONG     firstDropAt{ 0 };   // when Elden Ring's own part of a ladder hit showed (the rows come a few frames later)
 			std::string   name;
 		};
 
@@ -99,6 +105,16 @@ namespace phantom::er::Combat
 		combat::RouteMonitor          g_monitor;
 		combat::TopUp                 g_topUp;
 		std::uint64_t                 g_topUps{ 0 }, g_kills{ 0 };
+		// damage_route = speffect (docs/COMBAT.md §2 "Damage that syncs"): the ladder, its own route monitor (did the rows'
+		// damage arrive?), whether its carrier rows are written (cleared whenever g_patch is restored).
+		combat::NativeDamage          g_native;
+		combat::RouteMonitor          g_ladderMonitor;
+		combat::RouteMonitor::State   g_ladderLastState{ combat::RouteMonitor::State::kUnknown };
+		combat::NativeDamage::GuardRule g_lastGuardRule{ combat::NativeDamage::GuardRule::kUnknown };
+		std::string                   g_damageRouteOverride;  // console: "" = ini
+		bool                          g_ladderPatched{ false };
+		std::uint64_t                 g_ladderHits{ 0 }, g_ladderArrived{ 0 }, g_ladderMissing{ 0 }, g_ladderGuarded{ 0 }, g_ladderFallbacks{ 0 }, g_ladderNoSlot{ 0 };
+		std::int64_t                  g_ladderWanted{ 0 }, g_ladderDealt{ 0 };  // over landed ladder hits that did not kill
 		combat::RateLimiter           g_limiter;
 		std::vector<Pending>          g_pending;
 		std::string                   g_routeOverride;  // console: "" = ini
@@ -237,6 +253,110 @@ namespace phantom::er::Combat
 			return true;
 		}
 
+		// ---- damage_route = speffect: the damage ladder (combat::DamageLadder) ---------------------------------------
+		combat::DamageLadder Ladder() { return { Cfg().damageSpEffectBase, Cfg().damageSpEffectDigits }; }
+
+		std::string_view ConfiguredDamageRoute()
+		{
+			return g_damageRouteOverride.empty() ? std::string_view(Cfg().damageRoute) : std::string_view(g_damageRouteOverride);
+		}
+
+		// The carrier rows, written once while Snake plays (restored with every other patched row when the puppet stops).
+		// Each must be blank in this regulation before we write it -- no damage, no state, no effect, no duration, no target
+		// -- or the ladder stays off for the session (another mod or a regulation update took the rows). Fixed values, the
+		// same on every machine: another PhantomRing player's game applies the same row ids the same way.
+		bool LadderReady()
+		{
+			static int s_ok = -1;  // -1 unknown (table not bound yet), 0 no, 1 yes
+			if (g_ladderPatched) {
+				return true;
+			}
+			if (s_ok == 0) {
+				return false;
+			}
+			namespace sp = params::speffect;
+			const auto  l = Ladder();
+			const int   rows = combat::DamageLadderRows(l);
+			if (l.base <= 0) {
+				return false;
+			}
+			std::vector<std::uint8_t*> ptrs;
+			for (int k = 0; k < rows; ++k) {
+				const auto id = static_cast<std::uint32_t>(l.base + k);
+				auto*      row = g_spEffect.Row(id);
+				if (!row) {
+					return false;  // the table is not bound yet: try again later
+				}
+				const bool blank = SafeRead<std::int32_t>(row + sp::kChangeHpPoint).value_or(-1) == 0 &&
+				                   SafeRead<float>(row + sp::kChangeHpRate).value_or(-1.0f) == 0.0f &&
+				                   SafeRead<float>(row + sp::kEffectEndurance).value_or(-1.0f) == 0.0f &&
+				                   SafeRead<float>(row + sp::kMotionInterval).value_or(-1.0f) == 0.0f &&
+				                   SafeRead<std::uint16_t>(row + sp::kStateInfo).value_or(1) == 0 &&
+				                   SafeRead<std::int32_t>(row + sp::kSleepAttackPower).value_or(1) == 0 &&
+				                   SafeRead<std::int32_t>(row + sp::kVfxId).value_or(0) == -1 &&
+				                   SafeRead<std::int32_t>(row + sp::kReplaceSpEffectId).value_or(0) == -1 &&
+				                   SafeRead<std::int32_t>(row + sp::kCycleSpEffectId).value_or(0) == -1 &&
+				                   SafeRead<std::uint8_t>(row + sp::kTargetBits).value_or(1) == 0 &&
+				                   (SafeRead<std::uint8_t>(row + sp::kBits259).value_or(0x10) & 0x12) == 0;
+				if (!blank) {
+					s_ok = 0;
+					Log::Warn("combat: SpEffectParam {} is not a blank row in this regulation (the damage ladder's carrier) -- damage_route speffect "
+					          "is off; check [Combat] damage_speffect_base",
+						id);
+					return false;
+				}
+				ptrs.push_back(row);
+			}
+			// [Combat] speffect_template: a row of Elden Ring's copied whole into each carrier first (its target bits, priority,
+			// category: everything but the damage).
+			const int     tplId = Cfg().speffectTemplate;
+			std::uint8_t* tpl = tplId > 0 ? g_spEffect.Row(static_cast<std::uint32_t>(tplId)) : nullptr;
+			if (tplId > 0 && !tpl) {
+				Log::Warn("combat: [Combat] speffect_template {} is no SpEffectParam row -- the carriers stay blank rows", tplId);
+			}
+			for (int k = 0; k < rows; ++k) {
+				const std::int32_t value = combat::DamageRungValue(l.base + k, l);
+				if (tpl) {
+					std::vector<std::uint8_t> copy(params::kSpEffect.rowSize);
+					if (SafeReadBytes(tpl, copy.data(), copy.size())) {
+						g_patch.Write(ptrs[k], 0, copy.data(), copy.size());
+					}
+				} else {
+					g_patch.Set<std::uint8_t>(ptrs[k], sp::kTargetBits, sp::kLadderTargetBits);
+					g_patch.Set<std::uint8_t>(ptrs[k], sp::kTargetBits2, sp::kLadderTargetBits2);
+				}
+				g_patch.Set<std::int32_t>(ptrs[k], sp::kChangeHpPoint, value);
+			}
+			if (tpl) {
+				Log::Info("combat: damage ladder carriers are copies of SpEffectParam {} (but for their damage)", tplId);
+			}
+			if (s_ok < 0) {
+				Log::Info("combat: damage ladder ready -- SpEffectParam {}..{} carry 1..{} HP (damage_route speffect, UNVERIFIED live)", l.base,
+					l.base + rows - 1, combat::DamageLadderMax(l));
+			}
+			s_ok = 1;
+			g_ladderPatched = true;
+			return true;
+		}
+
+		void RestorePatches()
+		{
+			g_patch.Restore();
+			g_ladderPatched = false;
+		}
+
+		combat::NativeDamage::Rules NativeRules()
+		{
+			const auto& c = Cfg();
+			return { c.speffectBulletShare, static_cast<std::uint16_t>(c.speffectFirstCorrection), static_cast<double>(c.speffectGuardMs) };
+		}
+
+		// The ladder carries this hit's damage: speffect configured, its rows ready, not given up for the session.
+		bool LadderRoute()
+		{
+			return ConfiguredDamageRoute() == "speffect" && g_ladderMonitor.Current() != combat::RouteMonitor::State::kFailed && LadderReady();
+		}
+
 		// Sleep resistance as Elden Ring has it for this character right now (area scaling, growth after a sleep).
 		std::int32_t SleepResist(std::uint8_t* a_chr)
 		{
@@ -371,8 +491,10 @@ namespace phantom::er::Combat
 			return static_cast<std::uint16_t>(std::clamp<long>(std::lround(static_cast<float>(a_e.damage) * Cfg().bulletDamageMult), 0, 65535));
 		}
 
+		// a_slots: the bullet's spEffectId0..4 -- the sleep rungs, then the damage ladder's rows (damage_route speffect).
+		// a_amount: the atkPhys / atkFire written (ER ignores it: combat::TopUp; it keeps the row's numbers in its HitKey).
 		bool SpawnHitBullet(const Frame& a_f, const Target& a_t, const HitEffect& a_e, const Vec3& a_at, const Vec3& a_dir, const Vec3& a_from, std::uint16_t a_correction,
-			const std::vector<std::int32_t>& a_sleepRungs)
+			const std::vector<std::int32_t>& a_slots, std::uint16_t a_amount)
 		{
 			const auto& a = addr();
 			const auto& c = Cfg();
@@ -392,7 +514,7 @@ namespace phantom::er::Combat
 			if (c.bulletHideSfx) {
 				g_patch.Set<std::int32_t>(bulletRow, params::bullet::kSfxIdBullet, -1);
 			}
-			const auto amount = BulletAmount(a_e);
+			const auto amount = a_amount;
 			// Physical, or fire for D-Walker's flame (Elden Ring's fire absorption applies; the other stays 0).
 			// The corrections are what ER's damage follows (its weapon x correction: combat::TopUp); atkPhys/atkFire only
 			// choose the element.
@@ -407,7 +529,7 @@ namespace phantom::er::Combat
 			// Sleep rides on the bullet, as on Elden Ring's own sleep bullets (Bullet 2270260 -> SpEffect 25006, the Sleep Pot's
 			// mist -> 500640): its spEffectId0..4 are applied by the hit (combat::SleepRungs). 0 = none, the row's own value.
 			for (std::uint32_t slot = 0; slot < 5; ++slot) {
-				g_patch.Set<std::int32_t>(bulletRow, params::bullet::kSpEffectId0 + 4 * slot, slot < a_sleepRungs.size() ? a_sleepRungs[slot] : 0);
+				g_patch.Set<std::int32_t>(bulletRow, params::bullet::kSpEffectId0 + 4 * slot, slot < a_slots.size() ? a_slots[slot] : 0);
 			}
 
 			// Spawn just in front of the hit point, aimed through it (never behind the muzzle).
@@ -474,7 +596,32 @@ namespace phantom::er::Combat
 			for (const auto id : rungs) {
 				rungSleep += (id - c.sleepSpEffectBase + 1) * c.sleepSpEffectStep;
 			}
-			const std::uint64_t key = combat::HitKey(BulletAmount(a_e), correction, a_e.fire, a_e.poise, a_e.dmgLevel, rungSleep);
+			// damage_route = speffect: the damage rides on the bullet as ladder rows in the slots the sleep rungs leave free, and
+			// Elden Ring's own part shrinks to a share of it (combat::NativeDamage). Stun and sleep hits keep the top-up: their
+			// part must never kill, and ER's own part of them is not under our control to the HP.
+			combat::NativePlan        plan;
+			std::vector<std::int32_t> ladderRows;
+			std::int32_t              carried = 0;
+			bool                      ladder = false;
+			if (route == "bullet" && a_e.damage > 0 && !a_e.nonLethal && LadderRoute()) {
+				plan = g_native.Plan(a_t.npc, a_t.chr, a_e.damage, static_cast<double>(::GetTickCount64()), NativeRules());
+				const std::size_t free = rungs.size() < 5 ? 5 - rungs.size() : 0;
+				ladderRows = combat::DamageRungs(plan.ladder, Ladder(), free);
+				carried = combat::DamageOfRungs(ladderRows, Ladder());
+				if (plan.ladder > 0 && ladderRows.empty()) {
+					++g_ladderNoSlot;  // no slot left: this hit is topped up as before
+				} else {
+					ladder = true;
+					correction = plan.correction;
+				}
+			}
+			std::vector<std::int32_t> slots = rungs;
+			if (ladder) {
+				slots.insert(slots.end(), ladderRows.begin(), ladderRows.end());
+			}
+			const std::uint16_t amount = ladder ? static_cast<std::uint16_t>(std::min(carried, 65535)) : BulletAmount(a_e);
+			const std::uint64_t key =
+				ladder && carried > 65535 ? combat::kUniqueKey : combat::HitKey(amount, correction, a_e.fire, a_e.poise, a_e.dmgLevel, rungSleep);
 			// One patched row for every bullet: only bullets with the same numbers fly together, and one with damage per
 			// target (combat::MayFly); the others take the HP route (and lose their sleep: it needs the attack).
 			std::vector<combat::InFlight> flying;
@@ -485,11 +632,12 @@ namespace phantom::er::Combat
 			if (busy) {
 				++g_busyHits;
 			}
-			if (route == "bullet" && !busy && SpawnHitBullet(a_f, a_t, a_e, a_at, a_dir, a_from, correction, rungs)) {
+			if (route == "bullet" && !busy && SpawnHitBullet(a_f, a_t, a_e, a_at, a_dir, a_from, correction, slots, amount)) {
 				++g_bulletHits;
 				if (!rungs.empty()) {
 					++g_sleeps;
 				}
+				g_ladderHits += ladder ? 1 : 0;
 				Pending p;
 				p.chr = a_t.chr;
 				p.handle = a_t.handle;
@@ -503,8 +651,15 @@ namespace phantom::er::Combat
 				p.due = ::GetTickCount64() + static_cast<ULONGLONG>(a_e.damage > 0 ? std::max(50, c.verifyMs) : 120);
 				p.fallback = ConfiguredRoute() == "auto" && g_monitor.Current() == combat::RouteMonitor::State::kUnknown;
 				p.name = a_t.Name();
+				p.ladder = ladder;
+				p.carried = carried;
+				p.erExpected = plan.erExpected;
+				p.ladderFallback = ladder && g_ladderMonitor.Current() == combat::RouteMonitor::State::kUnknown;
 				g_pending.push_back(std::move(p));  // poise/sleep only too: its row must not change under it
-				how = std::format("bullet {} poise {:.0f} lv {}{}", a_e.damage, a_e.poise, a_e.dmgLevel,
+				how = std::format("bullet {} poise {:.0f} lv {}{}{}", a_e.damage, a_e.poise, a_e.dmgLevel,
+					ladder ? std::format(" = ER ~{} ({}%) + ladder {} ({} row{}{})", plan.erExpected, correction, carried, ladderRows.size(),
+								 ladderRows.size() == 1 ? "" : "s", plan.guardFactor < 1.0f ? std::format(", shield up: x{:.2f}", plan.guardFactor) : std::string())
+						   : std::string(),
 					rungs.empty() ? std::string() : std::format(" sleep +{} (resist {}, {} rung{})", sleep, a_t.sleepResist, rungs.size(), rungs.size() > 1 ? "s" : ""));
 			} else {
 				if (!rungs.empty()) {
@@ -811,6 +966,26 @@ namespace phantom::er::Combat
 		}
 	}
 
+	bool HostileToPlayer(const Frame& a_f, std::uint8_t a_team) { return a_f.player && Hostile(TeamOf(a_f.player.chr), a_team); }
+
+	bool Asleep(std::uint8_t* a_chr)
+	{
+		constexpr std::uint16_t kStateHelpless = 434;  // SpEffectParam stateInfo of row 54, on a sleeping (or stance-broken) character
+		auto*                   module = a_chr ? SafePtr(a_chr + kChrSpEffect) : nullptr;
+		auto*                   e = module ? SafePtr(module + 8) : nullptr;
+		bool                    helpless = false, sleepRow = false;
+		for (int i = 0; e && i < 64 && !(helpless && sleepRow); ++i) {
+			const auto id = SafeRead<std::int32_t>(e + 8).value_or(-1);
+			if (auto* row = id > 0 ? g_spEffect.Row(static_cast<std::uint32_t>(id)) : nullptr) {
+				const auto state = SafeRead<std::uint16_t>(row + params::speffect::kStateInfo).value_or(0);
+				helpless = helpless || state == kStateHelpless;
+				sleepRow = sleepRow || state == kStateSleep;
+			}
+			e = SafePtr(e + 0x30);
+		}
+		return helpless && sleepRow;
+	}
+
 	std::vector<Foe> HostilesNear(const Frame& a_f, const Vec3& a_centre, float a_radius)
 	{
 		std::vector<Foe> out;
@@ -830,6 +1005,7 @@ namespace phantom::er::Combat
 		}
 		g_limiter.Configure(Cfg().maxHitsPerSecond, std::max(5.0f, Cfg().maxHitsPerSecond / 2.0f));
 		g_monitor.SetFailLimit(Cfg().verifyFailures);
+		g_ladderMonitor.SetFailLimit(Cfg().verifyFailures);
 		// Did the bullets land? (The target lost HP or died; a vanished target is not counted.) Looked at every frame: the
 		// rest of the damage goes on the frame after Elden Ring's own hit (it used to wait verify_ms, 300 ms, for every
 		// hit: a killing shot dropped the enemy late); verify_ms only bounds how long a miss is waited for.
@@ -843,6 +1019,18 @@ namespace phantom::er::Combat
 			if (valid && !landed && now < it->due) {
 				++it;
 				continue;
+			}
+			// A ladder hit: Elden Ring applies the bullet's SpEffect rows a few frames after its own hit (live 2026-10-14: a
+			// soldier 221 -> 220 at 131 ms, the rows' 46 by 199 ms; judged on the first drop they read MISSING and were topped up
+			// again). Their damage is waited for, [Combat] speffect_wait_ms at most.
+			if (valid && landed && !dead && !it->landedSeen && it->ladder && it->carried > 0 && hp && it->hpBefore - std::max(0, *hp) < it->carried) {
+				if (!it->firstDropAt) {
+					it->firstDropAt = now;
+				}
+				if (now - it->firstDropAt < static_cast<ULONGLONG>(std::max(0, Cfg().speffectWaitMs))) {
+					++it;
+					continue;
+				}
 			}
 			if (valid && it->damage <= 0) {
 				it = g_pending.erase(it);  // poise only: it only held the row (no HP to measure, not a route test)
@@ -859,7 +1047,38 @@ namespace phantom::er::Combat
 						++g_ratioCount;
 					}
 					std::int32_t extra = 0;
-					if (!dead && hp && *hp > 0 && Cfg().topUp) {
+					std::string  ladderNote;
+					if (it->ladder && !dead) {
+						// The whole hit was Elden Ring's: its own part + the ladder rows. Did the rows' damage arrive? (A guarded hit
+						// whose rows did not arrive is Elden Ring blocking them, not a failure: combat::NativeDamage.)
+						const auto o = g_native.Learn(it->npc, it->chr, it->correction, it->carried, dealt, static_cast<double>(now),
+							g_ladderMonitor.Current() == combat::RouteMonitor::State::kConfirmed);
+						// Only arrived rows confirm the ladder; a guarded miss is no evidence and gets no top-up; nothing carried (a
+						// shield's share of 0, ER's part already all of it) tests nothing (combat::ReportLadder).
+						const bool fill = combat::ReportLadder(g_ladderMonitor, o, it->carried) && it->ladderFallback;
+						g_ladderArrived += o.ladderLanded ? 1 : 0;
+						g_ladderMissing += it->carried > 0 && !o.ladderLanded ? 1 : 0;
+						g_ladderGuarded += o.guarded ? 1 : 0;
+						if (fill && hp && *hp > 0) {
+							// Unconfirmed and missing: this hit gets the rest the old way (as the bullet route's own fallback).
+							extra = std::max(0, it->damage - dealt);
+							if (extra > 0) {
+								ApplyHp(it->chr, data, extra, false);
+								++g_ladderFallbacks;
+								const auto after = SafeRead<std::int32_t>(data + game::kDataHp).value_or(0);
+								for (auto& other : g_pending) {
+									if (&other != &*it && other.chr == it->chr) {
+										other.hpBefore = std::min(other.hpBefore, after);
+									}
+								}
+							}
+						}
+						g_ladderWanted += it->damage;
+						g_ladderDealt += dealt;
+						ladderNote = std::format(" = ER {} (expected {}, correction {}%) + ladder {} {}{}{}", o.erPart, it->erExpected, it->correction, it->carried,
+							it->carried <= 0 ? "(none)" : o.ladderLanded ? "ARRIVED" : "MISSING", o.guarded ? std::format(", GUARDED ({:.0f}% through)", 100.0f * o.guardShare) : "",
+							extra > 0 ? std::format(", +{} topped up (ladder unconfirmed)", extra) : "");
+					} else if (!dead && hp && *hp > 0 && Cfg().topUp && !it->ladder) {
 						extra = g_topUp.Extra(it->npc, it->damage, dealt, it->correction);
 						if (extra > 0) {
 							ApplyHp(it->chr, data, extra, it->nonLethal);
@@ -880,9 +1099,10 @@ namespace phantom::er::Combat
 					}
 					HitLog("combat: bullet on {} landed after {} ms: hp {} -> {} (wanted -{}{}){}", it->name,
 						now + static_cast<ULONGLONG>(std::max(50, Cfg().verifyMs)) - it->due, it->hpBefore, hp.value_or(0), it->damage, dead ? ", dead" : "",
-						extra > 0 ? std::format(", +{} topped up ({}% of a normal hit got through)", extra,
-										 g_topUp.Reference(it->npc) ? 100 * dealt / g_topUp.Reference(it->npc) : 100)
-								  : std::string());
+						it->ladder ? ladderNote
+						: extra > 0 ? std::format(", +{} topped up ({}% of a normal hit got through)", extra,
+										  g_topUp.Reference(it->npc) ? 100 * dealt / g_topUp.Reference(it->npc) : 100)
+									: std::string());
 				} else if (fallback && hp && *hp > 0) {
 					ApplyHp(it->chr, data, it->damage, it->nonLethal);
 					++g_fallbacks;
@@ -907,13 +1127,27 @@ namespace phantom::er::Combat
 					Cfg().verifyFailures);
 			}
 		}
+		if (g_ladderMonitor.Current() != g_ladderLastState) {
+			g_ladderLastState = g_ladderMonitor.Current();
+			if (g_ladderLastState == combat::RouteMonitor::State::kConfirmed) {
+				Log::Info("combat: damage ladder CONFIRMED (Elden Ring applied the bullet's fixed-damage SpEffect rows)");
+			} else if (g_ladderLastState == combat::RouteMonitor::State::kFailed) {
+				Log::Warn("combat: the damage ladder's rows did not arrive on {} hits in a row -- damage_route topup for this session (`combat "
+				          "damage_route speffect` to retry)",
+					Cfg().verifyFailures);
+			}
+		}
+		if (g_native.Guard() != g_lastGuardRule) {
+			g_lastGuardRule = g_native.Guard();
+			Log::Info("combat: damage ladder on a guarded hit: {}", combat::Name(g_lastGuardRule));
+		}
 		if (g_hits != g_hitsAtSummary && now - g_lastSummary > 10000) {
 			g_lastSummary = now;
 			g_hitsAtSummary = g_hits;
 			Log::Info("combat: {}", Describe());
 		}
 		if (!Puppet::Active() && !g_patch.Empty()) {
-			g_patch.Restore();  // belt and braces: OnPuppetStop normally does this
+			RestorePatches();  // belt and braces: OnPuppetStop normally does this
 		}
 		Explosion::Tick(a_f);
 	}
@@ -925,11 +1159,13 @@ namespace phantom::er::Combat
 		Mines::OnPuppetStop();
 		Explosion::OnPuppetStop();
 		if (!g_patch.Empty()) {
-			g_patch.Restore();
+			RestorePatches();
 			Log::Info("combat: bullet/AtkParam rows restored");
 		}
 		g_pending.clear();
 	}
+
+	std::string DescribeDamageRoute();
 
 	std::string Describe()
 	{
@@ -939,7 +1175,21 @@ namespace phantom::er::Combat
 		                   "rate-dropped; {}; {}; {}\n{}",
 			EffectiveRoute(), ConfiguredRoute(), Cfg().bulletId, combat::Name(g_monitor.Current()), g_monitor.Landed(), g_monitor.Missed(), ratio, g_shots, g_hits,
 			g_bulletHits, g_topUps, g_hpHits, g_busyHits, g_spawnRefused, g_refusedRun ? std::format(", {} in a row NOW", g_refusedRun) : "", g_fallbacks, g_sleeps,
-			g_sleepLost, g_kills, g_sharedHits, g_tableHits, g_limiter.Dropped(), g_bullet.Describe(), g_atk.Describe(), g_spEffect.Describe(), Rounds::Describe());
+			g_sleepLost, g_kills, g_sharedHits, g_tableHits, g_limiter.Dropped(), g_bullet.Describe(), g_atk.Describe(), g_spEffect.Describe(), Rounds::Describe()) +
+		       "\n" + DescribeDamageRoute();
+	}
+
+	std::string DescribeDamageRoute()
+	{
+		const auto l = Ladder();
+		return std::format("damage route {} ({}; ladder SpEffectParam {}..{} {}, {}): {} ladder hits, rows arrived {} / missing {}, guarded {}, {} topped up while "
+		                   "unconfirmed, {} without a free slot{}; on a guarded hit: {}",
+			ConfiguredDamageRoute() == "speffect" && g_ladderMonitor.Current() != combat::RouteMonitor::State::kFailed ? "speffect" : "topup",
+			g_damageRouteOverride.empty() ? "ini" : "console", l.base, l.base + combat::DamageLadderRows(l) - 1, g_ladderPatched ? "written" : "not written",
+			combat::Name(g_ladderMonitor.Current()), g_ladderHits, g_ladderArrived, g_ladderMissing, g_ladderGuarded, g_ladderFallbacks, g_ladderNoSlot,
+			g_ladderWanted > 0 ? std::format(", dealt {:.0f}% of the wanted damage", 100.0 * static_cast<double>(g_ladderDealt) / static_cast<double>(g_ladderWanted))
+							   : std::string(),
+			combat::Name(g_native.Guard()));
 	}
 
 	std::string Console(const std::vector<std::string>& a_w, const Frame& a_f)
@@ -971,8 +1221,12 @@ namespace phantom::er::Combat
 				c.bigFrom = v;
 			} else if (a_w[2] == "share_mult") {
 				c.shareMult = v;
+			} else if (a_w[2] == "speffect_template") {
+				c.speffectTemplate = static_cast<int>(v);
+				RestorePatches();  // the carriers are written again (from the template) by the next ladder hit
 			} else {
-				return "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|boss_lives|boss_from|big_from|share_mult <value>";
+				return "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|boss_lives|boss_from|big_from|share_mult|"
+				       "speffect_template <value>";
 			}
 			return std::format("{} = {}", a_w[2], v);
 		}
@@ -984,6 +1238,18 @@ namespace phantom::er::Combat
 			g_routeOverride = r == "ini" ? "" : r;
 			g_monitor.Reset();
 			return Describe();
+		}
+		if (sub == "damage_route") {
+			// `combat damage_route [topup|speffect|ini]`: how the bullet route delivers the wanted damage (docs/COMBAT.md §2).
+			if (a_w.size() > 2) {
+				const auto& r = a_w[2];
+				if (r != "topup" && r != "speffect" && r != "ini") {
+					return "damage_route topup|speffect|ini";
+				}
+				g_damageRouteOverride = r == "ini" ? "" : r;
+				g_ladderMonitor.Reset();
+			}
+			return DescribeDamageRoute();
 		}
 		if (!a_f.player) {
 			return "no player";
@@ -1073,7 +1339,8 @@ namespace phantom::er::Combat
 			std::string out = std::format("{} characters within 40 m (Tarnished team {}):", list.size(), TeamOf(a_f.player.chr));
 			for (std::size_t i = 0; i < list.size() && i < 16; ++i) {
 				const auto& t = list[i];
-				out += std::format("\n {:2} {} {:.1f} m {} capsule r {:.2f} h {:.2f} ({})", i, t.Name(), t.distance, t.hostile ? "HOSTILE" : "friendly",
+				out += std::format("\n {:2} {} {:.1f} m {}{} capsule r {:.2f} h {:.2f} ({})", i, t.Name(), t.distance, t.hostile ? "HOSTILE" : "friendly",
+					Asleep(t.chr) ? " ASLEEP" : "",
 					t.cap.r, t.cap.b.y - t.cap.a.y + 2 * t.cap.r, t.capsuleFromParam ? "hit" : "fallback");
 				if (Puppet::Active()) {
 					// Where to aim from Snake's chest, as MGSV sees it: fake_mgsv's `!fire <kind> 1 <yaw> <pitch>`.

@@ -39,7 +39,7 @@ work, live with MGSV and fake_er only (no protocol change).
   then. `DirectInput8Create` also wraps the returned `IDirectInput8W` so that game controllers are hidden.
 - Each feature is gated by its own byte check (`mgsv/Addresses.h` + `Verify.cpp`). A mismatch logs the
   bytes it found and turns off only that feature. `python3 -I mgsv/verify_addresses.py` runs the same
-  checks against the exe on disk; all 102 sites match the local 1.0.15.4.
+  checks against the exe on disk; all 104 sites match the local 1.0.15.4.
 
 ## 2. Files
 
@@ -69,6 +69,7 @@ work, live with MGSV and fake_er only (no protocol change).
 | `Menu.*` | MGSV's pause menu (native) / iDroid (Lua) -> kGuestInMenu; GuestState republished while frames stall (§18.6) |
 | `Sound.*` | Wwise SetPosition/PostEvent detours, D-Walker volume experiment and `!sound` diagnostics (§18.2) |
 | `Follow.*` | D-Walker follow: whistles, follow spot, steering, out-of-view catch-up (§18.3); D-Horse's whistle (§8.1); the player's buddy orders |
+| `ActorProxy.*`, `ActorProxyGame.cpp` | ActorProxy v0 (§20, `[Proxies]`, off): disabled soldiers placed at the nearest hostile ER characters, the rest parked; the pure part unit-tested |
 | `FramePace.*` | MGSV's frame rate: its Sleep(1) job polls shortened (`[Pacing] JobSleepUs`), `!pace` timings, wait probe, present experiments (§19) |
 
 ## 3. Threads
@@ -159,7 +160,7 @@ An unprotected error would hit `lua_atpanic` and end the game.
   - **Console** at `kOffGuestConsole`.
 
 HostState is read for `kHostPlayerDead` (Death.cpp) and `kHostPuppeting` (Placed.cpp re-announces mines when the puppet
-starts); its camera boom clamp and clock are unused. ActorTable is unused. The draw lists, the render ring (meshes,
+starts); its camera boom clamp and clock are unused. ActorTable is read only by ActorProxy v0 (`[Proxies]`, off by default, §20). The draw lists, the render ring (meshes,
 textures) and the HUD slots carry the capture (§15, §16).
 
 ## 5. Boot sequence (Pump.cpp, status text in quotes)
@@ -320,6 +321,48 @@ live with D-Walker and D-Horse).
   D-Walker) -- following that choice`), the skin is learned anew (live: 69 bones, beside Snake). The next boot deploys
   the ini's buddy again.
 
+### 8.3 Dismissing and changing the buddy from MGSV's own menu (`[Menu] BuddyDismiss`; live 2026-10-14, MGSV + fake_er)
+
+Player report (session 6): "buddy CHANGING and DISMISSING supported (MGSV's own buddy menu)".
+- iDroid > MISSIONS > BUDDY SUPPORT lists what the save has developed and isn't out: here D-HORSE, D-DOG, D-WALKER (no Quiet
+  in this save), plus DISMISS <the buddy that is out> and CHANGE EQUIPMENT (struck out with no buddy). `BlockMissions` used to
+  strike out every DISMISS; `[Menu] BuddyDismiss = true` (default) leaves them (`boot: menus: ... missions=10 blocked, 5 buddy
+  dismiss allowed, 0 missing`). The menu remembers its cursor between visits.
+- **Dismiss** (live): DISMISS D-WALKER -> the walker is fultoned out (screenshot: it flies off), MGSV's active buddy type
+  (`TppBuddy2BlockController.GetActiveBuddyType`, `vars.buddyType`) becomes NONE (0). Before: the guest's revival called it
+  back 10 s later (`boot: D-Walker lost 10 s ago -- block requested`). Now `AdoptBuddy` (Pump.cpp) takes a NONE that lasted 2 s
+  within 15 s of an MGSV menu as the player's dismissal: `boot: the player dismissed D-Walker from the iDroid -- no buddy until
+  another is deployed`, `[Buddy] Type` = none for the session (no revival, no follow, no hint), GuestState `buddyType` NONE (0),
+  `buddyFlags` 0, status `MGSV: ready (Africa)`. A NONE with no menu open (or `BuddyDismiss = false`) is still a lost buddy:
+  `MGSV has no buddy out any more (... no iDroid DISMISS seen) -- calling it back`. No buddy is stable: 18 s of running and
+  turning with the treadmill (`no_buddy.prrec`, 1049 states, only Snake's draws).
+- **Deploy another** (live): with no buddy, BUDDY SUPPORT > D-DOG > drop point > OK -> "Support Unit: Dispatch request received
+  [D-Dog]", D-Dog lands beside Snake in its pod ~10 s later: `boot: the player deployed D-Dog from the iDroid (was no buddy)`.
+  Then D-DOG -> D-WALKER directly (the dog leaves, the walker is dropped from ~85 m up and lands beside Snake ~20 s later, the
+  mount prompt shows, auto-follow steers it again: `follow: ... 2 steered`). Each switch re-runs the buddy's own setup: D-Horse is
+  whistled over (8.1), D-Dog/Quiet get a skin hint near Snake (every 5 s while their place is unknown), D-Walker is found by
+  GetPosition and auto-follow takes it (it keys on `[Buddy] Type`).
+- **D-Dog** (`TppBuddyDog2`, id 0x2600): no GetPosition (nil) and SetPosition does nothing (live: it stayed put) -- like D-Horse,
+  its place is its skin: **94 bones**, learned 0.2 m from the hint (`skeleton: buddy skin learned: ... (94 bones)`), GuestState
+  `buddyFlags` Present|PosValid, the capture owns its draws (`dog_follow.prrec`: 15465 buddy draws in 859 frames, ~18 a frame).
+  It follows Snake by itself (MGSV's dog AI): 20 s run with turns, median 1.9 m, max 5.8 m from him. The treadmill no longer
+  sends it (or Quiet) `owarp`: SetPosition is ignored and its `position = Vector3` form put D-Walker at the world origin (18.3);
+  MGSV brings the dog back to Snake itself after a jump. Its combat (attack, mark) needs proxies (20).
+- **D-Horse** the same way (live): walker -> D-HORSE from the iDroid: `the player deployed D-Horse ... following that choice`,
+  whistled over (`D-Horse whistled #1 (deployed from the iDroid)`), its 69-bone skin learned beside Snake 20 s later, buddyFlags
+  0x3, the mount prompt on screen; DISMISS D-HORSE -> `the player dismissed D-Horse from the iDroid`, buddy NONE (0), flags 0.
+- **Quiet**: not in this save's BUDDY SUPPORT, so UNVERIFIED; she takes the D-Dog path (no GetPosition assumed, skin learned).
+- `!buddy hint` (dev): look for the buddy's skin within 12 m of Snake for 20 s; `!buddy` also names the bone count of the last
+  skin in a hint's window that wasn't taken (`kMinBuddyBones` 53).
+- **With the real Elden Ring** (combined run 2026-10-14, the injected pad driving MGSV's iDroid; screenshots of each step):
+  DISMISS D-WALKER in the Roundtable Hold -> host `buddy: D-Walker dismissed -- no buddy now`, GuestState NONE; D-HORSE from
+  there -> `D-Horse deployed (object id 0x1a00)`, placed on Elden Ring's ground 25 s later; D-DOG at Gatefront -> D-Horse leaves
+  under its Fulton balloon (drawn in Elden Ring's sky), `D-Dog deployed (object id 0x2600)`, the dog beside Snake 10 s later
+  ("D-Dog: Found enemy" / "Found weapon" in the HUD layer, its pet prompt); D-WALKER -> dropped from 2.2 km up in MGSV,
+  `D-Walker out again: drawn and placed`, Y mounts it. Seen: D-Dog's coat is drawn in false colours at times (orange/green,
+  normal grey at others) and D-Walker right next to the camera in magenta/orange (MGSV's near-camera fade): a material the
+  capture doesn't map yet.
+
 ## 9. Saves
 
 - **Steam Cloud** (`ISteamRemoteStorage` v012, verified from steam_api64's version string and the exe's
@@ -447,7 +490,9 @@ item); the native life write sticks (§7); the D-Walker class (`TppCommonWalkerG
 - `!blast` (explosions sent / kept out), `!menu` (menu state), `!sound ...` (§18.2), `!whistle`, `!follow on|off|spot a s|<m> <ms>|method m|modes list` (§18.3).
 - `!buddy [walker|horse|dog|quiet|none]` (state of the buddy and its skin, or another buddy in session, §8.2), `!regen
   on|off` ([Combat] RegenGate for A/B tests, §18.15), `!loc <id>` / `!placeobj <id> x y z [yaw]` (experiments: the
-  player location manager's object for a GameObject id, and its set-position on the next frame; it knows only Snake).
+  player location manager's object for a GameObject id, and its set-position on the next frame; it knows only Snake), `!proxy`
+  (ActorProxy: the slots, each soldier's job and life, §20.5), `!proxy on|off` (this session), `!fulton` (the anchor's state, §20.4),
+  `!fulton <handle> [fail]` (kGEvFulton by hand), `!skins [radius] [ms]` (every skinned model published), `!buddy hint` (§8.3).
 - `!refill` (what kHEvRested does), `!ammo` (refill state, last refill), `!ammo drain` (dev: every ammo/item stock to half
   through MGSV's own setter, §18.11; queued and run on the Lua thread with the next Tick's results -- it used to call MGSV's
   component lookup and setter from the console's worker thread -- `!ammo` shows the outcome); a refill asked more than 5 s
@@ -999,11 +1044,28 @@ MGSV's Wwise is driven through its own Lua (`GuestScript.cpp PR.Audio / AudioKee
   (screenshot; was CHECKPOINT, RETURN TO ACC, RETURN TO TITLE MENU, STORE, RECORDS, ...).
 - **iDroid** (`BlockMissions = true`): `TppUiCommand.SetMbTopMenuItemActive(TppTerminal.MBDVCMENU.X, false)` for
   MSN_MISSIONLIST, MSN_SIDEOPSLIST, MSN_LOCATION, MSN_HELI(_RENDEZVOUS/_DISMISS), MSN_RETURNMB, MSN_FOB, MSN_EMERGENCIE_N/F
-  and every buddy DISMISS: HELICOPTER, MISSION LIST and SIDE OP LIST show struck out (screenshot). Still there and harmless:
+  (every buddy DISMISS only with `[Menu] BuddyDismiss = false`, 8.3): HELICOPTER, MISSION LIST and SIDE OP LIST show struck out (screenshot). Still there and harmless:
   Supply Drop (weapons, ammo), Buddy Support (other buddy commands), Fire Support, Combat Deployment, Challenge Tasks,
   Cassette Tapes, Log, the map, Mother Base management. A fire-support barrage's blasts carry attack ids the guest
   ignores.
-- Console: `!menu`.
+- Console: `!menu` (also the iDroid requests below).
+- **The iDroid while Snake is busy** (`[Menu] IDroidRetryMs = 3000`, `logic::IDroidRequest` in Pad.cpp, tested; live 2026-10-14).
+  The host opens the iDroid by holding MGSV's Start (View held -> `MGSV Start held 1200 ms`). In MGSV a Start it takes opens the
+  iDroid 40-70 ms after the press (measured in idle, running, crouched, prone, mid-reload: `kGuestInMenu` within 70 ms, the
+  iDroid on screen), but it **refuses** Start while Snake **aims (LT held)**, looks through the **binoculars (RB held)** or is
+  **in a dive (X while running)**; then nothing opens and the press is lost (before: the 1200 ms hold just ended). Now the guest
+  keeps such a request: a Start from the host while Snake plays (ready, in game, not dead, not parked, no MGSV menu) that hasn't
+  opened anything after 250 ms gets a neutral pad for 120 ms (that ends the aim / the binoculars) and then Start alone for
+  200 ms, again every ~570 ms until the iDroid opens or 3 s pass (`pad: MGSV didn't open the iDroid on Start -- Snake is busy
+  (aiming (LT)); pressing it again with the pad neutral`, `pad: the iDroid opened 400 ms after Start (1 presses again ...)`).
+  Live: aiming 434 ms, binoculars 445 ms, dive 418 ms after the Start, one extra press each; idle unchanged (41 ms, no extra
+  press). A Start inside an MGSV menu or while Snake isn't playing is never a request; a new one needs Start released first.
+  0 = off. Not tried: CQC holds, climbing, a ladder, riding (D-Walker/D-Horse) -- the same path covers them if MGSV takes the
+  neutral-pad press. The player's "View went down a bit before Start" chord problem is the host's (`er/Chord.h`): it cuts
+  its 1200 ms hold when Start follows View within 700 ms, and a host Start that goes up within `kCutMs` (600 ms) of the request,
+  before the iDroid opened, ends it (`kCut`, `pad: the host cut its iDroid hold (View+Start chord) -- no more Start presses`):
+  the retries no longer open the iDroid as Tarnished mode begins (an aiming Snake; test_guest_logic). Assumes the host's
+  `guest_idroid_start_ms` >= 600.
 
 ### 18.7 Loadout (`[Loadout]`, `PR.PreLoadout` / `PR.Loadout`; VERIFIED live 2026-10-12)
 
@@ -1346,3 +1408,195 @@ docs/HOST.md "Frame pacing"; what MGSV itself does:
 - Console: `!pace start [all]` / `!pace stop` / `!pace` (frame and Present timings, with WaitProbe the waits by call chain;
   all of it in `PhantomRingGuest.pace.txt`), `!pace jobsleep <us|off>`, `!pace sync <0..4|game>`, `!pace limit <hz|off>
   [grid <phase ms>]`.
+
+## 20. ActorProxy (`[Proxies] Enabled = false`, `ActorProxy*.cpp`, `!proxy`; ROADMAP 2.1; v0 failed live, **v1 works live with fake_er 2026-10-14**, 20.5)
+
+Goal: the sandbox's disabled MGSV soldiers become inert position proxies of the nearest hostile Elden Ring characters, so
+MGSV's own aim assist, marking and buddies (D-Walker's Search Mode, D-Dog, Quiet) have targets where Elden Ring's enemies are.
+Elden Ring keeps damage authority. Everything below is built and unit-tested offline (`test_guest_actorproxy`, in
+`check_guest`); none of it has run in MGSV yet, and the ini default is off (with it off nothing changes: no pool, no reads,
+no writes).
+
+### 20.1 The pieces
+
+| Question | v0 | Where |
+|---|---|---|
+| Where ER's enemies are | The host's `ActorTable` (already published: `er/Actors.cpp`, `[Actors] radius 60 / max 64`): `kActorHostile` (enemy, other team), feet in MGSV world through the same anchor as Snake: `pos = Pm + DirToMgsv(erPos - Pe)`, `Pm` = the `rootPos` of the GuestState the host consumed. The guest reads it with `link::ReadActors` (seqlock, used records only). No protocol change | `Link.cpp` |
+| The treadmill / odometer offset | `ActorTable.pos` is MGSV world *as of the GuestState the host used*; a treadmill jump since then moved MGSV's world under ER's enemies. `k = rootPos - odo` (computed in doubles) is constant between the guest's own warps; the guest keeps 2 s of it (`plan::OffsetHistory`) and places a record at `pos + k(now) - k(table first seen - TableLagMs)` (33 ms). Off by one jump for at most a frame or two right after a warp | `plan::SelectTargets`, tested |
+| Which soldiers | `PhantomRing.ProxyPool()` (Lua, at the sandbox setup, after `SetEnabled false`): every `TppSoldier2` and `TppHostage2` id (`GetGameObjectIdByIndex`), returned as `"soldiers;hostages"`; soldiers also get `SetDisableDamage{life, faint, sleep}` (InfSoldier's command; UNVERIFIED on a disabled soldier). The first `Max` (4) soldiers may stand in; every other soldier and every hostage is parked | `GuestScript.cpp`, `plan::ParsePool` |
+| Who stands in for whom | The nearest `Max` hostile, living characters within `MaxDistance` (60 m). A character keeps the soldier it has (no swaps: a mark or the aim would jump); a freed soldier takes the next one, nearest first | `plan::Assign`, tested |
+| Moving them | **Native, every frame, on the game thread** right after the GuestState is published: `hold::PlaceObject(id, pos, YawQuat(yaw))` = the location manager `Player2SystemImpl::Warp` uses for Snake (`(*(inst+0x78)+0x238)->vf[0x388](id)`, then `loc->vf[0x68](loc, pos, rot)`; Hold's byte checks). Written only when the target moved 2 cm or turned 1 deg, or every 30 frames. Not Lua: `Warp` / `SetPosition` leave a disabled soldier standing, `SetEnabled true` + `Warp` moved one only 4 m (18.13), and a command per soldier per frame would load the Lua thread | `ActorProxyGame.cpp` |
+| Will that manager move a soldier? | Static analysis says maybe: 40+ engine sites do the same `+0x78 -> +0x238 -> vf 0x388(id)` lookup for other objects' ids; the location class is Fox core (vtable `0x1424C8EF0`, built by two factories `0x141ACF260` / `0x141AD2940`); its `vf 0x68` = `vf 0x58` (position: `+0x20` xyzw, `+0x10` = that minus the foot offset `+0x160`, clears flag 4 of `+0x1A0`, zeroes `+0x1F0`) + `vf 0x60` (rotation, `+0x60`). **But** `!loc` found it "knows only Snake" for D-Horse (13): it may hold the player family only. Live step 1 settles it for soldiers | Ghidra; `Addresses.h kLocationPositionRead` |
+| Reading back | Every 30 frames each pool soldier's `loc+0x20` is compared with what was written (`hold::LocationPosition`); `!proxy` and the log count them | `ActorProxyGame.cpp` |
+| Parking | Every non-proxy soldier and every hostage waits `ParkDepth` (100 m) below the sandbox centre, 2 m apart. A proxy whose character comes nearer than `SnakeClearance` (3.5 m) to Snake's root or `BuddyClearance` (5.5 m) to the buddy parks for as long as that lasts (it keeps its character). UNVERIFIED: whether a disabled soldier 100 m under the apron falls, meets a kill plane or is put back by the mission | `plan::Assign`, tested |
+| No AI, no alerts | They stay `SetEnabled false` (no AI, perception, radio); only their location changes. `vars.playerPhase` must stay 0 | setup (unchanged) |
+| Kept out of Elden Ring's draws | Capture takes a G-buffer draw as Snake's within 2.5 m of his root and as the buddy's within 4 m of it (15). The clearances keep proxies outside both, and `Capture.cpp` also drops any draw within `CaptureRadius` (1.5 m) of a placed proxy that is nearer to it than to Snake (`!capture`: `proxy draws dropped`). Skeleton.cpp's buddy-skin learning (D-Horse, 8.1) skips skins rooted within 1 m of a proxy | `plan::NearProxy`, tested |
+| MGSV's own hits don't count | Nothing reads damage on soldiers: the guest reports Snake's rounds only from `ShotSolver` (7) and melee from the CQC serial, whatever the round hits in MGSV. Proxies only change where MGSV *aims*. `SetDisableDamage` keeps a hit soldier from dying or ragdolling in MGSV (UNVERIFIED) | Combat.cpp unchanged |
+| Aim assist for proxies only | MGSV's Auto-Aim Correction (`vars.optionSelectedIndices[11]`, 18.13) has no per-target switch: its getter `0x1405301B0` (byte-checked: `table[vars + 0x131A3]`) is an option interface's slot (`0x14218D300`) with virtual callers. v0 makes "proxies only" true by construction: the option goes back ON (`PR.AutoAim(true)`) only while **every** pool soldier reads back where it was put (proxies at ER enemies, the rest parked out of reach) and the save guards are complete (as `[Boot] AutoAim`), and OFF again as soon as one doesn't (`plan::AutoAimWanted`, once a second on the Lua thread). `[Boot] AutoAim = true` keeps MGSV's setting and ActorProxy leaves it alone | `Pump.cpp`, tested |
+| Markers | `[Proxies] KeepMarkers = true` skips the periodic `TppMarker.DisableAll` (`[Boot] ClearMarkersSec`) while proxies run and every pool soldier reads back placed (else a marked soldier at his post pulls the aim, 18.13): marking an ER enemy through his proxy is the point. The HUD layer (16) carries MGSV's marker into Elden Ring | `Pump.cpp` |
+
+`[Proxies]`: `Enabled` (false), `Max` (4), `MaxDistance` (60), `SnakeClearance` (3.5), `BuddyClearance` (5.5), `ParkDepth` (100),
+`TableLagMs` (33), `AutoAim` (true), `KeepMarkers` (true), `CaptureRadius` (1.5). Byte checks (`mgsv/verify_addresses.py` and at
+the first proxy frame): `kLocationPositionRead` (0x14103FB4A), `kAutoAimOptionGetter` (0x1405301B0) and its slot `0x14218D300`, plus
+Hold's Warp sites. Any mismatch: proxies off, logged. `fake_er --actors near` publishes its two actors standing still 15 m and
+27 m from where Snake started, mapped the way the host maps them (treadmill jumps move them in MGSV's world as with the real host).
+
+### 20.2 Known limits of v0
+
+- Heights are not flattened: a proxy stands at the ER enemy's height relative to Snake (a ledge 3 m up = 3 m above the apron).
+  That is where aim assist should aim; whether a disabled soldier hangs there is part of the live test.
+- A soldier is human-sized: aim assist goes for a soldier's chest, so a giant's proxy pulls the aim to ~1.3 m above its feet.
+- After a treadmill jump the proxies are late by a frame or two (`TableLagMs`); the jump's own frame places them with the
+  pre-jump offset.
+- MGSV's marks are not mapped back to Elden Ring characters (the host draws nothing for them); the HUD layer shows MGSV's own.
+
+### 20.3 Live test (next session: MGSV + fake_er first, then both games)
+
+Before: saves backed up (the launcher does it), offline, `[Saves] Block = true`, `[Proxies] Enabled = false` for steps 1-3.
+
+1. **Does the location manager know a soldier?** At Ready: `pr lua "return PhantomRing.ProxyPool()"` (two ids, decimal), then
+   `pr guest '!loc <id>'` for each. A location object (vtable `0x1424c8ef0`, like Snake's) = go on. `none` = the manager holds
+   the player family only: stop (v0 can't move soldiers; next RE: the TppSoldier2 system's own location lookup -- its Warp
+   command handler -- or the soldier's own controller found through its SkinPublish model).
+2. `pr guest '!placeobj <id> <x> <y> <z> 0'` at a spot 10 m in front of Snake on the apron (his position: `!status`). In MGSV
+   (screenshot) and with `!loc <id>`: `+020` holds the spot? He is drawn there, not at his post? Again at y + 3 (hangs or
+   falls?) and y - 100 (`!loc` after 30 s: still there? `vars.playerPhase` 0?).
+3. Aim assist at his new place: `pr lua "return PhantomRing.AutoAim(true)"` (saves blocked), aim the FB MR 10-20 deg beside
+   him: the aim swings onto him where he now is, not to his old post (`pr record`, camera yaw). `PhantomRing.AutoAim(false)`.
+4. `[Proxies] Enabled = true`, fake_er `--actors near`, `!boot`. Log: `boot: proxy pool: N soldiers, M hostages`, `proxy:
+   pool of ...`, `proxy: soldier 0x... now stands in for Elden Ring character 0xffffffff00001000` (and `...1001`), `proxy: N of
+   N pool soldiers read back where they were put (0 not)`, `boot: proxies: auto-aim correction on (was off)`. `!proxy`: two
+   `proxy ... placed (read back)`, the rest `parked ... (read back)`.
+5. Treadmill: run past the radius (native_treadmill): `!proxy` positions jump with each treadmill shift and otherwise hold; a
+   `pr record` replay shows no proxy off by a jump for more than 2 frames.
+6. Capture: walk Snake to within 2 m of an actor: `!proxy` shows it parked; `!capture` counts `proxy draws dropped`; fake_er's
+   draw lists / the recorder carry no soldier mesh.
+7. Shoot a proxy in MGSV: exactly one `kGEvFire` per round (ShotSolver), no other event; the soldier neither dies nor ragdolls
+   (SetDisableDamage), `vars.playerPhase` stays 0, no alert music or radio.
+8. Both games (ROADMAP 2.1 "Verify"): an ER soldier at 20 m -> LT pulls the aim onto him; marking him shows MGSV's "20m" over
+   him in Elden Ring (HUD layer); 10 minutes of play with 0 double hits (host log: one hit per `kGEvFire`); D-Walker's Search
+   Mode marks; `pr record` + replay for regressions. Any failure: `[Proxies] Enabled = false` is today's behaviour.
+
+### 20.3a Live result 2026-10-14 (MGSV + fake_er, Africa): soldiers can't be moved this way
+
+- **Step 1 fails.** The pool is the 270 TppSoldier2 ids 0x400..0x50D (`maxInstanceCount 270`; ids past it raise "index 270 is
+  larger than maxInstanceCount 270"), no TppHostage2. `!loc 0x405` / `!loc 0x44c` (soldiers at their posts): **none**; `!loc 0`
+  (Snake) answers the location object (vtable 0x1424C8EF0). The location manager knows the player family only, as it did for
+  D-Horse. Proxies stay off.
+- `PR.ProxyPool` listed 1024 soldiers with every id twice: `GetGameObjectIdByIndex('TppSoldier2', i)` = 0x400 + i % 512 for any i
+  (no failure past the end). Fixed: it stops at a repeat or at the first id GetPosition refuses.
+- **TppSoldier2's command handler** (0x141356170, 42 KB, `SendCommand` -> vtable 0x1423E8060 slot 26 of the soldier system, one
+  instance) compares 174 command hashes; 80 named from the strings of every function in MGSV's live Lua VM (`string.dump` of
+  `_G`, StrCode32 of each identifier). **No Warp / SetPosition** among them (`Warp` only in the hostage handler 0x140E85E10, and
+  Africa has no hostages); a soldier answers nil to both. Useful ones: `GetPosition`, `ChangeLifeState{state=}` (1 dead, 2 dying,
+  3 sleep, 4 faint), `GetLifeStatus`, `GetStatus`, `GetActionStatus`, `RequestForceFulton` (no arguments: sets bit 0 of the
+  soldier's flags `[[sys+0x110]+8] + i*40 + 0x18`), `SetEnabled`, `SetPuppet{enabled}`, `SetForceRealize`, `SetRelativeVehicle`,
+  `SetDisableDamage`, `SetEverDown`, `SetZombie`, `SetFriendly`, routes (`SetSneakRoute` ...).
+- `GetPosition` reads a cache: `[[soldierSystem+0x18]+0x20] + index * 16` (xyz + yaw). Writing it moves nothing (a soldier
+  rewritten 10 m in front of Snake: GetPosition answers the new place, nothing is drawn there).
+- **Disabled soldiers aren't drawn or skinned**: none of them reaches SkinPublish (`!skins`: 13 skins published, none with a
+  soldier's skeleton), and soldier 0x450 appeared at his post (screenshot) only once enabled. What 18.13 saw pulling the aim may
+  be such a soldier enabled again by the mission, or another NPC: a figure stands near the terminal that no soldier id projects to.
+- **What does work** (live): `SetEnabled true`, then a few updates later (not in the same update) `ChangeLifeState{state=3}`:
+  the soldier lies asleep where he stood (GetLifeStatus 3, GetStatus 1, `vars.playerPhase` stays 0, only "Intel Team: Spotted new
+  threat" / "Map Info Updated" in MGSV's log). Next to him MGSV offers its own Fulton ("Y 100% x48", B: carry); **Y held ~2 s**
+  fultons him ("Fulton Recovery Expenses: GMP -300", in memory: saves are blocked); `RequestForceFulton` does the same without
+  Snake. While the balloon has him: GetStatus 0, GetActionStatus 1 (asleep: 1 / 0), and the GetPosition cache only creeps (2.6 m
+  up after 6 s with the soldier far above the roofs). Under the terminal's overhang the balloon hit the roof (sparks).
+- Next RE for real proxies: the enabled soldier's own transform (character controller) -- what writes the GetPosition cache each
+  update, or the realize/route system that places soldiers when a mission starts. `!skins [radius] [ms]` lists every skinned
+  model published (driver, binding, bones, root).
+
+### 20.5 ActorProxy v1: enabled puppets moved by their own location object (live 2026-10-14, MGSV + fake_er `--actors near`)
+
+The breakthrough after 20.3a: writing a copy of an *enabled* soldier's position moved his body. The copy that drives everything
+(the others are recomputed from it each update; only this one persisted, and his GetPosition cache followed it) sits at +0x20 of
+an object whose vtable is **0x1424C8EF0 -- the same location class as Snake's** (`!loc 0`): +0x10 the feet, +0x20 the feet + 0.8 m,
++0x60 the rotation quaternion. Disabled soldiers have none (they aren't realized); about 30 such objects exist and are reused
+between realized characters (soldier 0x4B9 got the object 0x44E had). Then:
+- **Proxy = enabled puppet.** `SetEnabled true`, 150 ms later `SetPuppet{enabled=true}` (+ `SetDisableDamage` life/faint/sleep):
+  he stands with his weapon and does nothing -- 20 s 5 m in front of Snake in plain view, `vars.playerPhase` 0. His location object
+  is found by position (`PR.ProxyPool(cx, cz)` sorts soldiers by distance to the sandbox: only soldiers near Snake are realized when
+  enabled -- 0x405/0x406, 3 km away, never were; the unused instance slots 0x400-0x404 stand at the origin and are skipped, and so
+  are location objects at the origin), from a background scan of MGSV's writable memory for the vtable (2.3 GB in ~220 ms;
+  `proxy: scan (pool): 30 location objects, soldier system 0x4a0591a0`) and the soldier's GetPosition cache (read natively:
+  `[[system+0x18]+0x20] + index*16`, the system found by its vtable 0x1423E8060, byte-checked: GetPosition's code, slot 26 =
+  the handler). Every frame its own setter (vf 0x68, `hold::PlaceLocation`, vtable re-checked each call) puts him at the Elden Ring
+  character's place (feet + 0.8 m), as v0 planned. A free slot soldier is simply **disabled** again: out of the world (not drawn,
+  not targeted) -- no parking under the map. 4 slots (`Max`); the other ~260 soldiers stay disabled as the sandbox setup leaves them.
+- Live: actor 0 15 m in front of Snake -> soldier 0x450 standing exactly there (screenshot, projected 771,386, seen at 765,380);
+  running 18 m through two treadmill jumps the proxies kept the Elden Ring places (treadmill offset k applied; `4 of 4 slot
+  soldiers where they should be`); `boot: proxies: auto-aim correction on (was off)` -> LT with the camera 14 deg beside the proxy:
+  **the aim swung onto him** (red reticle on his chest, camera yaw -22 -> -36.6) -- MGSV's aim assist on the proxy, and only proxies
+  can be targets; one WU S.PISTOL dart: **exactly one kGEvFire** (a=0x10007, bullet 0xa), nothing else, the puppet stayed standing,
+  phase 0, MGSV marked him ("4m" over his head, in the HUD layer). `!capture`: `proxy draws dropped 23867` (none reached Elden Ring).
+- **Asleep -> MGSV's own Fulton:** `pr er actor 0 asleep` -> `proxy: soldier 0x450 asleep for Elden Ring character
+  0xffffffff00001000`. A puppet ignores ChangeLifeState, and so does a soldier whose sleep damage is off: `PR.ProxySleep` lifts both
+  first, then state 3 (re-sent every 8 s). An asleep character's proxy is never parked near Snake (the clearance would have taken
+  him away exactly when Snake walks up). Snake walked up -> "Y 100% x48", Y held -> the balloon -> **kGEvFulton a=1 handle
+  0xffffffff00001000 at 824.6,-12.0,1179.6 (its proxy)** ~4 s after the Y was released, fake_er removed the actor, `soldier 0x450
+  spent (fultoned) -- soldier 0x44a takes his slot`; phase 0 throughout. With proxies on, the 20.4 anchor stands aside.
+- **`[Fulton] Method = proxy` (the default):** with `[Proxies] Enabled = false` ActorProxy still runs for **sleeping** characters
+  only -- no aim assist change, no proxy for an awake enemy. Live (fake_er, proxies off): actor 0 awake 8 m away got none, actor 1
+  flagged asleep 4 m ahead got soldier 0x450 asleep at his place within 4 s (`proxies off (sleeping characters only: [Fulton]
+  Method = proxy)`), Snake walked up, Y held -> `kGEvFulton a=1 ... 0xffffffff00001001 at 824.6,-12.0,1179.6 (its proxy)`, the slot
+  took soldier 0x44a, phase 0. Nothing moves Snake (the 20.4 anchor's teleport and MGSV-side surroundings are gone).
+- Console: `!proxy` (slots: soldier, job, life -- disabled/enabling/puppet/locating/active/spent --, asleep, location object),
+  `!proxy on|off` (this session; on asks for the pool), `!skins`, `!fulton`.
+- **With the real Elden Ring** (combined run 2026-10-14, Gatefront): the default `[Fulton] Method = proxy` works end to end (HOST.md
+  "Fulton": a darted Limgrave soldier, his asleep proxy 0x450, MGSV's Fulton prompt and "ZZZ" marker over the Elden Ring soldier,
+  Y held, `kGEvFulton a=1` 5.3 s later, the host's balloon, +64 runes); four realizations of the asleep proxy, alert phase 0
+  throughout. **Full proxies (`!proxy on`) are not ready with the real host**: Elden Ring's enemies stand above and below Snake
+  (-1.3 to -5.5 m here) and MGSV's flat apron can't hold a soldier there, so the read-back flapped (`4 of 4` / `1 of 4 slot
+  soldiers where they should be` every ~3 s) and auto-aim correction with it; and within 80 s MGSV went to **alert phase 3**
+  with an MGSV riot-shield soldier on the apron shooting Snake (his life to 649 of 7801 in Elden Ring; MGSV's own view shot with
+  `GAMESCOPE_WAYLAND_DISPLAY=gamescope-0 gamescopectl screenshot`). Likely the 150 ms each realized soldier is live AI before
+  `SetPuppet` (he realizes at his post -- `0x44a realized ... at 826.3,-3.8,1226.1`, a rooftop) or a flapping re-placement.
+  `!proxy off` disabled the slot soldiers, but the alert and the reinforcement stayed until MGSV restarted. The guest now logs
+  `alert: MGSV's alert phase a -> b` (a warning when it leaves 0). A new pool clears the old read-back counts (`SetPool`: the
+  first `!proxy on` turned auto-aim on from the Fulton-only pool's counts).
+- Still to do before `[Proxies] Enabled = true` by default: step 8 with the real Elden Ring (10 minutes, double hits, D-Walker's
+  Search Mode, the HUD layer's marker over the real enemy), the host's `kActorAsleep`, a stability run of an hour (sleeping proxies
+  wake after a few minutes without the 8 s refresh: a soldier woken that way went to Reflex and ALERT, live, before the refresh
+  existed), and a proxy's height/size for giants (20.2).
+
+### 20.4 Fulton of a sleeping Elden Ring enemy without proxies (`[Fulton] Method = anchor`, `FultonAnchor.cpp`, protocol v12 kGEvFulton; live 2026-10-14, MGSV + fake_er)
+
+(Written before 20.5 existed. The default is now `[Fulton] Method = proxy`: a sleeping enemy gets an asleep proxy soldier at his own
+place even with `[Proxies] Enabled = false` -- see the end of 20.5. The anchor below stays as the alternative.)
+
+Player wish (session 6): "FULTON extraction of sleeping Elden Ring enemies". Since soldiers can't be moved (20.3a), Snake moves:
+- The host reports a hostile Elden Ring character **asleep** (ActorTable `kActorAsleep`) within `[Fulton] Reach` (3 m,
+  horizontal, MGSV coordinates as for proxies) of Snake, who is on foot and playing (no menu, not riding, dead or parked).
+- An **anchor soldier** is chosen: `PR.FultonCandidates` lists soldiers standing at the sandbox's height within `CandidateRadius`
+  (90 m) of its centre, nearest first (Africa: 0x450, 0x44C, 0x44E, 0x4B9, 0x4BA). He is enabled, put to sleep 300 ms later,
+  and read until he lies asleep and still (1.5 s).
+- **Snake is placed** with the treadmill's native placement (game thread, Frame.cpp: MGSV's camera kept, the odometer rebased:
+  Elden Ring sees no jump; D-Walker moved by the same shift) so that the sleeping soldier lies exactly where the enemy lies
+  relative to him, and the treadmill's centre goes with him (no treadmill pulls while anchored). The soldier's draws are never
+  Snake's (Capture: within 1.6 m of him and nearer to him than to Snake).
+- MGSV offers its Fulton when Snake walks up to the soldier as the player walks up to the enemy. **Y held** -> MGSV's balloon;
+  the guest sees GetStatus 0 + GetActionStatus 1 twice in a row (or the soldier `Rise` m above where he lay) and sends
+  **kGEvFulton a=1, handle = that enemy's, v0 = the enemy's MGSV position**; the enemy is never anchored again. 3.5 s later
+  (Snake's animation) Snake is placed back on the sandbox, his offset from the spot kept within the radius.
+- Released without a fulton (soldier disabled again, Snake back) when the enemy is gone, dies or wakes up, Snake walks `Leave`
+  (5 m) away, or rides / dies / goes Tarnished / the host goes away.
+- Live (fake_er `--actors near`, `pr er actor 0 at 1.5 0.5`, `pr er actor 0 asleep`): `fulton: Elden Ring character
+  0xffffffff00001000 'Godrick Soldier' asleep 1.6 m from Snake -- waking soldier 0x450`, 2 s later `Snake placed at
+  815.37,-11.95,1211.25 (shift 32.6 m) ... MGSV offers its Fulton (hold Y)` (odometer unchanged: 0.00), two steps toward him ->
+  "Y 100% x48" on screen, Y held 2.2 s -> the balloon (screenshot), `kGEvFulton a=1 ... at 816.9,-12.0,1211.8`, fake_er removed
+  the actor, `Snake placed at 821.53,-11.95,1179.50 (fultoned)`. `!fulton` shows the state and counts.
+- **Timing** (live, soldier 0x44C, status polled every 0.26 s from the Y press): Snake attaches the balloon, the soldier's position
+  cache starts rising at 2.5 s (the balloon inflates and he hangs ~2 m up) and stays there until **~8.3 s**, when MGSV yanks him
+  away: GetStatus 1 -> 0 and GetActionStatus 0 -> 1 in the same read. kGEvFulton goes at that yank (MGSV's commitment), so Elden
+  Ring's own balloon starts ~8 s after the player's Y. Both fultons (open sky; under the terminal's overhang) went through.
+- **The position cache lags far soldiers**: it is refreshed at a rate that depends on the distance to Snake (live: 0.9-1.1 m off for
+  a soldier lying 33 m from Snake, corrected 1.3 s after Snake was placed beside him). The anchor waits for two reads 5 cm apart
+  before placing Snake, and while anchored a soldier read 0.6 m from where he lay makes Snake follow (`soldier 0x450 reads 0.91 m
+  from where he lay -- Snake follows`), so the Fulton prompt shows where the enemy lies in Elden Ring.
+- **Needs from the host:** `kActorAsleep` on sleeping (and stunned/fainted: MGSV fultons those alike) hostile characters --
+  `er/Actors.cpp` sets only Hostile and Dead today, so with the real Elden Ring nothing starts yet. Elden Ring's own sleep (the
+  WU S.PISTOL's darts, sleep pots) is what the player would use.
+- Limits: each anchor soldier is spent once fultoned (270 in Africa; the next boot has them all again: saves are blocked); a soldier
+  under a roof can't be fultoned (MGSV's balloon fails); MGSV's surroundings of the anchor soldier (sandbags, walls) are Snake's
+  while anchored (Elden Ring doesn't have them). `!fulton <handle> [fail]` still sends kGEvFulton by hand.

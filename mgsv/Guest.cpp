@@ -1,5 +1,7 @@
 #include "Guest.h"
 
+#include "ActorProxy.h"
+
 #include "Ammo.h"
 #include "Blast.h"
 #include "Camera.h"
@@ -8,6 +10,7 @@
 #include "Config.h"
 #include "Death.h"
 #include "Follow.h"
+#include "FultonAnchor.h"
 #include "Frame.h"
 #include "FramePace.h"
 #include "GuestScript.h"
@@ -194,11 +197,42 @@ namespace phantom::guest
 					return std::format("buddy {}: {}\n{}", Cfg().buddy, follow::Describe(), skeleton::DescribeBuddy());
 				}
 				const auto type = std::string(cmd.substr(6));
+				if (type == "hint") {
+					// dev: look for the buddy's skin within 12 m of Snake for 20 s (D-Horse, D-Dog, Quiet: no GetPosition)
+					const auto fr = state::Frame();
+					if (!fr.valid) {
+						return "no frame yet";
+					}
+					state::HintBuddy(fr.root, 12.0f, 20000);
+					return std::format("looking for the buddy's skin within 12 m of {:.1f},{:.1f},{:.1f} for 20 s", fr.root.x, fr.root.y, fr.root.z);
+				}
 				if (type != "walker" && type != "horse" && type != "dog" && type != "quiet" && type != "none") {
-					return "usage: !buddy [walker|horse|dog|quiet|none]";
+					return "usage: !buddy [walker|horse|dog|quiet|none|hint]";
 				}
 				state::RequestBuddy(type);
 				return "buddy switch requested: " + type;
+			}
+			if (cmd == "fulton") {
+				return fulton::Describe();
+			}
+			if (cmd.starts_with("fulton ")) {
+				// !fulton <handle> [fail]: kGEvFulton for that Elden Ring character, as a fultoned proxy would send it (20.4)
+				char*      end = nullptr;
+				const std::string line(cmd);
+				const auto        handle = std::strtoull(line.c_str() + 7, &end, 0);
+				if (!handle) {
+					return "usage: !fulton <ActorRecord handle, 0x...> [fail]";
+				}
+				return proxy::Fulton(handle, cmd.find(" fail") == std::string::npos, "console");
+			}
+			if (cmd == "skins" || cmd.starts_with("skins ")) {
+				// !skins [radius] [ms]: every skinned model published during ms (default 500), those within radius (80) of Snake
+				float    radius = 80.0f;
+				unsigned ms = 500;
+				std::sscanf(std::string(cmd).c_str(), "skins %f %u", &radius, &ms);
+				skeleton::StartSurvey(ms);
+				::Sleep(ms + 50);
+				return skeleton::DescribeSurvey(state::Frame().root, radius);
 			}
 			if (cmd == "regen on" || cmd == "regen off") {
 				// !regen on|off: MGSV's post-hit regeneration curve for Elden Ring's hits ([Combat] RegenGate), for A/B tests
@@ -208,6 +242,20 @@ namespace phantom::guest
 			if (cmd.starts_with("loc ")) {
 				// !loc <GameObject id>: the player location manager's object for another id (EXPERIMENT, D-Horse)
 				return hold::DescribeLocation(static_cast<std::uint16_t>(std::strtoul(std::string(cmd.substr(4)).c_str(), nullptr, 0)));
+			}
+			if (cmd == "proxy" || cmd == "proxies") {
+				// !proxy: ActorProxy ([Proxies], docs/GUEST.md 20): the pool, each soldier's job and whether it stands where it should
+				return proxy::Describe();
+			}
+			if (cmd == "proxy on" || cmd == "proxy off") {
+				// !proxy on|off (tests): [Proxies] Enabled for this session; on asks the pool from MGSV's Lua at the next Tick
+				const bool on = cmd == "proxy on";
+				MutableCfg().proxies = on;
+				if (on) {
+					proxy::RequestPool();
+				}
+				return std::format("[Proxies] Enabled = {} for this session{}", on,
+					on ? " (pool asked for)" : Cfg().FultonProxies() ? " (sleeping Elden Ring characters keep their proxies: [Fulton] Method = proxy)" : " (slot soldiers taken out)");
 			}
 			if (cmd.starts_with("placeobj")) {
 				// !placeobj <id> <x> <y> <z> [yaw rad]: that object's set-position on the next game frame (EXPERIMENT)
@@ -283,7 +331,7 @@ namespace phantom::guest
 				return std::format("detonate #{} queued", id);
 			}
 			if (cmd == "menu") {
-				return menu::Describe();
+				return menu::Describe() + "\n" + pad::DescribeIDroid();
 			}
 			if (cmd == "refill") {
 				// Dev: what the host's kHEvRested does (magazines, ammo stocks, items to full; docs/GUEST.md 18.11)

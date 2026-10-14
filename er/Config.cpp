@@ -115,6 +115,7 @@ namespace phantom::er
 		releaseMs = static_cast<int>(ini.GetInt("Input", "release_ms", releaseMs));
 		startWaitMs = static_cast<int>(ini.GetInt("Input", "start_wait_ms", startWaitMs));
 		chordMs = static_cast<int>(ini.GetInt("Input", "chord_ms", chordMs));
+		chordWindowMs = static_cast<int>(ini.GetInt("Input", "chord_window_ms", chordWindowMs));
 		IntList(ini, "Input", "rest_prompts", restPrompts, 0x7FFFFFFF);
 		IntList(ini, "Input", "menu_keys", menuKeys, 0xFF);
 		IntList(ini, "Input", "ladder_prompts", ladderPrompts, 0x7FFFFFFF);
@@ -132,6 +133,13 @@ namespace phantom::er
 		catchUp = static_cast<float>(ini.GetFloat("Puppet", "catch_up", catchUp));
 		unstick = ini.GetBool("Puppet", "unstick", unstick);
 		unstickSeconds = static_cast<float>(ini.GetFloat("Puppet", "unstick_seconds", unstickSeconds));
+		stallSeconds = static_cast<float>(ini.GetFloat("Puppet", "stall_seconds", stallSeconds));
+		fultonRunes = ini.GetBool("Fulton", "runes", fultonRunes);
+		ceiling = ini.GetBool("Puppet", "ceiling", ceiling);
+		heightStand = static_cast<float>(ini.GetFloat("Puppet", "height_stand", heightStand));
+		heightCrouch = static_cast<float>(ini.GetFloat("Puppet", "height_crouch", heightCrouch));
+		heightProne = static_cast<float>(ini.GetFloat("Puppet", "height_prone", heightProne));
+		heightRide = static_cast<float>(ini.GetFloat("Puppet", "height_ride", heightRide));
 		fallWatchSeconds = static_cast<float>(ini.GetFloat("Puppet", "fall_watch_seconds", fallWatchSeconds));
 		fallWatchDrop = static_cast<float>(ini.GetFloat("Puppet", "fall_watch_drop", fallWatchDrop));
 		hitHook = ini.GetBool("Puppet", "hit_hook", hitHook);
@@ -259,6 +267,20 @@ namespace phantom::er
 		f("fall_lethal_speed", fallLethalSpeed);
 		f("guest_life_scale", guestLifeScale);
 		topUp = ini.GetBool("Combat", "top_up", topUp);
+		damageRoute = ini.Get("Combat", "damage_route", damageRoute);
+		if (damageRoute != "topup" && damageRoute != "speffect") {
+			Log::Warn("[Combat] damage_route = {} is not topup|speffect; using topup", damageRoute);
+			damageRoute = "topup";
+		}
+		i("damage_speffect_base", damageSpEffectBase);
+		i("damage_speffect_digits", damageSpEffectDigits);
+		damageSpEffectDigits = std::clamp(damageSpEffectDigits, 1, 5);
+		f("speffect_bullet_share", speffectBulletShare);
+		i("speffect_first_correction", speffectFirstCorrection);
+		speffectFirstCorrection = std::clamp(speffectFirstCorrection, 1, 100);
+		i("speffect_guard_ms", speffectGuardMs);
+		i("speffect_template", speffectTemplate);
+		i("speffect_wait_ms", speffectWaitMs);
 		hurtShare = ini.GetBool("Combat", "hurt_share", hurtShare);
 		f("hurt_mult", hurtMult);
 		explosionFx = ini.Get("Combat", "explosion_fx", explosionFx);
@@ -400,6 +422,13 @@ namespace phantom::er
 		}
 		r.gbufferDepth = ini.Get("Render", "gbuffer_depth", r.gbufferDepth);
 		r.gbufferStencil = static_cast<int>(ini.GetInt("Render", "gbuffer_stencil", r.gbufferStencil));
+		if (const auto gp = ini.Get("Render", "gbuffer_point"); gp == "clear") {
+			r.gbufferPoint = -1;
+		} else if (gp == "last") {
+			r.gbufferPoint = 0;
+		} else {
+			r.gbufferPoint = std::max(-1, static_cast<int>(ini.GetInt("Render", "gbuffer_point", r.gbufferPoint)));
+		}
 		if (const auto ls = ini.Get("Render", "gbuffer_light_set"); ls == "auto") {
 			r.gbufferLightSet = -1;
 		} else {
@@ -463,6 +492,8 @@ namespace phantom::er
 		r.nvgVignette = static_cast<float>(ini.GetFloat("Render", "nvg_vignette", r.nvgVignette));
 		r.nvgScanlines = static_cast<float>(ini.GetFloat("Render", "nvg_scanlines", r.nvgScanlines));
 		r.nvgFadeMs = static_cast<int>(ini.GetInt("Render", "nvg_fade_ms", r.nvgFadeMs));
+		r.debugLayer = ini.GetBool("Render", "debug_layer", r.debugLayer);
+		r.gpuValidation = ini.GetBool("Render", "gpu_validation", r.gpuValidation);
 
 		auto& o = overlay;
 		o.enabled = ini.GetBool("Overlay", "enabled", o.enabled);

@@ -208,6 +208,32 @@ namespace phantom::guest::addr
 	inline constexpr Site kPlayer2WarpSetCall{ 0x1409CEBFC, { 0x4c, 0x8b, 0x0b, 0x4c, 0x8d, 0x44, 0x24, 0x20, 0x49, 0x8b, 0xd6, 0x48, 0x8b, 0xcb, 0x41, 0xff, 0x51, 0x68 } };
 	inline constexpr std::uintptr_t kPlayer2ImplVtable = 0x142295490;
 
+	// ---- ActorProxy v0 (ActorProxy*.cpp, docs/GUEST.md 20) ------------------------------------------------------------
+	// Pool soldiers are moved with the location manager above (kPlayer2WarpLocCall / kPlayer2WarpSetCall). That manager is the
+	// scene's, not the player's: 40+ places look up other GameObjects' locations the same way. One of them (0x14103FAF0) reads a
+	// location's position right after the lookup: mov rax,[rdi+8]; mov edx,esi; mov rcx,[rax+0x78]; mov rcx,[rcx+0x238];
+	// mov rax,[rcx]; call [rax+0x388]; movaps xmm0,[rax+0x20] -- loc+0x20 is the position ActorProxy reads its placements back from.
+	inline constexpr Site kLocationPositionRead{ 0x14103FB4A, { 0x48, 0x8b, 0x47, 0x08, 0x8b, 0xd6, 0x48, 0x8b, 0x48, 0x78, 0x48, 0x8b, 0x89, 0x38, 0x02, 0x00, 0x00,
+		0x48, 0x8b, 0x01, 0xff, 0x90, 0x88, 0x03, 0x00, 0x00, 0x0f, 0x28, 0x40, 0x20 } };
+	// MGSV's Auto-Aim Correction getter (an option interface's slot, vtable entry 0x14218D300): returns byte table 0x142A12190
+	// indexed by vars.optionSelectedIndices[11] (the vars block +0x13198 + 11 = +0x131A3): 0 ON, 1 OFF (docs/GUEST.md 18.13).
+	// ActorProxy turns it back on through PR.AutoAim only when this build reads that exact byte.
+	inline constexpr Site kAutoAimOptionGetter{ 0x1405301B0, { 0x48, 0x83, 0xec, 0x28, 0xe8, 0x97, 0xee, 0x6c, 0x00, 0x48, 0x8b, 0x88, 0x98, 0x00, 0x00, 0x00, 0x48,
+		0x8b, 0x41, 0x10, 0x0f, 0xb6, 0x88, 0xa3, 0x31, 0x01, 0x00, 0x48, 0x8d, 0x05, 0xbe, 0x1f, 0x4e, 0x02, 0x0f, 0xb6, 0x04, 0x01, 0x48, 0x83, 0xc4, 0x28, 0xc3 } };
+	inline constexpr std::uintptr_t kAutoAimOptionGetterSlot = 0x14218D300;
+	// ActorProxy v1 (live 2026-10-14): the location class Snake's location object belongs to; an *enabled* (realized) soldier gets one
+	// too (+0x10 feet, +0x20 feet + 0.8 m, +0x60 rotation; vf 0x68 = set position + rotation, as Hold uses). Found by scanning for
+	// this vtable (the ~30 are pooled per realized character); disabled soldiers have none.
+	inline constexpr std::uintptr_t kLocationVtable = 0x1424C8EF0;
+	// The TppSoldier2 system (one instance, vtable 0x1423E8060): slot 26 is its SendCommand handler 0x141356170, whose GetPosition
+	// case reads the position cache [[system+0x18]+0x20] + index * 16 (xyz + yaw): mov rax,[r15+0x18]; movaps xmm1,xmm10; mov ecx,edi;
+	// shl rcx,4; lea r8,[rbp+0xC0]; mov rdx,r14; add rcx,[rax+0x20].
+	inline constexpr std::uintptr_t kSoldierSystemVtable = 0x1423E8060;
+	inline constexpr std::uintptr_t kSoldierCommandSlot = 26;
+	inline constexpr std::uintptr_t kSoldierCommandHandler = 0x141356170;
+	inline constexpr Site kSoldierGetPosition{ 0x14135A2B4, { 0x49, 0x8b, 0x47, 0x18, 0x41, 0x0f, 0x28, 0xca, 0x8b, 0xcf, 0x48, 0xc1, 0xe1, 0x04, 0x4c, 0x8d, 0x85,
+		0xc0, 0x00, 0x00, 0x00, 0x49, 0x8b, 0xd6, 0x48, 0x03, 0x48, 0x20 } };
+
 	// ---- Snake's ammunition (Ammo.cpp, docs/GUEST.md 18.11) -------------------------------------------------
 	// Player.GetAmmoStockBySlot (Lua C function 0x1409D1BB0) finds the player's ammo component the way Ammo.cpp does:
 	// call the Player2System accessor; impl = [ret+8]; player index = [impl+0x214]; component = [[impl+0xC8]+8].

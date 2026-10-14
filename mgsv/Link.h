@@ -35,6 +35,9 @@ namespace phantom::guest::link
 	bool ReadPad(proto::PadState& a_out);
 	bool ReadHostState(proto::HostState& a_out);
 	bool PopHostEvent(proto::HostEvent& a_out);
+	// The ActorTable (host -> guest seqlock): its seq and the first `count` records only (ActorProxy). False while detached,
+	// before the host's first table, or when the host kept writing through every attempt.
+	bool ReadActors(proto::ActorRecord* a_out, std::uint32_t a_max, std::uint32_t& a_count, std::uint32_t& a_seq);
 
 	// The dev console mailbox (nullptr while detached). Lua requests are served by the Lua pump; lines
 	// starting with '!' are guest commands served by the worker (they work before Lua is up).

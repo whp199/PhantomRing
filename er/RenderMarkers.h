@@ -46,6 +46,7 @@ namespace phantom::er
 			kThrow,
 			kMines,
 			kRounds,  // explosive rounds in flight (er/Rounds.h)
+			kFulton,  // MGSV's Fulton balloon over an Elden Ring enemy (er/Fulton.h)
 			kCount,
 		};
 		void Set(Owner a_owner, std::vector<Marker> a_markers);

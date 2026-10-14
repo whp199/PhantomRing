@@ -128,6 +128,18 @@ class FakeHost:
 		self.placed: dict[int, tuple] = {}  # v5: kGEvPlaced ids still there (`pr er detonate <id>|all`)
 		self.dead = False  # `pr er die`: HostState kHostPlayerDead until `pr er respawn` (guest death tests)
 		self.tarnished = False  # `pr er tarnished 1`: Tarnished mode, no kHostPuppeting (the pad stays as given: the guest parks itself)
+		# --actors near (ActorProxy tests, docs/GUEST.md 20): the two actors stand still in Elden Ring at these offsets (MGSV x, z) from
+		# where Snake was at the first guest state, published the way the host maps them (rootPos + (point - odo) for a point fixed in
+		# odometer space), so treadmill jumps move them in MGSV's world exactly as they do with the real host. "fixed": the old
+		# constant MGSV-world points.
+		self.actors_mode = "fixed"
+		self.actor_points: list[list[float]] | None = None
+		# `pr er actor <i> asleep|awake|dead|alive|at <dx> <dz>` (--actors near; Fulton tests, docs/GUEST.md 20.4): per-actor extra flags and
+		# moves; a kGEvFulton a=1 removes that actor from the table, as the real host takes the enemy out of Elden Ring's world.
+		self.actor_flags = [0, 0]
+		self.actor_handles = [0xFFFFFFFF00001000, 0xFFFFFFFF00001001]  # `actor <i> renew`: a new character (a fultoned one stays gone)
+		self.fultoned: set[int] = set()
+		self.guest_last = None
 		self.stats = {
 			"frames": 0, "guestAttaches": 0, "guestStates": 0, "guestFlagsSeen": 0, "odoDistance": 0.0,
 			"events": {}, "drawFrames": 0, "lastDrawCount": 0, "lastMatrixCount": 0, "drawOwnersSeen": [],
@@ -181,7 +193,7 @@ class FakeHost:
 			leftTrigger=state[4], thumbLX=state[0], thumbLY=state[1], thumbRX=state[5], thumbRY=state[6])
 		link.seq_write(proto.OFF_PAD, pad)
 
-		if self.frame % 30 == 1:
+		if self.frame % 30 == 1 or self.actors_mode == "near":
 			self.publish_actors()
 
 		if t >= self.next_hurt:
@@ -225,6 +237,7 @@ class FakeHost:
 				st["vehicleIdsSeen"].append(gs.vehicleId)
 			st["buddyFlagsSeen"] |= gs.buddyFlags
 			st["buddyAmmoLast"] = gs.buddyAmmo
+			self.guest_last = gs
 			self.on_guest_frame(gs)
 			if self.trace:
 				self.trace.write(f"{time.monotonic() - self.t0:.4f},{gs.frame},{gs.flags:#x},{gs.odoEpoch},{gs.odo[0]:.4f},{gs.odo[1]:.4f},{gs.odo[2]:.4f},"
@@ -277,6 +290,11 @@ class FakeHost:
 				self.log(f"placed #{ev.b} gone")
 			elif ev.type == GuestEventType.Died:
 				self.log("Snake died: the host would kill the puppet now")
+			elif ev.type == GuestEventType.Fulton:
+				handle = ev.pad[0] | (ev.pad[1] << 32)
+				if ev.a == 1:
+					self.fultoned.add(handle)  # the real host lifts him out of Elden Ring's world: gone from the table
+				self.log(f"fulton: Elden Ring character {handle:#x} {'fultoned' if ev.a == 1 else 'NOT fultoned'} at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f})")
 
 		if self.draw.acquire():
 			hdr, dl, draws, mats = link.read_draw_slot(self.draw.front)
@@ -339,16 +357,63 @@ class FakeHost:
 				self.textures.pop(key, None)
 				st["renderForget"] += 1
 
+	NEAR_ACTORS = [("Godrick Soldier", 15.0, 0.0), ("Wandering Noble", -10.0, 25.0)]
+
+	def actor_positions(self) -> list[list[float]] | None:
+		"""--actors near: the actors' MGSV-world feet now (None before the first guest state)."""
+		gs = self.guest_last
+		if gs is None:
+			return None
+		if self.actor_points is None:
+			self.actor_points = [[gs.odo[0] + x, gs.odo[1], gs.odo[2] + z] for _, x, z in self.NEAR_ACTORS]
+		return [[gs.rootPos[i] + p[i] - gs.odo[i] for i in range(3)] for p in self.actor_points]
+
 	def publish_actors(self):
-		table = proto.ActorTable(count=2)
+		table = proto.ActorTable(count=0)
+		near = self.actor_positions() if self.actors_mode == "near" else None
 		for i, (name, x, z) in enumerate([("Godrick Soldier", 6.0, 4.0), ("Wandering Noble", -5.0, 8.0)]):
-			a = table.actors[i]
-			a.handle = 0xFFFFFFFF00000000 | (0x1000 + i)
-			a.flags = int(proto.ActorFlags.Hostile)
-			a.pos[:] = [x, 0.0, z]
-			a.yaw, a.radius, a.height, a.hpFrac = math.pi, 0.4, 1.8, 1.0
+			handle = self.actor_handles[i]
+			if handle in self.fultoned:
+				continue
+			a = table.actors[table.count]
+			table.count += 1
+			a.handle = handle
+			a.flags = int(proto.ActorFlags.Hostile) | self.actor_flags[i]
+			a.pos[:] = near[i] if near else [x, 0.0, z]
+			a.yaw, a.radius, a.height, a.hpFrac = math.pi, 0.4, 1.8, 1.0 if not self.actor_flags[i] & int(proto.ActorFlags.Dead) else 0.0
 			a.name = name.encode()
 		self.link.seq_write(proto.OFF_ACTORS, table)
+
+	def actor_command(self, args: list[str]) -> tuple[int, str]:
+		if len(args) < 2 or args[0] not in ("0", "1"):
+			return 1, "usage: actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back   (at: MGSV x/z metres from Snake now; --actors near)"
+		i = int(args[0])
+		flag = {"asleep": int(proto.ActorFlags.Asleep), "dead": int(proto.ActorFlags.Dead)}
+		match args[1:]:
+			case ["asleep" | "dead" as what]:
+				self.actor_flags[i] |= flag[what]
+			case ["awake"]:
+				self.actor_flags[i] &= ~flag["asleep"]
+			case ["alive"]:
+				self.actor_flags[i] &= ~flag["dead"]
+			case ["back"]:
+				self.fultoned.discard(self.actor_handles[i])
+			case ["renew"]:
+				self.actor_handles[i] = 0xFFFFFFFF00000000 | (max(h & 0xFFFFFFFF for h in self.actor_handles) + 0x10)
+				self.actor_flags[i] = 0
+			case ["at", dx, dz]:
+				gs = self.guest_last
+				if self.actors_mode != "near" or gs is None:
+					return 1, "actor at: needs --actors near and a guest state"
+				self.actor_positions()
+				self.actor_points[i] = [gs.odo[0] + float(dx), gs.odo[1], gs.odo[2] + float(dz)]
+			case _:
+				return 1, "usage: actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew"
+		self.publish_actors()
+		pos = self.actor_positions()
+		where = f" at {pos[i][0]:.2f},{pos[i][1]:.2f},{pos[i][2]:.2f}" if pos else ""
+		gone = " (fultoned: not published)" if self.actor_handles[i] in self.fultoned else ""
+		return 0, f"actor {i} handle {self.actor_handles[i]:#x} flags {self.actor_flags[i]:#x}{where}{gone}"
 
 	def host_event(self, typ, a: int, b: int) -> tuple[int, str]:
 		ev = proto.HostEvent(type=int(typ), a=a, b=b, frame=self.frame & 0xFFFFFFFF)
@@ -365,7 +430,13 @@ class FakeHost:
 		match cmd:
 			case ["help"]:
 				return 0, ("fake_er canned commands: help, ping, status, peek player.pos, peek <addr>, hurt <er dmg>, heal <amount>, die, respawn, "
-					"rested 0|1, tarnished 0|1, placed, detonate <id>|all")
+					"rested 0|1, tarnished 0|1, placed, detonate <id>|all, actors, actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew")
+			case ["actor", *rest]:
+				return self.actor_command(rest)
+			case ["actors"]:
+				pos = self.actor_positions() if self.actors_mode == "near" else None
+				return 0, "; ".join(f"{i}: flags {self.actor_flags[i]:#x}" + (f" at {pos[i][0]:.2f},{pos[i][1]:.2f},{pos[i][2]:.2f}" if pos else "") +
+					(" fultoned" if self.actor_handles[i] in self.fultoned else "") for i in range(2))
 			case ["placed"]:
 				return 0, " ".join(f"#{k}@{v[0]:.1f},{v[1]:.1f},{v[2]:.1f}" for k, v in self.placed.items()) or "none"
 			case ["detonate", which]:
@@ -424,6 +495,9 @@ def main(argv=None) -> int:
 		"ammoInClip,ammoStock,camYawDeg,nvg) and one '# event' line per guest event (and '# host' per host event sent)")
 	ap.add_argument("--pad-file", help="drive the pad from this file instead of the 10 s loop (see parse_pad_line); "
 		"an absent file means a neutral pad")
+	ap.add_argument("--actors", choices=["fixed", "near"], default="fixed",
+		help="the two published actors: fixed MGSV-world points (default), or standing 15 m / 27 m from where Snake started, "
+		"mapped like the real host does (ActorProxy tests, docs/GUEST.md 20)")
 	ap.add_argument("--force", action="store_true", help="take the host side over even if another live process holds it")
 	args = ap.parse_args(argv)
 
@@ -438,6 +512,7 @@ def main(argv=None) -> int:
 	if link.refuse_if_taken("host", "fake_er", path, args.force):
 		return 4
 	host = FakeHost(link, args.quiet, args.hurt_every if args.hurt_every > 0 else float("inf"), args.pad_file)
+	host.actors_mode = args.actors
 	if args.trace:
 		host.trace = open(args.trace, "a", buffering=1)
 	host.attach()

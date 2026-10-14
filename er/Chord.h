@@ -15,8 +15,14 @@
 //  - kOff: an Elden Ring menu, a load, a death, the grace menu, Snake not playing: Elden Ring gets both as they are.
 // In kSnake and kTarnished, Start and View down together -- the second going down before the first reached anyone -- is
 // the chord: neither reaches Elden Ring or MGSV (an iDroid hold is cancelled), and held [Input] chord_ms together it
-// fires once. Let go early, nothing happens. Either way both stay out of every pad until they are released, whatever the
-// mode is by then: Elden Ring's menu never opens or closes from the chord. A press still undecided when the mode leaves
+// fires once. Forgiving (player report 2026-10-14: "the chord failed when View went down a bit before Start -- the View
+// hold opened MGSV's iDroid first"): a Start within [Input] chord_window_ms after View still makes the chord when View's
+// iDroid hold already went to MGSV (and MGSV opened its menu: it does so on the Start at once) -- the hold's Start is cut,
+// the real Start stays out of MGSV's pad, and MGSV's menu, if it opened, gets a Start tap (kCloseGapMs after the cut, once
+// more kCloseRetryMs later if it is still open) that closes it; the chord fires as usual.
+// Start first, View within [Input] start_wait_ms (400) is the chord the other way round. Let go early, nothing happens.
+// Either way both stay out of every pad until they are released, whatever the mode is by then: Elden Ring's menu never
+// opens or closes from the chord. A press still undecided when the mode leaves
 // kSnake/kTarnished (a menu came up) is dropped the same way; one that went down in kOff passes as it is until released.
 
 #include <cstdint>
@@ -38,8 +44,9 @@ namespace phantom::er
 		{
 			int viewHoldMs{ 400 };      // kSnake: View held this long = MGSV's iDroid; 0 = View works like Start
 			int idroidStartMs{ 1200 };  // ...sent to MGSV as Start held this long
-			int startWaitMs{ 150 };     // a press is passed to Elden Ring this long after it went down (room for the chord)
+			int startWaitMs{ 400 };     // a press is passed to Elden Ring this long after it went down (room for the chord)
 			int chordMs{ 1000 };        // Start + View held together this long = the chord; 0 = no chord (and no wait)
+			int chordWindowMs{ 700 };   // Start this soon after View is the chord even after View's iDroid hold went to MGSV
 		};
 
 		struct Input
@@ -58,9 +65,16 @@ namespace phantom::er
 			int  menuPresses{ 0 };      // presses that reached Elden Ring this poll (MenuWatch's latch)
 			bool viewToGuest{ false };  // a View hold went to MGSV this poll
 			bool chord{ false };        // the chord fired this poll
+			bool idroidCancelled{ false };  // a View hold already sent to MGSV became part of the chord: its Start was cut
+			bool guestMenuClosed{ false };  // ...and MGSV opened its menu anyway: it gets a Start tap to close it (this poll)
+			bool guestMaskStart{ false };   // MGSV's pad must not carry the real Start / View (held for the chord)
+			bool guestMaskView{ false };
 		};
 
 		static constexpr std::uint64_t kTapMs = 120;  // a synthesized press: a few of Elden Ring's polls
+		static constexpr std::uint64_t kCloseWatchMs = 2500;  // after an iDroid cancel: MGSV's menu open meanwhile is closed
+		static constexpr std::uint64_t kCloseGapMs = 100;     // ...with a Start tap this long after the hold's Start was cut
+		static constexpr std::uint64_t kCloseRetryMs = 700;   // ...and once more this much later if it is still open
 
 		Output Update(const Input& a_in, const Params& a_params);
 
@@ -88,5 +102,9 @@ namespace phantom::er
 		bool          fired_{ false };
 		std::uint64_t chordSince_{ 0 };
 		std::uint64_t guestStartUntil_{ 0 };
+		std::uint64_t cancelAt_{ 0 };         // when an iDroid hold was cut for the chord (0 = none)
+		int           closeTaps_{ 0 };         // Start taps sent to close MGSV's menu since
+		std::uint64_t lastCloseAt_{ 0 };
+		std::uint64_t guestCloseUntil_{ 0 };   // the Start tap that closes it
 	};
 }

@@ -153,12 +153,33 @@ namespace phantom::guest::hold
 		return LocOf(r, a_id);
 	}
 
+	std::uintptr_t PlayerLocation() { return g_ok ? ResolveLoc() : 0; }
+
+	bool PlaceLocation(std::uintptr_t a_loc, const logic::Vec3& a_pos, const std::array<float, 4>& a_rot)
+	{
+		if (!g_ok || !a_loc || !a_pos.Finite() || Get<std::uintptr_t>(a_loc).value_or(0) != addr::kLocationVtable) {
+			return false;
+		}
+		return SetLoc(a_loc, a_pos, a_rot);
+	}
+
 	bool PlaceObject(std::uint16_t a_id, const logic::Vec3& a_pos, const std::array<float, 4>& a_rot)
 	{
 		if (!g_ok || !a_pos.Finite()) {
 			return false;
 		}
 		return SetLoc(LocationOf(a_id), a_pos, a_rot);
+	}
+
+	std::optional<logic::Vec3> LocationPosition(std::uint16_t a_id)
+	{
+		const auto loc = LocationOf(a_id);
+		const auto p = loc ? Get<std::array<float, 3>>(loc + 0x20) : std::nullopt;
+		if (!p) {
+			return std::nullopt;
+		}
+		const logic::Vec3 v{ (*p)[0], (*p)[1], (*p)[2] };
+		return v.Finite() ? std::optional<logic::Vec3>(v) : std::nullopt;
 	}
 
 	namespace

@@ -95,6 +95,11 @@ Two log files tell what happened:
 - `PhantomRingHost.log` next to `PhantomRingHost.dll` (Elden Ring side);
 - `PhantomRingGuest.log` in MGSV's folder (MGSV side).
 
+**`collect-logs.cmd`** (next to `PhantomRingHost.dll`) gathers both, plus both inis, `BUILD.txt`, `dxdiag`'s report and
+a short system summary, into `PhantomRing-logs-<date>.zip` on your Desktop. Double-click it after quitting Elden Ring
+(each start overwrites the logs). It replaces your user name, computer name and Steam id with `<user>`, `<pc>` and
+`<steamid>`, and never takes saves, screenshots or game files. It is plain text inside: look it over before you send it.
+
 | Log line | Meaning / fix |
 |---|---|
 | `exe mismatch` (host) | Elden Ring isn't 1.17.1: PhantomRing stays off |
@@ -135,6 +140,19 @@ Verified offline (under Wine, `cmake --build build --target check_windows`):
   focus answered, focus-loss messages swallowed, later subclasses kept behind the filter;
 - both DLLs import only stock Windows DLLs (`tools/check_imports.py`: kernel32, user32, advapi32, bcrypt, msvcrt).
 
+Validation aids for the first runs on real Windows (the "For testers" steps):
+- `[Render] debug_layer` (off by default, `er/DebugLayer.h`): Microsoft's D3D12 debug layer with GPU-based validation
+  and DRED, enabled first thing in the plugin's init thread (before Elden Ring creates its device; refused, with a log
+  line, if Elden Ring already has a window). Validation messages go to `PhantomRingHost.log` as `d3d12 ...` lines
+  (an `ID3D12InfoQueue1` callback, or polled at Present), at most 3 per message id and 400 in all; `pr er render` (or
+  the host console) prints the counts. A removed device logs its reason plus DRED's unfinished command lists and page
+  fault. UNVERIFIED live: it has only been built and unit-tested (the message filter) under Wine.
+- `collect-logs.cmd` (`tools/windows/collect-logs.cmd`, packed by `tools/package_windows.py`): a cmd/PowerShell
+  hybrid (the batch part is a PowerShell block comment) for PowerShell 5.1. It finds MGSV's folder from
+  `[Launch] MgsvExe`, the host log's `launcher: MGSV is ...` line, or Steam's `libraryfolders.vdf`.
+  `tools/phantomring/test_release.py` checks its structure (CRLF, header, what it gathers); it has never run on
+  Windows.
+
 Not yet seen on a real Windows PC:
 - me3 for Windows loading the plugin and its `savefile`/offline settings;
 - MGSV started directly with `SteamAppId=287700`. Steam and Denuvo should accept it (MGSV has no
@@ -145,6 +163,38 @@ Not yet seen on a real Windows PC:
   run on DXVK and vkd3d-proton);
 - whether me3's job lets MGSV break away (if not, MGSV closes together with Elden Ring);
 - MGSV's sound and performance with both games on one desktop.
+
+## For testers
+
+Thank you for trying PhantomRing on Windows. Nobody has run it on a real Windows PC yet, so each step below checks one
+thing (docs/ROADMAP.md section 3, W2 to W8). Do them in order; each takes 5 to 20 minutes. **After every step, quit
+Elden Ring and double-click `collect-logs.cmd`**, then rename the zip on your Desktop after the step
+(`PhantomRing-logs-W4.zip`): the next start overwrites the logs.
+
+**Before you start.**
+- Back up your saves: `%APPDATA%\EldenRing` (the whole folder) and MGSV's (`<Steam>\userdata\<number>\287700` and
+  `\311340`). PhantomRing plays on a copy of the Elden Ring save and never lets MGSV save, but a backup costs nothing.
+- Stay offline: PhantomRing starts Elden Ring offline itself; don't change that in me3.
+- Have a way to record the screen (Win+Alt+R records with the Xbox Game Bar). A minute of video says a lot.
+- Do the one-time setup above (MGSV settings, unzip, Elden Ring save copy).
+
+| Step | What you do | What you should see | What to send |
+|---|---|---|---|
+| **W2** Elden Ring alone | In `PhantomRingHost.ini`, `[Launch]` set `StartMgsv = false`. Double-click `phantomring.me3`, load your character, play 2 minutes, quit | Elden Ring starts offline; your character (the `PhantomRing0000.sl2` copy) loads; the Tarnished plays as normal; no MGSV in Task Manager | the zip. We look for `exe identity OK`, `address table: N/N verified` (both numbers equal) and four `task ... registered` lines |
+| **W3** MGSV once, normally | Start MGSV from Steam (not through PhantomRing). Answer Konami's region and Terms of Use, set Windowed 1280x720, Continue into Africa free roam. If you want D-Walker: check he is developed and can be deployed. Quit MGSV | MGSV plays normally | nothing (tell us if MGSV itself wouldn't start or load) |
+| **W4** Full run | Set `StartMgsv = auto` again. Double-click `phantomring.me3`, load your character and keep playing the Tarnished. Open Task Manager: `mgsvtpp.exe` should run with **no window and no taskbar button**. Wait (up to about 4 minutes) for "Snake is in control" in the corner, then play 10 minutes: move, crouch, aim, shoot an enemy, D-Walker if you have him, rest at a grace | Snake (and D-Walker) in Elden Ring; MGSV never shows up on screen or takes the focus | the zip, a 1 to 2 minute recording, how long Snake took to appear, and whether it ran smoothly |
+| **W5** Renderer check (debug layer) | Install Windows' optional feature **Graphics Tools** (Settings > System > Optional features > View features / Add a feature; Windows 10: Settings > Apps > Optional features). In `PhantomRingHost.ini`, `[Render]` set `debug_layer = true`. Start as in W4, wait for Snake, walk 3 minutes in daylight, open and close Elden Ring's menu and map, alt-tab out and back once, quit. **It will be slow** (GPU-based validation): that is expected. If it is unplayable, do it again with `gpu_validation = false` as well. Set `debug_layer = false` afterwards | The game may crawl, but Snake draws. If Elden Ring crashes or shows a graphics error, that is a result too: collect the logs straight away | the zip (both runs if you did two). The host log has `render: [Render] debug_layer: ...`, then `render: debug layer: ...` and any `d3d12 ERROR` / `d3d12 CORRUPTION` / `DEVICE REMOVED` / `DRED` lines |
+| **W6** Starting and stopping | (a) After Snake appears, quit Elden Ring normally and watch Task Manager: does `mgsvtpp.exe` close about 2 minutes later, or at once together with Elden Ring? (b) Start again (it reuses a still-running MGSV), wait for Snake, then **End task** on `mgsvtpp.exe` in Task Manager. (c) Start again, wait for Snake, alt-tab away and back, and change Elden Ring's window mode or resolution once | (a) either is fine: tell us which. (b) the corner says "MGSV stopped -- Elden Ring has the controller" and the Tarnished plays. (c) Snake still drawn, nothing frozen | the zip after (c), and your notes for (a) to (c) |
+| **W7** Controllers | Play a few minutes with each pad you have: an Xbox-style pad; a DualSense/DualShock through Steam Input (Steam's controller settings for Elden Ring). Go through the README's "How to play" table. Keyboard and mouse don't drive Snake yet | Every action in the table works with each pad | your notes: pad, connection (USB/Bluetooth), what didn't work |
+| **W8** Antivirus and SmartScreen | Note any warning from Windows Defender, SmartScreen or your antivirus: when unzipping, when starting `phantomring.me3`, when MGSV starts (PhantomRing's `dinput8.dll` is unsigned and Elden Ring starts another game) | Ideally no warning | a screenshot of each warning. The zip's `system.txt` lists Defender's detections that name PhantomRing, and `host/files.txt` / `mgsv/files.txt` hold the files' sha256 to compare with `BUILD.txt` |
+
+**What to send back**, per step: the renamed zip(s), a recording for W4, and a few lines: which step, what you
+saw, anything odd (with roughly when it happened). Send them to whoever gave you PhantomRing, or open an issue on the
+project's GitHub page and attach them. Your GPU and Windows version are in the zip (`dxdiag.txt`, `system.txt`).
+
+**If `collect-logs.cmd` fails** (an old or locked-down PowerShell): send `PhantomRingHost.log` and
+`PhantomRingHost.ini` from the PhantomRing folder, `PhantomRingGuest.log` and `PhantomRingGuest.ini` from MGSV's
+folder, `BUILD.txt`, and the output of `dxdiag /t dxdiag.txt` (run in a terminal) by hand.
 
 ## For developers
 

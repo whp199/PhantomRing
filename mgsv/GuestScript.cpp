@@ -360,6 +360,130 @@ function PR.DisableSoldiers()
 	return tostring(count)
 end
 
+-- ActorProxy v0 ([Proxies], docs/GUEST.md 20): every TppSoldier2 / TppHostage2 id of the sandbox, 'soldiers;hostages' as comma lists,
+-- for the native placement (ActorProxyGame.cpp). The soldiers will stand in for Elden Ring's enemies, so MGSV's own damage on them is
+-- turned off first (InfSoldier's SetDisableDamage; UNVERIFIED on a disabled soldier): Snake's rounds count only through ShotSolver.
+-- GetGameObjectIdByIndex doesn't fail past the last instance: it wraps (live 2026-10-14, Africa: TppSoldier2 index i ->
+-- 1024 + i % 512, so 1024 'soldiers' with every id twice) while GetPosition on an id past the instance count raises "index 270 is
+-- larger than maxInstanceCount 270". The pool stops at the first id seen again or the first that GetPosition refuses.
+-- (cx, cz) given: soldiers nearest that point first -- only soldiers near Snake are realized (get a location object) when enabled
+-- (live 2026-10-14: 0x405/0x406, 3 km away, never were).
+function PR.ProxyPool(cx, cz)
+	local f = fn(GameObject, 'GetGameObjectIdByIndex')
+	if not f then return ';' end
+	local lists = {}
+	for k, cls in ipairs({ 'TppSoldier2', 'TppHostage2' }) do
+		local ids, seen, misses, dist = {}, {}, 0, {}
+		for i = 0, 1023 do
+			local ok, id = pcall(f, cls, i)
+			if not ok or type(id) ~= 'number' or id == NULL_ID then
+				misses = misses + 1
+				if misses > 64 then break end
+			elseif seen[id] or not pcall(GameObject.SendCommand, id, { id = 'GetPosition' }) then
+				break
+			elseif k == 1 and (function()
+				-- An instance slot the mission doesn't use stands at the origin (live: 0x400-0x404 in Africa): never a proxy.
+				local ok, p = send(id, { id = 'GetPosition' })
+				local x, _, z = nil, nil, nil
+				if ok then x, _, z = xyz(p) end
+				return not x or (math.abs(x) < 1 and math.abs(z) < 1)
+			end)() then
+				seen[id] = true
+			else
+				misses = 0
+				seen[id] = true
+				ids[#ids + 1] = id
+				if cx and cz then
+					local ok, p = send(id, { id = 'GetPosition' })
+					local x, _, z = nil, nil, nil
+					if ok then x, _, z = xyz(p) end
+					dist[id] = x and ((x - cx) * (x - cx) + (z - cz) * (z - cz)) or math.huge
+				end
+				if k == 1 then send(id, { id = 'SetDisableDamage', life = true, faint = true, sleep = true }) end
+			end
+		end
+		if cx and cz then table.sort(ids, function(a, b) return dist[a] < dist[b] end) end
+		for i = 1, #ids do ids[i] = tostring(ids[i]) end
+		lists[k] = table.concat(ids, ',')
+	end
+	return lists[1] .. ';' .. lists[2]
+end
+
+-- Fulton anchor (FultonAnchor.cpp, docs/GUEST.md 20.4). Soldiers near the sandbox centre standing at its height: "id:x,y,z;...",
+-- nearest first. TppSoldier2 ids are 0x400 + index; GetPosition raises past the instance count (270 in Africa, live), which ends
+-- the list. Only soldiers in their normal life state (a fultoned or sleeping one is not a candidate).
+function PR.FultonCandidates(cx, cy, cz, radius)
+	local found = {}
+	for id = 1024, 1535 do
+		local ok, p = send(id, { id = 'GetPosition' })
+		if not ok then break end
+		local x, y, z = xyz(p)
+		if x and (x ~= 0 or z ~= 0) and math.abs(y - cy) < 1.5 then
+			local dx, dz = x - cx, z - cz
+			local d = math.sqrt(dx * dx + dz * dz)
+			local okL, life = send(id, { id = 'GetLifeStatus' })
+			if d <= radius and (not okL or life == 0 or life == nil) then found[#found + 1] = { d, id, x, y, z } end
+		end
+	end
+	table.sort(found, function(a, b) return a[1] < b[1] end)
+	local out = {}
+	for i = 1, math.min(#found, 16) do
+		local f = found[i]
+		out[#out + 1] = string.format('%d:%.3f,%.3f,%.3f', f[2], f[3], f[4], f[5])
+	end
+	return table.concat(out, ';')
+end
+
+-- A disabled soldier ignores ChangeLifeState, and so does one enabled in the same update (live 2026-10-14): enable first, sleep
+-- (NPC_LIFE_STATE_SLEEP = 3) a few updates later. Asleep he lies where he stood and MGSV offers Snake its Fulton beside him.
+function PR.FultonEnable(id)
+	local ok = send(id, { id = 'SetEnabled', enabled = true })
+	return tostring(ok)
+end
+
+function PR.FultonSleep(id)
+	send(id, { id = 'ChangeLifeState', state = 3 })
+	local ok, life = send(id, { id = 'GetLifeStatus' })
+	return tostring(ok and life)
+end
+
+-- ActorProxy v1: an enabled soldier made a puppet stands inert where he is put (no AI: live 2026-10-14, 20 s 5 m in front of Snake,
+-- playerPhase 0); his location object moves him (ActorProxyGame.cpp).
+function PR.ProxyPuppet(id)
+	send(id, { id = 'SetDisableDamage', life = true, faint = true, sleep = true })
+	local ok = send(id, { id = 'SetPuppet', enabled = true })
+	return tostring(ok)
+end
+
+-- An asleep proxy (its Elden Ring character sleeps): a puppet ignores ChangeLifeState, and so does a soldier whose sleep damage is
+-- off (live 2026-10-14) -- both lifted first. He lies asleep where his location puts him; MGSV offers its Fulton beside him.
+function PR.ProxySleep(id)
+	send(id, { id = 'SetPuppet', enabled = false })
+	send(id, { id = 'SetDisableDamage', life = true, faint = false, sleep = false })
+	send(id, { id = 'ChangeLifeState', state = 3 })
+	local ok, life = send(id, { id = 'GetLifeStatus' })
+	return tostring(ok and life)
+end
+
+function PR.FultonDisable(id)
+	local ok = send(id, { id = 'SetEnabled', enabled = false })
+	return tostring(ok)
+end
+
+-- "x,y,z,life,status,action" of a soldier. GetPosition reads TppSoldier2's position cache (sys+0x18 -> +0x20 + index * 16), which
+-- creeps after a fultoned soldier (live 2026-10-14: 2.6 m up after 6 s while the balloon had him far above the roofs); GetStatus /
+-- GetActionStatus tell it at once: asleep 1 / 0, taken by MGSV's balloon 0 / 1 (live).
+function PR.FultonSoldier(id)
+	local ok, p = send(id, { id = 'GetPosition' })
+	local x, y, z = nil, nil, nil
+	if ok then x, y, z = xyz(p) end
+	if not x then return 'none' end
+	local okL, life = send(id, { id = 'GetLifeStatus' })
+	local okS, st = send(id, { id = 'GetStatus' })
+	local okA, act = send(id, { id = 'GetActionStatus' })
+	return string.format('%.3f,%.3f,%.3f,%s,%s,%s', x, y, z, tostring(okL and life), tostring(okS and st), tostring(okA and act))
+end
+
 -- MGSV's markers off: a marked MGSV soldier near the sandbox (they stay standing, disabled) showed in Elden Ring's HUD layer and
 -- MGSV's aim snapped onto it (live: a rocket launcher's aim stuck 30 deg off the Elden Ring target until TppMarker.DisableAll).
 function PR.ClearMarkers()
@@ -487,7 +611,7 @@ end
 -- (the boot sequence recovers, minutes later). GamePauseMenu is an engine enum: indexing works, pairs() doesn't.
 PR.SAFE_PAUSE_ITEMS = { 'CONTROLS_AND_TIPS_ITEM', 'OPEN_OPTION_MENU' }
 
-function PR.Menus(safePause, blockMissions)
+function PR.Menus(safePause, blockMissions, allowDismiss)
 	local out = {}
 	if safePause then
 		if type(GamePauseMenu) ~= 'table' and type(GamePauseMenu) ~= 'userdata' then
@@ -501,25 +625,40 @@ function PR.Menus(safePause, blockMissions)
 			out[#out + 1] = 'pause=' .. tostring((try(TppUiCommand, 'RegisterPauseMenuPage', items))) .. '(' .. #items .. ' items)'
 		end
 	end
-	if blockMissions then out[#out + 1] = 'missions=' .. PR.BlockMissions() end
+	if blockMissions then out[#out + 1] = 'missions=' .. PR.BlockMissions(allowDismiss) end
 	return table.concat(out, ' ')
 end
 
 -- The iDroid's mission list, helicopter and location change would leave the sandbox. TppTerminal (MGSV's own script)
 -- names the iDroid's top menu items; SetMbTopMenuItemActive greys them out.
 PR.BLOCKED_IDROID = { 'MSN_MISSIONLIST', 'MSN_SIDEOPSLIST', 'MSN_LOCATION', 'MSN_HELI', 'MSN_HELI_RENDEZVOUS', 'MSN_RETURNMB', 'MSN_HELI_DISMISS',
-	'MSN_FOB', 'MSN_EMERGENCIE_N', 'MSN_EMERGENCIE_F', 'MSN_BUDDY_WALKER_DISMISS', 'MSN_BUDDY_HORSE_DISMISS', 'MSN_BUDDY_DOG_DISMISS',
-	'MSN_BUDDY_QUIET_DISMISS', 'MSN_BUDDY_BATTLE_DISMISS' }
+	'MSN_FOB', 'MSN_EMERGENCIE_N', 'MSN_EMERGENCIE_F' }
+-- Buddy Support > DISMISS <buddy>: MGSV sends the buddy away (the walker is fultoned out, live 2026-10-14) and its active buddy type
+-- becomes NONE; the guest follows that choice ([Menu] BuddyDismiss, Pump.cpp AdoptBuddy). Struck out only with BuddyDismiss = false.
+PR.BUDDY_DISMISS_IDROID = { 'MSN_BUDDY_WALKER_DISMISS', 'MSN_BUDDY_HORSE_DISMISS', 'MSN_BUDDY_DOG_DISMISS', 'MSN_BUDDY_QUIET_DISMISS',
+	'MSN_BUDDY_BATTLE_DISMISS' }
 
-function PR.BlockMissions()
+function PR.BlockMissions(allowDismiss)
 	local menu = type(TppTerminal) == 'table' and TppTerminal.MBDVCMENU or nil
 	if type(menu) ~= 'table' then return 'no TppTerminal.MBDVCMENU' end
-	local done, missing = 0, 0
-	for _, name in ipairs(PR.BLOCKED_IDROID) do
+	local done, missing, allowed = 0, 0, 0
+	local function set(name, active)
 		local item = menu[name]
-		if item ~= nil and try(TppUiCommand, 'SetMbTopMenuItemActive', item, false) then done = done + 1 else missing = missing + 1 end
+		if item ~= nil and try(TppUiCommand, 'SetMbTopMenuItemActive', item, active) then return true end
+		missing = missing + 1
+		return false
 	end
-	return done .. ' blocked, ' .. missing .. ' missing'
+	for _, name in ipairs(PR.BLOCKED_IDROID) do
+		if set(name, false) then done = done + 1 end
+	end
+	for _, name in ipairs(PR.BUDDY_DISMISS_IDROID) do
+		if allowDismiss ~= false then
+			if set(name, true) then allowed = allowed + 1 end
+		elseif set(name, false) then
+			done = done + 1
+		end
+	end
+	return done .. ' blocked, ' .. allowed .. ' buddy dismiss allowed, ' .. missing .. ' missing'
 end
 
 -- [Loadout] weapons (TppEquip.EQP_* names; '' keeps the save's) go into the sortie loadout vars BEFORE the sandbox mission

@@ -6,8 +6,10 @@
 #include "Combat.h"
 #include "CombatLogic.h"
 #include "Explosion.h"
+#include "Fulton.h"
 #include "Config.h"
 #include "HitHook.h"
+#include "Hud.h"
 #include "Link.h"
 #include "Log.h"
 #include "Mem.h"
@@ -79,6 +81,7 @@ namespace phantom::er::Puppet
 		Vec3           g_rmHanded;                // ...and what was handed to the proxy with the catch-up
 		ULONGLONG      g_rmStillSince{ 0 };
 		Unstick        g_unstick;                 // kinematic: boxed in -> back to where it stood free
+		std::uint64_t  g_ceilings{ 0 };           // kinematic: frames a move was refused under a ceiling lower than Snake
 		FallWatch      g_fallWatch;               // a fall that never lands (a chasm's kill volume under NoDead) -> Snake dies
 		std::uint64_t  g_endlessFalls{ 0 };
 		ULONGLONG      g_lastBump{ 0 };           // kinematic: the last object-only attack against what blocked the body
@@ -147,6 +150,29 @@ namespace phantom::er::Puppet
 			if (!Link::Get().PushHostEvent(e)) {
 				Log::Debug("host event {} dropped (guest ring full or detached)", static_cast<std::uint32_t>(a_type));
 			}
+		}
+
+		// Snake's height in MGSV's stance (GuestState flags / stance: 0 stand, 1 squat, 2 crawl).
+		float StanceHeight(const proto::GuestState& a_g)
+		{
+			const auto& c = Cfg();
+			if ((a_g.flags & proto::kGuestProne) || a_g.stance == 2) {
+				return c.heightProne;
+			}
+			if ((a_g.flags & proto::kGuestCrouching) || a_g.stance == 1) {
+				return c.heightCrouch;
+			}
+			return c.heightStand;
+		}
+		const char* StanceName(const proto::GuestState& a_g)
+		{
+			if ((a_g.flags & proto::kGuestProne) || a_g.stance == 2) {
+				return "prone";
+			}
+			if ((a_g.flags & proto::kGuestCrouching) || a_g.stance == 1) {
+				return "crouched";
+			}
+			return "standing";
 		}
 
 		void Hide(const game::Player& a_p, bool a_hide)
@@ -236,6 +262,8 @@ namespace phantom::er::Puppet
 					game::SetPosition(p, *at);
 					g_anchor.pe = *at;
 					g_kin.pos = *at;
+					g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
+					g_kin.underRefusedS = 0;
 					g_lastSet = *at;
 				}
 			}
@@ -493,6 +521,8 @@ namespace phantom::er::Puppet
 		if (Length(now - g_lastSet) > cfg.resyncDistance) {
 			Log::Info("puppet: ER moved the player {:.2f} m by itself; re-anchoring", Length(now - g_lastSet));
 			g_kin.pos = now;
+			g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
+			g_kin.underRefusedS = 0;
 			g_kin.grounded = true;
 			g_kin.vy = 0;
 			RootMotion::Clear();
@@ -552,6 +582,8 @@ namespace phantom::er::Puppet
 			RootMotion::Remove(p);
 			g_rootMotion = false;
 			g_kin.pos = now;
+			g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
+			g_kin.underRefusedS = 0;
 			g_kin.grounded = true;
 			g_kin.vy = 0;
 			g_lastSet = now;
@@ -611,6 +643,8 @@ namespace phantom::er::Puppet
 			g_kin.grounded = grounded;
 			g_kin.groundY = NAN;
 			g_kin.pos = now;
+			g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
+			g_kin.underRefusedS = 0;
 			if (g_fallWatch.Update(grounded, now.y, a_f.dt, cfg.fallWatchSeconds, cfg.fallWatchDrop)) {
 				EndlessFall(a_f);
 			}
@@ -627,10 +661,22 @@ namespace phantom::er::Puppet
 		params.snapDown = cfg.snapDown;
 		params.chestHeight = cfg.chestHeight;
 		params.gravity = cfg.gravity;
+		params.bodyHeight = !cfg.ceiling ? 0.0f : g_riding ? cfg.heightRide : StanceHeight(g);
 		const auto* ignore = p.chr;
 		const auto  filter = cfg.rayFilter;
 		const RayFn ray = [ignore, filter](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) { return game::CastRay(a_from, a_delta, a_hit, ignore, filter); };
 		const auto  r = KinematicStep(g_kin, step, a_f.dt, params, ray);
+		if (r.ceilingEscape) {
+			Log::Info("puppet: under a ceiling {:.2f} m up ({}: {:.2f} m) and every move refused for {:.2f} s -- the ceiling check stands aside until "
+			          "he stands free (a way out that dips)",
+				std::isfinite(r.headroom) ? r.headroom : 0.0f, StanceName(g), params.bodyHeight, kCeilingEscapeS);
+		}
+		if (r.ceiling) {
+			if (++g_ceilings <= 5 || g_ceilings % 200 == 0) {
+				Log::Info("puppet: a ceiling {:.2f} m above where Snake would go ({}: {:.2f} m) -- he stays out from under it ({} refused frames)",
+					std::isfinite(r.headroom) ? r.headroom : 0.0f, StanceName(g), params.bodyHeight, g_ceilings);
+			}
+		}
 		{
 			const bool blocked = r.blocked && LengthXZ(step) > 1e-3f;
 			g_wallFrames += blocked ? 1 : 0;
@@ -644,13 +690,37 @@ namespace phantom::er::Puppet
 			g_lastBump = ::GetTickCount64();
 			Explosion::Break(a_f, r.wallPoint, Normalize(step), "Snake bumped into it");
 		}
+		const double nowS = static_cast<double>(::GetTickCount64()) / 1000.0;
+		if (cfg.unstick) {
+			// Asked and refused in every direction tried (er/Kinematic.h Unstick::Stall): back to where he stood free, or a hint.
+			bool noPlace = false;
+			if (const auto back = g_unstick.Stall(g_kin.pos, step, r.moved, g_kin.grounded, nowS, cfg.stallSeconds, &noPlace)) {
+				Log::Info("puppet: stuck at ({:.2f}, {:.2f}, {:.2f}) -- every move refused for {:.1f} s in 3+ directions -- back to ({:.2f}, {:.2f}, {:.2f}) "
+				          "where he stood free (stall #{}, unstick #{})",
+					g_kin.pos.x, g_kin.pos.y, g_kin.pos.z, cfg.stallSeconds, back->x, back->y, back->z, g_unstick.Stalls(), g_unstick.Count());
+				Hud::Notify("Snake was stuck -- back where he stood free", Hud::Tone::kWarn);
+				g_kin.pos = *back;
+				g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
+				g_kin.underRefusedS = 0;
+				g_kin.vy = 0;
+				g_kin.grounded = true;
+			} else if (noPlace) {
+				Log::Info("puppet: stuck at ({:.2f}, {:.2f}, {:.2f}) -- every move refused for {:.1f} s in 3+ directions, and no free place to go back to "
+				          "(stall #{}): Tarnished mode suggested",
+					g_kin.pos.x, g_kin.pos.y, g_kin.pos.z, cfg.stallSeconds, g_unstick.Stalls());
+				Hud::Notify("Snake is stuck -- hold View+Start: the Tarnished can walk out, then View+Start again", Hud::Tone::kWarn);
+			}
+		}
 		if (cfg.unstick && g_frames % 3 == 0) {
-			const int boxed = Enclosed(g_kin.pos, params.radius + 0.3f, params, ray);
-			if (const auto back = g_unstick.Update(g_kin.pos, boxed, g_kin.grounded, static_cast<double>(::GetTickCount64()) / 1000.0, cfg.unstickSeconds)) {
+			const int  boxed = Enclosed(g_kin.pos, params.radius + 0.3f, params, ray);
+			const bool room = params.bodyHeight <= 0.0f || SolidHeadroom(g_kin.pos, params.bodyHeight + 0.05f, ray) >= params.bodyHeight;
+			if (const auto back = g_unstick.Update(g_kin.pos, boxed, g_kin.grounded, nowS, cfg.unstickSeconds, room)) {
 				Log::Info("puppet: boxed in at ({:.2f}, {:.2f}, {:.2f}) ({} of 8 directions blocked) for {:.1f} s -- back to ({:.2f}, {:.2f}, {:.2f}) where it "
 				          "stood free (unstick #{})",
 					g_kin.pos.x, g_kin.pos.y, g_kin.pos.z, boxed, cfg.unstickSeconds, back->x, back->y, back->z, g_unstick.Count());
 				g_kin.pos = *back;
+				g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
+				g_kin.underRefusedS = 0;
 				g_kin.vy = 0;
 				g_kin.grounded = true;
 			}
@@ -727,6 +797,7 @@ namespace phantom::er::Puppet
 				PushHost(proto::kHEvRespawn, 0, 0, Vec3{}, a_f.index);
 				// Elden Ring refilled the flasks: Snake's ammo too (protocol v10).
 				PushHost(proto::kHEvRested, 1, 0, Vec3{}, a_f.index);
+				Fulton::OnEnemiesBack("a respawn");
 				g_killedByGuest = false;
 				g_killConfirmed = false;
 				g_deathPending = false;
@@ -883,7 +954,7 @@ namespace phantom::er::Puppet
 		}
 		Cfg().motion = std::string(a_mode);
 		g_wantedM = g_movedM = 0;
-		g_wallFrames = g_walls = g_bumps = 0;
+		g_wallFrames = g_walls = g_bumps = g_ceilings = 0;
 		if (g_active && a_f.player && a_f.player.chr == g_chr) {
 			const bool want = a_mode == "root_motion";
 			if (want && !g_rootMotion) {
@@ -895,6 +966,8 @@ namespace phantom::er::Puppet
 			}
 			const Vec3 now = game::Position(a_f.player);
 			g_kin.pos = now;
+			g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
+			g_kin.underRefusedS = 0;
 			g_kin.grounded = true;
 			g_kin.vy = 0;
 			g_lastSet = now;
@@ -922,10 +995,10 @@ namespace phantom::er::Puppet
 			}
 			return std::format("puppet off ({}{})", held, usable ? "ready to start" : why);
 		}
-		return std::format("puppet ON {} frames ({} motion, moved {:.2f} of {:.2f} m asked, catch-up owed {:.2f} m, unstuck {}, walls {} ({} frames), "
-		                   "breakers {}): delta {:.3f}, feet ({:.2f}, "
+		return std::format("puppet ON {} frames ({} motion, moved {:.2f} of {:.2f} m asked, catch-up owed {:.2f} m, unstuck {} (stalls {}), walls {} ({} frames), "
+		                   "ceilings {}, breakers {}): delta {:.3f}, feet ({:.2f}, "
 		                   "{:.2f}, {:.2f}) {} vy {:.2f}, ground {:.2f}, riding {}, dropped jumps {}, host falls {}, endless falls {}, HP {} (bar {:.0f}%), heals {} ({} HP){}\n{}; {}",
-			g_frames, g_rootMotion ? "root" : "kinematic", g_movedM, g_wantedM, LengthXZ(g_rmDebt), g_unstick.Count(), g_walls, g_wallFrames, g_bumps,
+			g_frames, g_rootMotion ? "root" : "kinematic", g_movedM, g_wantedM, LengthXZ(g_rmDebt), g_unstick.Count(), g_unstick.Stalls(), g_walls, g_wallFrames, g_ceilings, g_bumps,
 			g_anchor.delta, g_kin.pos.x, g_kin.pos.y, g_kin.pos.z, g_kin.grounded ? "grounded" : "airborne",
 			g_kin.vy, g_kin.groundY, g_riding ? (g_horse ? "D-Horse" : "a vehicle") : "no", g_dropped, g_falls, g_endlessFalls, g_hpLast, g_hpFrac * 100.0f, g_heals, g_healedHp,
 			g_killedByGuest ? ", DYING for Snake" : (g_deathPending ? ", death pending" : ""),

@@ -45,6 +45,9 @@ namespace phantom::er
 		// the Tarnished with `render gbuf peek`.
 		std::string gbufferDepth{ "finite" };  // finite (pers_cam_1 near/far) | infinite reversed Z
 		int         gbufferStencil{ 0x50 };     // stencil class bits Elden Ring's lighting tests
+		int         gbufferPoint{ -1 };         // where in Elden Ring's G-buffer batch Snake goes: -1 (clear) = right after Elden Ring clears
+		                                        // its scene depth, before its own G-buffer draws (they then depth-test against Snake); 0 (last) =
+		                                        // after its last G-buffer list (before 2026-10-14: see-through, docs/HOST.md); k = after its k-th
 		int         gbufferLightSet{ 0 };       // RT2.a: index into the light-set table; 0 = Elden Ring's world set (always lit);
 		                                        // -1 = auto (learned from the Tarnished, else 3: black with no ER character in view)
 		float       gbufferAo{ 1.0f };          // RT1.w (characters: vertex colour red)
@@ -91,6 +94,10 @@ namespace phantom::er
 		float       nvgVignette{ 0.35f };      // darkening toward the corners (0 = off)
 		float       nvgScanlines{ 0.0f };      // darkening of every other line pair (0 = off)
 		int         nvgFadeMs{ 250 };          // in/out as the goggles go on and off
+		// Validation runs on native Windows D3D12 (docs/WINDOWS.md "For testers", er/DebugLayer.h; UNVERIFIED live): Microsoft's
+		// debug layer + DRED, messages to the host log. Read once at load (it must be on before Elden Ring's device exists).
+		bool        debugLayer{ false };
+		bool        gpuValidation{ true };     // with debug_layer: GPU-based validation too (much slower)
 
 		bool operator==(const RenderConfig&) const = default;
 	};
@@ -156,8 +163,9 @@ namespace phantom::er
 		int           guestIdroidStartMs{ 1200 };  // ...sent to MGSV as Start held this long (MGSV: Back = pause menu, Start held ~1 s = iDroid, VERIFIED live)
 		bool          guestMenuOwnsPad{ true };  // kGuestInMenu: MGSV gets the whole pad, Elden Ring nothing
 		int           padGlyphDevice{ 0 };       // Elden Ring's glyph device while Snake plays: 0 pad, 1 keyboard; -1 = leave it to ER
-		int           startWaitMs{ 150 };        // Start (and View in Tarnished mode) reaches Elden Ring this long after it went down: room for the chord
+		int           startWaitMs{ 400 };        // Start (and View in Tarnished mode) reaches Elden Ring this long after it went down: room for the chord
 		int           chordMs{ 1000 };           // View + Start held together this long toggles Tarnished mode (er/Chord.h); 0 = off
+		int           chordWindowMs{ 700 };      // Start this soon after View is the chord even when View's iDroid hold already went to MGSV
 		std::vector<int> restPrompts{ 6101 };    // ActionButtonParam ids of "Rest at site of grace": its HUD hiding after it = a rest (kHEvRested 0)
 		std::vector<int> menuKeys{ 0x1B, 0x47 }; // keyboard keys that open Elden Ring menus (Esc, G = map): count like a Start press (VK codes)
 		std::vector<int> ladderPrompts{ 5000, 5010 };  // ActionButtonParam ids "Climb" / "Descend" (ladders, er/Ladder.h): Elden Ring climbs
@@ -172,6 +180,13 @@ namespace phantom::er
 		                            // is handed, less uphill: the shortfall is handed again, up to this much); 0 = off
 		bool  unstick{ true };      // kinematic: a puppet that is boxed in (inside a cart, a rock) or stuck for unstick_seconds goes back to
 		float unstickSeconds{ 0.5f };  // where it last stood free
+		bool  fultonRunes{ true };     // [Fulton] runes: a fultoned enemy gives the runes it would have dropped (NpcParam getSoul)
+		float stallSeconds{ 2.5f };    // kinematic: asked to move and refused in every direction tried (3+ of 8) for this long -> back too
+		bool  ceiling{ true };         // kinematic: never into a space lower than Snake's height in his stance (er/Kinematic.h bodyHeight)
+		float heightStand{ 1.8f };     // ... standing, crouched, prone (MGSV's stance in GuestState); riding: height_ride (0 = no check)
+		float heightCrouch{ 1.2f };
+		float heightProne{ 0.5f };
+		float heightRide{ 0.0f };
 		float fallWatchSeconds{ 4.0f };  // a fall with no landing after this long (s) ... (NoDead: a chasm's kill volume can't kill the puppet)
 		float fallWatchDrop{ 60.0f };    // ... or this deep (m) is Snake's death (YOU DIED); 0 = that check off
 		bool  hitHook{ true };     // catch ER hits in ReceiveDamage and cancel them (re-backlog E2)
@@ -287,6 +302,18 @@ namespace phantom::er
 		float         fallLethalSpeed{ 19.8f };   // ~20 m drop
 		float         guestLifeScale{ 4.0f };     // must equal the guest's [Combat] life_scale
 		bool          topUp{ true };              // bullet route: complete the wanted damage with ChangeHp (combat::TopUp)
+		// How the bullet route delivers the wanted damage (docs/COMBAT.md §2 "Damage that syncs"): topup (ER's hit + ChangeHp,
+		// local only) | speffect (fixed-damage SpEffect rows on the hit bullet: Elden Ring carries all of it; UNVERIFIED live).
+		std::string   damageRoute{ "topup" };
+		int           damageSpEffectBase{ 20010640 };  // the ladder's carrier rows (blank in this regulation): 9 x digits from here
+		int           damageSpEffectDigits{ 4 };       // 4: 1..9999 HP exactly
+		float         speffectBulletShare{ 0.1f };     // Elden Ring's own bullet damage aims at this share of the wanted damage
+		int           speffectFirstCorrection{ 10 };   // its AtkParam correction (%) until its full hit on that enemy kind is known
+		int           speffectGuardMs{ 1500 };         // a target seen guarding scales the ladder this long (combat::NativeDamage)
+		int           speffectWaitMs{ 300 };           // a ladder hit's rows are waited for this long after Elden Ring's own part showed
+		int           speffectTemplate{ 0 };           // 0: the carriers keep their blank rows (+ damage, target bits); else this SpEffectParam row is
+		                                               // copied whole into each first (99441: Elden Ring's "10 HP once"; live 2026-10-14 the blank
+		                                               // carriers never arrived: 0 of 3 hits)
 		bool          hurtShare{ true };          // ER hits cost Snake the share of his life they'd cost the Tarnished
 		float         hurtMult{ 1.0f };           // x this
 		// Explosion visuals (er/Explosion.h): Elden Ring pot bursts at MGSV's blasts. Order: lethal, stun, sleep, smoke.

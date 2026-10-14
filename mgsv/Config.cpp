@@ -164,6 +164,8 @@ namespace phantom::guest
 
 		safePauseMenu = ini.GetBool("Menu", "SafePauseMenu", safePauseMenu);
 		blockMissions = ini.GetBool("Menu", "BlockMissions", blockMissions);
+		buddyDismiss = ini.GetBool("Menu", "BuddyDismiss", buddyDismiss);
+		idroidRetryMs = std::clamp(static_cast<int>(ini.GetInt("Menu", "IDroidRetryMs", idroidRetryMs)), 0, 10000);
 
 		loadoutPrimary = ini.Get("Loadout", "Primary", loadoutPrimary);
 		loadoutPrimary2 = ini.Get("Loadout", "Primary2", loadoutPrimary2);
@@ -175,6 +177,26 @@ namespace phantom::guest
 		capture = ini.GetBool("Capture", "Enabled", capture);
 		hud = ini.GetBool("Capture", "Hud", hud);
 		hudEvery = static_cast<int>(ini.GetInt("Capture", "HudEvery", hudEvery));
+
+		fultonAnchor = ini.GetBool("Fulton", "Enabled", fultonAnchor);
+		fultonMethod = ini.Get("Fulton", "Method", fultonMethod);
+		if (fultonMethod != "proxy" && fultonMethod != "anchor") {
+			fultonMethod = "proxy";
+		}
+		fultonReach = std::clamp(static_cast<float>(ini.GetFloat("Fulton", "Reach", fultonReach)), 0.5f, 10.0f);
+		fultonLeave = std::clamp(static_cast<float>(ini.GetFloat("Fulton", "Leave", fultonLeave)), fultonReach + 0.5f, 20.0f);
+		fultonCandidates = std::clamp(static_cast<float>(ini.GetFloat("Fulton", "CandidateRadius", fultonCandidates)), 10.0f, 300.0f);
+		fultonRise = std::clamp(static_cast<float>(ini.GetFloat("Fulton", "Rise", fultonRise)), 0.5f, 20.0f);
+		proxies = ini.GetBool("Proxies", "Enabled", proxies);
+		proxyMax = std::clamp(static_cast<int>(ini.GetInt("Proxies", "Max", proxyMax)), 0, 32);
+		proxyMaxDistance = static_cast<float>(ini.GetFloat("Proxies", "MaxDistance", proxyMaxDistance));
+		proxySnakeClearance = static_cast<float>(ini.GetFloat("Proxies", "SnakeClearance", proxySnakeClearance));
+		proxyBuddyClearance = static_cast<float>(ini.GetFloat("Proxies", "BuddyClearance", proxyBuddyClearance));
+		proxyParkDepth = static_cast<float>(ini.GetFloat("Proxies", "ParkDepth", proxyParkDepth));
+		proxyTableLagMs = std::clamp(static_cast<int>(ini.GetInt("Proxies", "TableLagMs", proxyTableLagMs)), 0, 500);
+		proxyAutoAim = ini.GetBool("Proxies", "AutoAim", proxyAutoAim);
+		proxyKeepMarkers = ini.GetBool("Proxies", "KeepMarkers", proxyKeepMarkers);
+		proxyCaptureRadius = static_cast<float>(ini.GetFloat("Proxies", "CaptureRadius", proxyCaptureRadius));
 
 		luaOverride = Widen(ini.Get("Lua", "OverrideFile", Narrow(luaOverride)));
 		dumpDefaultLua = ini.GetBool("Lua", "DumpDefault", dumpDefaultLua);

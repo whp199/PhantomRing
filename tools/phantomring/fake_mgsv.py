@@ -29,7 +29,11 @@ Combat by hand (docs/COMBAT.md), through the guest console (`tools/pr lua '!<cmd
     !share <s>                               (v8) MGSV's damage share sent with every !fire (pad[1] = s x 10000; 0 = unknown)
     !move <speed m/s> [yaw_deg]              walk/run at a constant speed along an absolute MGSV yaw (0 = +Z); !move 0 stops
     !ride on|off|auto                        D-Walker ridden / not / the old 4 s of every 12
-    !buddy walker|horse                      the buddy: D-Walker (BuddyType WALKER_GEAR) or D-Horse (HORSE: ridden, its gallop)
+    !idroid on|off                           a Start press opens the iDroid (kGuestInMenu) and one in it closes it, as MGSV
+    !fulton [awake|any|0xHANDLE] [fail]      v12 kGEvFulton for the nearest sleeping hostile Elden Ring character of the ActorTable
+                                             (kActorAsleep; awake: hostile, asleep or not; any: anyone; or that handle; fail: a = 0)
+    !buddy walker|horse|dog|quiet|none       the buddy: D-Walker (BuddyType WALKER_GEAR) or D-Horse (HORSE: ridden, its gallop),
+                                             D-Dog / Quiet (not ridden), none (dismissed: no buddy, its cube still drawn)
     !stick world|camera [m/s]                the left stick moves Snake along MGSV x/z (+3 m/s), or relative to the camera as
                                              MGSV does (up = away from it; full stick m/s on foot, default 5; ridden: the buddy's)
     !box on|off|poster                       (v8) kGuestInBox (+ kGuestBoxPoster): Snake hides in a cardboard box
@@ -88,7 +92,13 @@ HORSE_OBJECT_ID = 0x0403  # arbitrary fake GameObjectId of D-Horse
 BUDDIES = {
 	"walker": (proto.BuddyType.WALKER_GEAR, DWALKER_VEHICLE_ID, 2.5, 8.0, "D-Walker deployed"),
 	"horse": (proto.BuddyType.HORSE, HORSE_OBJECT_ID, 4.0, 13.0, "D-Horse deployed"),
+	# Not rideable: riding (--ride / !ride) is ignored with them. "none" = dismissed: GuestState says no buddy, while the fake
+	# keeps drawing its cube (as MGSV may draw a buddy leaving): the host must leave those draws out.
+	"dog": (proto.BuddyType.DOG, 0x0404, 1.0, 5.0, "D-Dog deployed"),
+	"quiet": (proto.BuddyType.QUIET, 0x0405, 1.0, 5.0, "Quiet deployed"),
+	"none": (proto.BuddyType.NONE, 0xFFFF, 1.0, 5.0, "no buddy"),
 }
+RIDEABLE = ("walker", "horse")
 MESH_SNAKE, MESH_DWALKER = 0x5A4B000000000001, 0x5A4B000000000002
 TEX_SNAKE, TEX_DWALKER = 0x7E57000000000001, 0x7E57000000000002
 # !fire kinds: TppEquip bullet id, AmmoKind, pellets, explosive (GuestEvent.pad[0] = id | 0x80000000 if explosive)
@@ -179,6 +189,7 @@ class FakeGuest:
 		self.regen = 300.0        # life per second (MGSV regenerates)
 		self.regen_acc = 0.0
 		self.in_menu = False
+		self.idroid = False     # --idroid / !idroid: a Start press opens (and in it closes) the iDroid, as MGSV
 		self.last_buttons = 0
 		self.vars = luasubset.Table()
 		self.env = luasubset.base_env() | {
@@ -309,6 +320,12 @@ class FakeGuest:
 				if pressed & 0x0010:
 					st["startPresses"] += 1
 					self.log("pad: Start pressed (MGSV would pause)")
+					if self.idroid:
+						# As MGSV: Start opens its iDroid at once (live: 34 ms after the host's iDroid hold), Start in it closes it.
+						self.in_menu = not self.in_menu
+						st["idroidToggles"] = st.get("idroidToggles", 0) + 1
+						self.log(f"pad: Start -> iDroid {'OPEN' if self.in_menu else 'closed'} (kGuestInMenu)")
+						pressed &= ~0x0010
 				if self.in_menu and pressed:
 					st["menuButtons"] += 1
 					self.log(f"pad: {pressed:#06x} pressed in the menu")
@@ -353,7 +370,7 @@ class FakeGuest:
 			st["actorsSeen"] = actors.count
 
 		# Motion: a slow circle plus the left stick (MGSV would turn the stick into locomotion itself).
-		riding = (6.0 <= (t % 12.0) < 10.0) if self.ride == "auto" else self.ride == "on"
+		riding = ((6.0 <= (t % 12.0) < 10.0) if self.ride == "auto" else self.ride == "on") and self.buddy in RIDEABLE
 		if riding:
 			st["rideFrames"] += 1
 		btype, bobject, ride_factor, ride_stick, _ = BUDDIES[self.buddy]
@@ -446,7 +463,7 @@ class FakeGuest:
 		gs.vehicleId = bobject if riding else 0xFFFF
 		gs.phase = 0
 		# v2 buddy block: D-Walker beside Snake, or under him while ridden.
-		bflags = proto.GuestBuddyFlags.Present | proto.GuestBuddyFlags.PosValid
+		bflags = proto.GuestBuddyFlags.Present | proto.GuestBuddyFlags.PosValid if self.buddy != "none" else proto.GuestBuddyFlags(0)
 		if riding:
 			bflags |= proto.GuestBuddyFlags.Ridden
 		off = (0.0, 0.0) if riding else (1.5 * math.cos(self.yaw) - 0.5 * math.sin(self.yaw), -1.5 * math.sin(self.yaw) - 0.5 * math.cos(self.yaw))
@@ -521,7 +538,7 @@ class FakeGuest:
 
 	def combat_command(self, w: list[str]) -> tuple[int, str]:
 		usage = ("fake guest commands: !status !walk on|off !autofire on|off !fire <kind> [n] [yaw] [pitch] [share] !share <s> !move <speed> [yaw] "
-			"!ride on|off|auto !buddy walker|horse !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !blast [r] [kind] !die "
+			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
 			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off")
 		if not w:
@@ -577,6 +594,36 @@ class FakeGuest:
 				self.stick_speed = max(0.1, float(w[2]))
 			return 0, f"stick {self.stick_mode}" + (f": full stick {self.stick_speed:.1f} m/s on foot, relative to the camera" if self.stick_mode == "camera" else
 				": MGSV x/z, 3 m/s")
+		if w[0] == "idroid" and len(w) > 1 and w[1] in ("on", "off"):
+			self.idroid = w[1] == "on"
+			return 0, f"idroid {w[1]}: a Start press {'opens / closes the iDroid (kGuestInMenu)' if self.idroid else 'is only counted'}"
+		if w[0] == "fulton":
+			# v12 kGEvFulton for an Elden Ring character from the ActorTable (as the real guest sends when Snake fultons the
+			# soldier that stood for it): the nearest sleeping hostile one (kActorAsleep; "awake": asleep or not, "any": anyone),
+			# a handle given in hex, or "fail" (a = 0: the balloon never went up).
+			actors = self.link.actors()
+			recs = [actors.actors[i] for i in range(min(actors.count, len(actors.actors)))] if actors else []
+			fail = "fail" in w[1:]
+			want = next((int(x, 16) for x in w[1:] if x.startswith("0x")), None)
+			pick = None
+			for r in recs:
+				if want is not None:
+					if r.handle == want:
+						pick = r
+					continue
+				if (r.flags & proto.ActorFlags.Dead) or (not (r.flags & proto.ActorFlags.Hostile) and "any" not in w[1:]):
+					continue
+				if not (r.flags & proto.ActorFlags.Asleep) and "any" not in w[1:] and "awake" not in w[1:]:
+					continue  # as the real guest: MGSV's Fulton takes a sleeping (or knocked-out) soldier
+
+				d = math.hypot(r.pos[0] - self.root[0], r.pos[2] - self.root[2])
+				if pick is None or d < math.hypot(pick.pos[0] - self.root[0], pick.pos[2] - self.root[2]):
+					pick = r
+			if pick is None:
+				return 1, f"fulton: no {'such' if want is not None else 'sleeping hostile'} actor in the ActorTable ({len(recs)} records)"
+			self.push_event(GuestEventType.Fulton, a=0 if fail else 1, v0=tuple(pick.pos), pad0=pick.handle & 0xFFFFFFFF, pad1=pick.handle >> 32)
+			name = bytes(pick.name).split(b"\0", 1)[0].decode("utf-8", "replace")
+			return 0, f"kGEvFulton a={0 if fail else 1} handle {pick.handle:#x} ({name}) at ({pick.pos[0]:.1f}, {pick.pos[1]:.1f}, {pick.pos[2]:.1f})"
 		if w[0] == "box" and len(w) > 1 and w[1] in ("on", "off", "poster"):
 			self.box = "" if w[1] == "off" else w[1]
 			return 0, f"box {w[1]} (kGuestInBox{' + kGuestBoxPoster' if self.box == 'poster' else ''})"
@@ -831,7 +878,8 @@ def main(argv=None) -> int:
 	ap.add_argument("--cam", type=float, nargs=3, metavar=("DIST", "HEIGHT", "LOOK_Y"), default=(6.0, 1.8, 1.0),
 		help="fake camera: distance from Snake, height, height of the point it looks at (m)")
 	ap.add_argument("--force", action="store_true", help="take the guest side over even if another live process holds it")
-	ap.add_argument("--buddy", choices=tuple(BUDDIES), default="walker", help="the buddy deployed: walker (D-Walker, default) or horse (D-Horse)")
+	ap.add_argument("--idroid", action="store_true", help="a Start press opens the iDroid (kGuestInMenu), one in it closes it, as MGSV")
+	ap.add_argument("--buddy", choices=tuple(BUDDIES), default="walker", help="the buddy deployed: walker (D-Walker, default), horse (D-Horse), dog, quiet, or none")
 	ap.add_argument("--stick", choices=("world", "camera"), default="world", help="the left stick: MGSV x/z (default) or camera-relative like MGSV")
 	ap.add_argument("--no-walk", action="store_true", help="start with the circle walk, the periodic fire and the ride cycle off (!walk off, "
 		"!autofire off, !ride off): Snake moves only with the stick or !move, and keeps his facing")
@@ -853,6 +901,7 @@ def main(argv=None) -> int:
 	guest.orbit_speed, guest.orbit_phase, guest.freeze = args.orbit, args.orbit_phase, args.freeze
 	guest.cam_dist, guest.cam_height, guest.cam_look_y = args.cam
 	guest.buddy, guest.stick_mode = args.buddy, args.stick
+	guest.idroid = args.idroid
 	if args.no_walk:
 		guest.walk, guest.autofire, guest.ride = False, False, "off"
 	h = link.header

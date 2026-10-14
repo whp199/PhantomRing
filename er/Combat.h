@@ -51,6 +51,12 @@ namespace phantom::er
 			Quat            orientation;
 		};
 		std::vector<Foe> HostilesNear(const Frame& a_frame, const Vec3& a_centre, float a_radius);
+		// Is a character of that team hostile to the Tarnished (Elden Ring's team relation table, the rule every hit uses)?
+		bool HostileToPlayer(const Frame& a_frame, std::uint8_t a_team);
+		// Is the character asleep (Elden Ring's sleep status: a sleep build-up row, stateInfo 436, still on it next to the
+		// "helpless" row, stateInfo 434, that comes with the proc; live 2026-10-14, a Stormveil soldier slept by our ladder:
+		// 25019 (436) and 54 (434) from 0.9 s to 4.4 s, both gone when he woke at ~5 s; 434 alone is a stance break)?
+		bool Asleep(std::uint8_t* a_chr);
 
 		void Tick(const Frame& a_frame);  // FrameBegin, after the events: verifies pending bullet hits
 		void OnPuppetStop();               // puts every patched param byte back

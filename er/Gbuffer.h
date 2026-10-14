@@ -38,7 +38,11 @@ namespace phantom::er::Gbuffer
 	// only a pending peek). False: nothing recorded.
 	// a_lists: Elden Ring's lists up to and including its last G-buffer list (where the per-view
 	// constants and shadow views are found: er/RenderBind).
-	bool RecordGbuffer(render::Recording& a_rec, const RenderSnapshot* a_snap, UINT a_count, ID3D12CommandList* const* a_lists);
+	// a_peekHere: a pending `render gbuf peek` is copied here too (else RecordPeek at Elden Ring's last G-buffer list: with
+	// Snake drawn before Elden Ring's own G-buffer draws, the peek must come after them to show its characters' texels).
+	bool RecordGbuffer(render::Recording& a_rec, const RenderSnapshot* a_snap, UINT a_count, ID3D12CommandList* const* a_lists, bool a_peekHere = true);
+	bool PeekPending();
+	bool RecordPeek(render::Recording& a_rec);
 	// After Elden Ring's object-velocity pass: Snake's motion vectors.
 	bool RecordVelocity(render::Recording& a_rec, const RenderSnapshot* a_snap);
 	// A submission that recorded a peek completed up to a_fence: read it back (Present thread).

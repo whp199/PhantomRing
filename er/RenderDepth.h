@@ -48,6 +48,8 @@ namespace phantom::er::RenderDepth
 		kListComposite = 1,  // renders into a back buffer
 		kListGbuffer = 2,    // binds the 5 G-buffer MRTs with the scene depth
 		kListVelocity = 4,   // binds the full-size R16G16_FLOAT velocity target with the scene depth
+		kListDepthClear = 8,  // clears the scene depth in full (the start of Elden Ring's G-buffer: nothing drawn into it yet)
+		kListGbufAfterClear = 16,  // binds the G-buffer after that clear in the same list (its draws may follow in this list)
 	};
 
 	// After the renderer knows ER's device: hooks (a_list = any command list of that device).
@@ -59,6 +61,10 @@ namespace phantom::er::RenderDepth
 	int CompositeIndex(UINT a_count, ID3D12CommandList* const* a_lists);
 	// The last list of a batch with that kind, or -1.
 	int LastIndex(ListKind a_kind, UINT a_count, ID3D12CommandList* const* a_lists);
+	// Whether that list has that kind (since its last Reset).
+	bool HasKind(ID3D12CommandList* a_list, ListKind a_kind);
+	// The a_nth (1-based) list of a batch with that kind (the last one if there are fewer), or -1.
+	int NthIndex(ListKind a_kind, int a_nth, UINT a_count, ID3D12CommandList* const* a_lists);
 	// Once per Present (frame boundary): picks the scene depth, colour, G-buffer and velocity targets.
 	void EndFrame(UINT a_bbWidth, UINT a_bbHeight);
 	// The scene depth / post-tonemap scene colour, with known states, or false.

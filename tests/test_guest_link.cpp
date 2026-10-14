@@ -77,6 +77,10 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.meleeShapeGeometry == d.meleeShapeGeometry && shipped.tranqWeapons.empty() && shipped.stunWeapons.empty());
 	CHECK(shipped.blockSaves == d.blockSaves && shipped.saveSinkDir == d.saveSinkDir && shipped.music == d.music && shipped.ambience == d.ambience && shipped.radio == d.radio);
 	CHECK(shipped.luaOverride == d.luaOverride && shipped.dumpDefaultLua == d.dumpDefaultLua);
+	CHECK(shipped.proxies == d.proxies && !d.proxies && shipped.proxyMax == d.proxyMax && shipped.proxyMaxDistance == d.proxyMaxDistance &&
+	      shipped.proxySnakeClearance == d.proxySnakeClearance && shipped.proxyBuddyClearance == d.proxyBuddyClearance &&
+	      shipped.proxyParkDepth == d.proxyParkDepth && shipped.proxyTableLagMs == d.proxyTableLagMs && shipped.proxyAutoAim == d.proxyAutoAim &&
+	      shipped.proxyKeepMarkers == d.proxyKeepMarkers && shipped.proxyCaptureRadius == d.proxyCaptureRadius);
 	CHECK(shipped.capture == d.capture && shipped.hud == d.hud && shipped.hudEvery == d.hudEvery && shipped.warpLift == d.warpLift);
 	CHECK(shipped.buddyFollowLeadSec == d.buddyFollowLeadSec && shipped.buddyFollowSteer == d.buddyFollowSteer && shipped.buddyFollowRespectCommands == d.buddyFollowRespectCommands && shipped.blasts == d.blasts && shipped.throws == d.throws && shipped.placed == d.placed && shipped.mgsvBlasts == d.mgsvBlasts && !d.mgsvBlasts &&
 	      shipped.buddyFollowSideRunning == d.buddyFollowSideRunning && shipped.buddyFollowCatchUp == d.buddyFollowCatchUp &&

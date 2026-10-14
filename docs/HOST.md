@@ -203,7 +203,27 @@ Tarnished went through is Snake's too: the HP bar's net change between the two t
 - The chord: Start and View both down before either reached anyone. Neither reaches Elden Ring or MGSV (a View hold under
   way stops short of the iDroid); held `chord_ms` together it fires once; let go early, nothing. Both stay out of every pad
   until released, whatever the mode is by then, so Elden Ring's menu never opens or closes from it. A press still undecided
-  when a menu comes up is dropped the same way.
+  when a menu comes up is dropped the same way. Start first: `[Input] start_wait_ms` (400; was 150) leaves room for View.
+- **View a bit before Start** (player report 2026-10-14: "the chord failed when View went down a bit before Start -- the
+  View hold opened MGSV's iDroid first"). Live, MGSV opens its iDroid 34 ms after the hold's Start, and the player's Start
+  then went to MGSV (its menu has the pad). Now a Start within `[Input] chord_window_ms` (700) of View is the chord even
+  after View's hold went to MGSV: the hold's Start is cut, the real Start stays out of MGSV's pad (also in its menu), and
+  MGSV's menu, if it opened, gets a Start tap `kCloseGapMs` (100 ms) after the cut that closes it (once more 700 ms later if
+  it is still open); the chord fires `chord_ms` after Start as usual. View alone for 400 ms is still the iDroid, and a Start
+  pressed in it later than `chord_window_ms` after View is MGSV's (it closes the iDroid). `tests/test_host_chord.inc` (the
+  iDroid opened at once, a second close tap, Start 1.5 s after View). The log: `input: Start within 700 ms of View ->
+  View+Start chord; the iDroid hold sent to MGSV is cut short` and `MGSV opened its menu from the cut iDroid hold anyway -> a
+  Start tap closes it`. VERIFIED live 2026-10-14 (fake MGSV `--idroid`: a Start press opens the iDroid at once, one in it
+  closes it, as MGSV): View, Start 550 ms later, both held -> `View held 400 ms -> MGSV` -> `MGSV menu open` -> `cut short`
+  -> 117 ms later `a Start tap closes it`, `MGSV menu closed` -> `Tarnished mode ON` 1.0 s after Start; the fake saw two
+  Starts (the hold's, the close tap), never the real one. Start first and View 300 ms later: Tarnished mode, no Elden Ring
+  menu. View alone 700 ms: the iDroid; a Start tap 2 s later closed it (MGSV's Start).
+  **VERIFIED live with the real MGSV** (2026-10-14 combined run, three times): View, Start 550 ms later -> `View held 400 ms ->
+  MGSV`, MGSV's iDroid open 33 ms later, `cut short`, the first close tap (100 ms) is too early for MGSV's opening iDroid, the
+  second (700 ms later) closes it (`MGSV menu closed` 0.98 s after it opened), `Tarnished mode ON` 1.0 s after Start; Start
+  first, View 300 ms later: Snake back, no menu; View alone 700 ms: the iDroid, Start closed it. The guest stops its iDroid
+  retries when the hold is cut (`IDroidRequest` `kCut`: the host's Start up within 600 ms of the hold -- the ER agent's open
+  edge case of an aiming Snake whose retry opened the iDroid as Tarnished mode began; unit-tested).
 - When the unmasked pad (Tarnished mode) carries Start/View other than the real ones, Elden Ring gets packet numbers of our
   own range (0x20000000+), moved whenever the real packet or what it may see changes (it only re-reads a pad whose packet
   number changed).
@@ -393,6 +413,48 @@ and restored when it stops (only on the same, live object).
   stood free (kept every 0.25 s, the last 2 s, at least 0.5 m away; `kinematic::Unstick`, tested). Its body bumping into
   something (a blocked step) also sends the object-only breaker there (below), at most every 400 ms. **The default**
   (`motion = kinematic`): it plays well (the player's 2026-10-12 evening session).
+  **Low ceilings** (`[Puppet] ceiling`, `height_stand` 1.8 / `height_crouch` 1.2 / `height_prone` 0.5, `height_ride` 0 = no
+  check while riding; `kinematic::KinematicParams::bodyHeight`, 2026-10-14): player report, Snake walked into the low space
+  under the Roundtable Hold's basement stairs and was stuck there (`walls 59 (1353 frames), unstuck 0`). The wall rays are
+  horizontal, so a sloped underside 1.7 m up never met the head ray (1.6 m): he walked in with his head in the stairs. Now
+  his height comes from MGSV's stance (GuestState `kGuestCrouching` / `kGuestProne` / `stance`), and:
+  - **free** (nothing lower than him above his axis), a move that would end under a ceiling lower than his height is refused
+    (`Headroom`: a ray up from 0.25 m above the feet, at his axis and 0.2 m ahead) -- however long he pushes;
+  - **already under one** (he stood up beneath it, Elden Ring or an unstick put him there), a move that is no lower than where
+    he is goes (walking out works), and if every try is refused for `kCeilingEscapeS` (0.75 s) the check stands aside until he
+    stands free (`ceilingEscape`; logged `the ceiling check stands aside`): the way out from under a staircase can dip;
+  - `SolidHeadroom`: Elden Ring's stairs are tread plates with 4-10 cm seams between them (measured with `call ray`); a ray
+    through a seam reads "no ceiling", so a ray that finds nothing is checked again 7 cm around it;
+  - the wall rays above his height are left out (crouched, he goes under a 1.3 m beam; prone, the knee ray only).
+  Refusals count as walls (and `ceilings N` in `pr er status`; logged the first 5 times). Tested in the synthetic world
+  (`tests/test_host_motion.inc`: a staircase entered from the side and from beneath, a seamed staircase, a table, a beam,
+  already under a table, a low passage with a dip on the way out, up the stairs on top).
+  **VERIFIED live 2026-10-14 with the real MGSV** under the Roundtable Hold's basement stairs (the player's: a wooden staircase
+  down into the storage basement, 10 m below the hall; the underside comes down from 4.2 m to the floor over 4 m): standing,
+  in four lanes under the stairs, Snake stopped where 1.85-2.01 m of room was left; crouched where 1.32-1.57 m was; standing up
+  there and walking out worked in every lane; two corner pushes ended in `puppet: stuck at ... back to ... where he stood free`.
+  Before the last two fixes the same test let a crouched Snake creep seam by seam under a 0.57 m ceiling, where a stringer
+  0.59 m up between him and the higher treads held him for good (every way out read "lower than here"), and a free one take
+  moves that ended under a 1.6 m underside (the old rule compared with the room 0.2 m ahead). Side effect: he stops ~0.2 m
+  short of low overhangs and table edges (his ahead probe).
+  **Stalls** (`[Puppet] stall_seconds` 2.5, `kinematic::Unstick::Stall`): the session's stall was never "boxed in" (7 of 8
+  directions), so the old unstick never fired. Now Snake asking to move and being refused (moved < 25% of what he asked) in
+  every direction he tries -- three or more of eight sectors -- for 2.5 s of trying (pauses up to 4 s don't end it, 0.25 s of
+  real moving does) goes back to the newest place he stood free (never one under a ceiling lower than him), `puppet: stuck at
+  ... back to ... (stall #N)`, "Snake was stuck -- back where he stood free"; with no such place the corner says "Snake is
+  stuck -- hold View+Start: the Tarnished can walk out, then View+Start again". Pushing into one wall is no stall. Tested
+  offline. Live 2026-10-14 only as a regression: 2 min of the real run recording looping from the Stormveil grace into the
+  inside corner of a wall, a pillar and a fire basket: 0 ceiling refusals, 0 stalls, 127 wall contacts; the old boxed-in
+  unstick (7 of 8 directions there) sent him 0.7 m back 55 times while the recording kept running into the corner. In the Roundtable Hold (fast travel from Stormveil's
+  grace, fake MGSV standing, walked by the stick toward a spot where a ray scan of the hall found 1.62 -> 1.38 -> 0.99 ->
+  0.63 m of room over the floor along one line): `puppet: a ceiling ... -- he stays out from under it`, 128 refused frames,
+  Snake held 0.2 m short of it at a pedestal whose top overhangs the hall floor. The ahead probe also stops him at such
+  overhangs and at table edges (his body would be inside them; the knee ray passes under a table top). The basement stairs
+  of the player's report: found 2026-10-14 by a floor scan of the whole Hold (a ray down every 0.5 m: a staircase from the
+  -6.6 m floor east of the hall down to a storage basement at -16.6 m, the space under it open), live result under "Low
+  ceilings" above. Reaching them for a test: `puppet off`, `call setpos 51 -16.4 -1` (the Hold's arrival origin), `puppet auto`.
+  The stall unstick fired live there 2 + 9 times while the test script pushed into the corners under the stairs (stalls #1-#9),
+  each time back to a free place within 1.5 m.
 - **Fall watchdog** (`[Puppet] fall_watch_seconds` 4, `fall_watch_drop` 60 m; `kinematic::FallWatch`, both motions): with
   NoDead set, a chasm whose death is Elden Ring's kill volume rather than a landing can't kill the puppet, and kinematic
   gravity would let Snake fall for ever (`fall_lethal_speed` only fires on a landing). A fall with no landing that lasts
@@ -592,6 +654,63 @@ nothing, 4 of 4 after releasing it gave the order) while LB is still held. Now:
   stick go, then click it in while LB is still held" (live: both hints seen, `buddy` counts them).
 The pad is the one the bridge sees before any mask; nothing changes what MGSV or Elden Ring get. Pure rules: `Hint`
 (`tests/test_host.cpp`).
+
+**Changing and dismissing the buddy** (2026-10-14; MGSV's own buddy menu: iDroid > Missions > Buddy Support, or `!buddy`).
+`Buddy::Absent()`: MGSV's buddy type is NONE, or the buddy this guest had out is gone (`kBuddyPresent` and `kBuddyLoading`
+both cleared). Then its draws are left out of the frame (whatever MGSV still draws of it leaving) and it is not placed;
+`pr er buddy` says `NONE OUT (draws left out)`. A change that held 10 frames shows in the corner (`Buddy::ChangeText`, tested):
+"D-Walker dismissed -- no buddy now", "Buddy: D-Horse is out", "Buddy: D-Dog instead of D-Horse". Riding values follow the
+type as before (D-Horse its own, anything else ridden D-Walker's); D-Dog and Quiet are placed and ground-snapped like
+D-Walker (they aren't ridden). VERIFIED live 2026-10-14 with fake MGSV (`!buddy none|horse|dog|walker`, the fake keeps
+drawing its cube when "none" as MGSV may draw a buddy leaving): the cube gone and the corner message at once, the horse
+ridden with its values, the dog drawn and placed (screenshots). With the real MGSV: UNVERIFIED (the guest's side of
+dismissing is the MGSV agent's).
+
+### Fulton: MGSV's recovery of an Elden Ring enemy (`er/Fulton.cpp`, protocol v12 `kGEvFulton`)
+
+The guest's ActorProxy stands an MGSV soldier in for an Elden Ring character (docs/GUEST.md 20); when Snake fultons it, MGSV's
+own balloon goes up and the guest sends `kGEvFulton` with that character's handle (`pad[0] | pad[1] << 32`), where the proxy
+stood (`v0`, MGSV world) and `a` (1 the balloon went up, 0 it failed: nothing happens). The host:
+- finds the character by its handle among game::Characters, else (handle unknown) the nearest living one within 3 m of where
+  the proxy stood -- only an enemy of the Tarnished by Elden Ring's team relation table (the rule every hit uses: live, a
+  "nearest" without it took an invisible team-0 character standing at the player's grace, and the grace's prompt went);
+- holds it (ChrIns+0x538 bits 4/5 no attack / no move, +0x1C4 bit 5 no gravity) and lifts it under a balloon for 2.2 s
+  (`Fulton::LiftAt`, tested): the balloon inflates over 0.7 s while he is lifted 0.25 m, then 1 m in 0.6 s, then yanked up
+  ~18 m; drawn with the world markers (an olive-grey ball and a dotted line to his back), moved with Elden Ring's origin
+  shifts; "Fulton: the enemy is on its way to Mother Base" in the corner;
+- then takes it out of the world with no death, no drop and no kill: ChrIns+0x538 bit 12, fromsoftware-rs `character_disabled`
+  ("no updates, no rendering, no physics"; [V-src], VERIFIED live: the soldier vanished and stayed gone, no crash).
+  `game::Characters` leaves disabled characters out, so nothing shoots, targets, marks or proxies it afterwards;
+- keeps its handle until Elden Ring brings its enemies back (a rest at a grace, a respawn, a load): one that turns up again
+  meanwhile (its block reloaded) is disabled again (`turned up again ... out of the world again`; seen live once). After a
+  rest it is back like any enemy;
+- gives the Tarnished the runes it would have dropped (`[Fulton] runes`, on): its NpcParam `get_soul` (+0x2C; the table bound by
+  name, struct and row size like the others) onto PlayerGameData (PlayerIns+0x580, RTTI `CS::PlayerGameData`) `rune_count`
+  +0x6C and `rune_memory` +0x70 (fromsoftware-rs; read live: level 20 at +0x68, runes 0, memory 25936 on the player's save),
+  after sanity checks (else off for the session, logged). No Golden Scarab or New Game+ scaling. VERIFIED live: `fulton: +114
+  runes for npc 30003214 (its NpcParam getSoul): 0 -> 114`; Elden Ring's menu showed 114 at once, its in-game HUD counter only
+  at its next update (a direct write skips its pickup animation).
+Console: `fulton [status | nearest [fail] | 0x<handle> [fail] | forget]` sends the event as the guest would; fake MGSV
+`!fulton [any|0xHANDLE] [fail]` picks from the ActorTable. VERIFIED live 2026-10-14 (fake MGSV, Stormveil, Stormveil soldiers
+npc 30003214 / 30001014): `fulton: the balloon goes up on npc 30003214 (handle 0xa00000010000033, hp 221/221)` -> 2.19 s
+later `is out of Elden Ring's world (after its lift; ChrIns+0x538 |= 0x1000 character_disabled: no death, no drop)`; screenshots:
+the balloon over the soldier's head on its line, then the soldier hanging under it well above the trees, then gone; he never
+came back in `chr`. A soldier mid-swing finishes the swing (the hold stops new actions only). The ActorTable's hostile flag
+now uses the same team relation (it marked any EnemyIns of another team, the invisible team-0 one too).
+**Asleep** (`kActorAsleep`, which the guest's Fulton anchor needs: docs/GUEST.md 20): `Combat::Asleep` -- an active SpEffect of
+stateInfo 436 (a sleep build-up row) next to one of stateInfo 434 (row 54, "helpless"; 434 alone is a stance break). Found live
+2026-10-14 by watching a Stormveil soldier's effects while our ladder slept him: 25019 (436) and 54 (434) on from 0.9 s until he
+woke, both gone with it; CSChrResistModule's per-status "procced" word stays 1 afterwards (no use). VERIFIED live: `combat targets`
+shows `ASLEEP` and the ActorTable `Hostile|Asleep` from 1 s after the dart until he woke 51 s later (then `Hostile` only); fake MGSV
+`!fulton` (now the nearest sleeping hostile record; `awake` / `any` for others) sent kGEvFulton for him and the host lifted him out.
+**VERIFIED live end to end with the real MGSV** (combined run 2026-10-14, Gatefront, a Limgrave shield soldier npc 43114010):
+two darts (`sleep +136` twice, resist 226) -> the guest's `proxy: soldier 0x450 asleep for Elden Ring character
+0x3c2a250017300018 (MGSV offers its Fulton beside him)` -> Snake walked up: MGSV's Fulton prompt ("100%", the balloon, x48) and
+its sleeping-soldier "ZZZ" marker over the Elden Ring soldier -> Y held 2.5 s -> 5.3 s after the press `proxy: fulton ...
+succeeded (MGSV's own Fulton on its proxy) -- kGEvFulton a=1` -> `fulton: the balloon goes up on npc 43114010` -> 2.2 s later
+`out of Elden Ring's world` -> `+64 runes` (the menu's rune counter 0 -> 64, "Fulton: the enemy is on its way to Mother Base" in
+the corner, MGSV's own counter x48 -> x47). The first two tries failed for the timing alone: the soldier woke (Elden Ring's
+sleep, ~50 s) while the script walked up, and once a second Gatefront soldier killed Snake beside him.
 
 ### Camera and Elden Ring's HUD compass (`er/CameraDriver.cpp`, `[Camera] sync_chr_cam`, `sync_compass_cam`)
 
@@ -866,7 +985,7 @@ patched: every hook is a MinHook detour in vkd3d-proton (`d3d12core.dll`) or DXV
 
 | Stage | Where | Lit by |
 |---|---|---|
-| **C** `gbuffer` (default) | Elden Ring's own G-buffer, right after its last G-buffer list; its velocity target after its velocity pass; its shadow atlas | **Elden Ring**: sun + shadow mask, per-area light sets, sky/GI ambient, local lights (graces, torches), SSAO, fog, tone mapping, bloom, exposure, TAA. Snake casts the sun's shadow. |
+| **C** `gbuffer` (default) | Elden Ring's own G-buffer, right after Elden Ring clears its scene depth, before its own G-buffer draws (`gbuffer_point`, below); its velocity target after its velocity pass; its shadow atlas | **Elden Ring**: sun + shadow mask, per-area light sets, sky/GI ambient, local lights (graces, torches), SSAO, fog, tone mapping, bloom, exposure, TAA. Snake casts the sun's shadow. |
 | B `post` | Elden Ring's tone-mapped RGBA8 scene colour, right before the composite (the HUD stays on top) | ours: one clock-driven directional light + hemisphere ambient (`light_*`, `ambient_*`, `day_night`) |
 | A `present` | the back buffer at Present (over everything) | ours, as B |
 
@@ -877,6 +996,7 @@ bind with exactly these formats, unknown states, a different depth format...): `
 | File | What it does |
 |---|---|
 | `D3D12Hooks` | Creates a throwaway DXGI factory, D3D12 device, direct queue and swap chain on a hidden window, reads their vtables, then detours `Present`/`Present1`, `ResizeBuffers(1)`, `SetColorSpace1`, `CreateSwapChain(ForHwnd)` and `ExecuteCommandLists`. It finds the presenting queue from swap-chain creation, `ResizeBuffers1`, `GetDevice`, or a direct queue whose pointer sits in the swap-chain object. Hands its dummy device to `RenderPso`. |
+| `DebugLayer` | `[Render] debug_layer` (off by default, UNVERIFIED live; for validation runs on native Windows D3D12, docs/WINDOWS.md "For testers"): enables the D3D12 debug layer, GPU-based validation and DRED first thing in the init thread (refused once Elden Ring has a window: its device may exist, and enabling the layer then removes it), attaches to Elden Ring's device when the renderer finds it, logs validation messages (`ID3D12InfoQueue1` callback or polled at Present; 3 per id, 400 in all; tagged when raised inside our Present work) and, on a removed device, the reason plus DRED's unfinished lists and page fault. |
 | `RenderPso` | Pipeline watch from DLL init: `CreateGraphicsPipelineState`/`CreateComputePipelineState`/`CreatePipelineState` and `ID3D12PipelineLibrary::Load*` (Elden Ring loads ~9300 pipelines from a library). Per PSO: vkd3d-proton's shader hashes (FNV-1 over the bytecode = the `VKD3D_SHADER_DUMP_PATH` file names), target formats, depth/stencil/bias state. `render psos`. |
 | `RenderAssets` | A worker thread consumes the render ring (`kRenMesh`/`kRenTexture`/`kRenForget`/`kRenClearAll`) and validates each message. It creates DEFAULT resources and UPLOAD staging copies; our command list records the copies within a per-frame budget. Keys are the guest's content hashes; frames keep what they used until their fence passes. Each mesh's winding is measured (`RenderMesh`). |
 | `RenderMesh` | Triangle winding against the vertex normals. **MGSV's meshes are wound inward** (cross(b-a, c-a) against the normal on 64 of 67 recorded meshes, the rest unknown), the fake guest's outward: the front-face setting is flipped per mesh. |
@@ -895,12 +1015,49 @@ bind with exactly these formats, unknown states, a different depth format...): `
 
 `ExecuteCommandLists` (Elden Ring's direct queue) is split around up to three submissions of ours:
 
-1. **After the last G-buffer list** (stage C; 37-list batch #5: shadows in lists 3-10, G-buffer clears in 11,
-   G-buffer draws 12-29, lighting from 30 on): the view constant copies, Snake into every shadow view, then
-   Snake into the G-buffer (5 MRTs + scene depth with stencil ref `gbuffer_stencil`), states restored after.
+1. **After the list that clears Elden Ring's scene depth** (stage C, `[Render] gbuffer_point = clear`, since 2026-10-14;
+   e.g. a 25-list batch #5: shadows in lists 2-6, G-buffer clears in 9, the depth clear and one depth-only draw in 10,
+   G-buffer draws 11-17, a depth copy in 18, lighting from 19 on): the view constant copies (from the batch's G-buffer
+   lists' bindings, recorded but not yet run), Snake into every shadow view, then Snake into the G-buffer (5 MRTs +
+   scene depth with stencil ref `gbuffer_stencil`), states restored after. Elden Ring's own G-buffer draws then come
+   after him and depth-test against him like against each other. A `render gbuf peek` is copied after the last
+   G-buffer list (a fourth submission, only while one is pending), so it shows Elden Ring's characters too.
+   **Why not after the last G-buffer list any more** (the point until 2026-10-14; `gbuffer_point = last`): Snake and
+   D-Walker showed the scene behind them -- the player's session: wall arches through Snake's back at a grace, haze and
+   rubble through his legs and pack. Live (replay of the real MGSV, the player's Stormveil spot, a brazier behind
+   D-Walker at night): the brazier's fire, bowl and pillar on D-Walker's body, his body otherwise near black; `render
+   set gbuffer_point k` (after the k-th G-buffer list) bisected it -- after list 10 or 13 (k = 2, 5) solid and properly
+   lit, after 14-17 (k = 6-8, `last`) see-through; after 9 (k = 1, before the depth clear) gone. Not TAA (`velocity off`
+   changed nothing), not the stencil class (0x10/0x90 the same; 0 unlit), not shadows; stage B (`stage post`) solid.
+   Every one of Elden Ring's G-buffer pipelines writes RT0-2 (RT3/RT4 write mask 0), depth and stencil only -- all of
+   which ours overwrite -- so whatever its draws leave per pixel for the lighting is elsewhere (UNVERIFIED what, e.g. a
+   UAV); with Snake drawn first, the hidden scene behind him is never drawn where he is. A batch with no full clear of
+   the scene depth falls back to the last G-buffer list (`render`: `G-buffer point: clear (N frames after Elden Ring's
+   depth clear, M after its last G-buffer list)`, a warning the first time).
 2. **After the velocity list** (stage C; forward batch #8, list 11: a full-screen camera-velocity draw, then
    ER's moving objects): Snake's motion vectors, depth-tested (read-only) against his own depth.
 3. **Before the composite list** (stage B, or stage C's fallback): Snake into the RGBA8 scene colour.
+
+`render probe` also lists texture copies and resolves per pass (`(copy src->dst)`, `(region ...)`), and `render probe
+shaders` each pipeline's depth function / write (`z7w`: GREATER_EQUAL, writes), stencil write mask, pass op and function,
+and its render-target write masks (`mfff00`).
+
+**Verified live 2026-10-14** (ER 1.17.1 4K, `pr replay` of the MGSV agent's new real-MGSV recordings; before = `render set
+gbuffer_point last`, after = the default `clear`, the same spot and moment): the player's Stormveil spot at 02:48 and 04:41
+(night: the brazier through D-Walker gone, D-Walker's camo and Snake's launcher lit by the night ambient) and at 12:00 (the
+bowl's fire through D-Walker gone); the grace next to it at 22:00 and 12:00 (the wall's stones and the pillar's torchlight
+on Snake's back and pack gone; at noon he is lit, not near black); the crouched orbit recording all round his back and
+pack: solid from every side. Lighting parity (the Tarnished shown next to him: `render set debug_offset 1.2,0,0`, `render
+set show_tarnished on`, `flag render on`, ChrIns+0x24C poked to 1): at noon and at 23:00 both lit by the same light, the
+Tarnished brighter only where his steel is (mean screen luminance at night: Tarnished 60, Snake 31 of 255 with light set
+0, 54 / 33 with light set 1, the Tarnished's own here: `render gbuf peek` on him: stencil 0x50, light set 1); light set 3
+(the earlier "character" set) leaves Snake black here even with the Tarnished on screen. `gbuffer_light_set = 0` stays.
+**Re-verified with the real MGSV** (combined run 2026-10-14, both games on the default mapping; `render set gbuffer_point last`
+/ `clear` switched live a second apart): the player's spot at 03:00 (the brazier and its pillar through D-Walker with `last`,
+D-Walker and Snake solid and lit with `clear`), the same at noon, the Stormveil Main Gate grace at noon and at 23:00 (the gate's
+lattice through Snake's back and legs with `last`, none with `clear`), and the player's haze view (fog, rubble and the brazier
+no longer through his pack and legs). The Tarnished in Tarnished mode at the same spots and times is lit by the same light.
+0 stage C fallbacks, view constants matched on every check.
 
 Otherwise (stage A, or nothing found) the draw happens at `Present`. Uploads of new assets go into the first
 of our submissions each frame. Nothing is recorded when there is nothing to draw (no guest, no puppet, loading).

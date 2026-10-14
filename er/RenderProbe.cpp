@@ -22,6 +22,9 @@ namespace phantom::er::RenderProbe
 		constexpr std::size_t kListDrawInstanced = 12;
 		constexpr std::size_t kListDrawIndexedInstanced = 13;
 		constexpr std::size_t kListDispatch = 14;
+		constexpr std::size_t kListCopyTextureRegion = 16;
+		constexpr std::size_t kListCopyResource = 17;
+		constexpr std::size_t kListResolveSubresource = 19;
 		constexpr std::size_t kListExecuteIndirect = 59;
 		constexpr std::size_t kListBeginRenderPass = 68;
 		constexpr std::size_t kListOmSetStencilRef = 24;
@@ -33,6 +36,10 @@ namespace phantom::er::RenderProbe
 		using DrawFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, UINT, UINT, UINT, UINT);
 		using DrawIndexedFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, UINT, UINT, UINT, INT, UINT);
 		using DispatchFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, UINT, UINT, UINT);
+		using CopyRegionFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, const D3D12_TEXTURE_COPY_LOCATION*, UINT, UINT, UINT, const D3D12_TEXTURE_COPY_LOCATION*,
+			const D3D12_BOX*);
+		using CopyResFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, ID3D12Resource*, ID3D12Resource*);
+		using ResolveFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, ID3D12Resource*, UINT, ID3D12Resource*, UINT, DXGI_FORMAT);
 		using IndirectFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList*, ID3D12CommandSignature*, UINT, ID3D12Resource*, UINT64, ID3D12Resource*, UINT64);
 		using BeginPassFn = void(STDMETHODCALLTYPE*)(ID3D12GraphicsCommandList4*, UINT, const D3D12_RENDER_PASS_RENDER_TARGET_DESC*, const D3D12_RENDER_PASS_DEPTH_STENCIL_DESC*,
 			D3D12_RENDER_PASS_FLAGS);
@@ -44,6 +51,9 @@ namespace phantom::er::RenderProbe
 		DrawFn        g_draw{ nullptr };
 		DrawIndexedFn g_drawIndexed{ nullptr };
 		DispatchFn    g_dispatch{ nullptr };
+		CopyRegionFn  g_copyRegion{ nullptr };
+		CopyResFn     g_copyRes{ nullptr };
+		ResolveFn     g_resolve{ nullptr };
 		IndirectFn    g_indirect{ nullptr };
 		BeginPassFn   g_beginPass{ nullptr };
 		StencilRefFn  g_stencilRef{ nullptr };
@@ -62,6 +72,7 @@ namespace phantom::er::RenderProbe
 			std::vector<SIZE_T> rtvs;
 			SIZE_T              dsv{ 0 };
 			std::uint32_t       draws{ 0 }, indexed{ 0 }, indirect{ 0 }, dispatches{ 0 }, clears{ 0 };
+			std::vector<std::string> copies;  // texture copies/resolves in this pass: "src->dst" (WxH/format@resource)
 			// pipeline -> draws/dispatches under it in this pass (names the shaders: RenderPso)
 			std::vector<std::pair<const void*, std::uint32_t>> psos;
 			std::vector<std::uint32_t>                         stencilRefs;
@@ -174,6 +185,45 @@ namespace phantom::er::RenderProbe
 			Count(a_self, [](Pass& p) { ++p.dispatches; }, true);
 			g_dispatch(a_self, a, b, c);
 		}
+		std::string Res(ID3D12Resource* a_r)
+		{
+			if (!a_r) {
+				return "null";
+			}
+			const auto d = a_r->GetDesc();
+			if (d.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER) {
+				return std::format("buf{}@{}", d.Width, static_cast<void*>(a_r));
+			}
+			return std::format("{}x{}/{}@{}", d.Width, d.Height, static_cast<int>(d.Format), static_cast<void*>(a_r));
+		}
+		void NoteCopy(ID3D12GraphicsCommandList* a_list, const char* a_kind, ID3D12Resource* a_src, ID3D12Resource* a_dst)
+		{
+			if (!Recording(a_list)) {
+				return;
+			}
+			auto text = std::format("{} {}->{}", a_kind, Res(a_src), Res(a_dst));
+			std::scoped_lock lock(g_lock);
+			auto&            p = g_lists[a_list].Cur();
+			if (p.copies.size() < 12) {
+				p.copies.push_back(std::move(text));
+			}
+		}
+		void STDMETHODCALLTYPE CopyRegionDetour(ID3D12GraphicsCommandList* a_self, const D3D12_TEXTURE_COPY_LOCATION* a_dst, UINT x, UINT y, UINT z,
+			const D3D12_TEXTURE_COPY_LOCATION* a_src, const D3D12_BOX* a_box)
+		{
+			NoteCopy(a_self, "region", a_src ? a_src->pResource : nullptr, a_dst ? a_dst->pResource : nullptr);
+			g_copyRegion(a_self, a_dst, x, y, z, a_src, a_box);
+		}
+		void STDMETHODCALLTYPE CopyResDetour(ID3D12GraphicsCommandList* a_self, ID3D12Resource* a_dst, ID3D12Resource* a_src)
+		{
+			NoteCopy(a_self, "copy", a_src, a_dst);
+			g_copyRes(a_self, a_dst, a_src);
+		}
+		void STDMETHODCALLTYPE ResolveDetour(ID3D12GraphicsCommandList* a_self, ID3D12Resource* a_dst, UINT a_ds, ID3D12Resource* a_src, UINT a_ss, DXGI_FORMAT a_f)
+		{
+			NoteCopy(a_self, "resolve", a_src, a_dst);
+			g_resolve(a_self, a_dst, a_ds, a_src, a_ss, a_f);
+		}
 		void STDMETHODCALLTYPE IndirectDetour(ID3D12GraphicsCommandList* a_self, ID3D12CommandSignature* a_sig, UINT a_n, ID3D12Resource* a_args, UINT64 a_off,
 			ID3D12Resource* a_cnt, UINT64 a_cntOff)
 		{
@@ -238,7 +288,12 @@ namespace phantom::er::RenderProbe
 				} else if (i.cs) {
 					s += std::format(" cs {:016x} x{}", i.cs, n);
 				} else {
-					s += std::format(" ps {:016x}/vs {:016x} x{}{}", i.ps, i.vs, n, i.stencil ? std::format(" st w{:02x}p{}", i.stencilWrite, i.stencilPass) : "");
+					std::string masks;
+					for (int r = 0; r < i.numRt && r < 8; ++r) {
+						masks += std::format("{:x}", i.writeMask[r] & 0xF);
+					}
+					s += std::format(" ps {:016x}/vs {:016x} x{}{} z{}{} m{}{}", i.ps, i.vs, n, i.stencil ? std::format(" st w{:02x}p{}f{}", i.stencilWrite, i.stencilPass, i.stencilFunc) : "",
+						i.depth ? static_cast<int>(i.depthFunc) : 0, i.depthWrite ? "w" : "r", masks.empty() ? "-" : masks, i.blend0 ? " blend" : "");
 				}
 			}
 			if (!a_p.stencilRefs.empty()) {
@@ -305,7 +360,7 @@ namespace phantom::er::RenderProbe
 				for (const auto& l : e.lists) {
 					std::string line;
 					for (const auto& p : l.passes) {
-						if (!p.draws && !p.indexed && !p.indirect && !p.dispatches && !p.clears) {
+						if (!p.draws && !p.indexed && !p.indirect && !p.dispatches && !p.clears && p.copies.empty()) {
 							continue;
 						}
 						std::string rts;
@@ -320,6 +375,9 @@ namespace phantom::er::RenderProbe
 							ds = res == a_mainDepth && res ? std::string(" DS=MAIN") : std::format(" DS={}x{}/{}", w, h, fmt);
 						}
 						line += std::format(" | [{}]{} d{} i{} x{} c{} k{}", rts, ds, p.draws, p.indexed, p.indirect, p.dispatches, p.clears);
+						for (const auto& c : p.copies) {
+							line += " (" + c + ")";
+						}
 						if (g_shaders) {
 							line += " {" + Shaders(p) + " }";
 							if (p.haveFirst) {
@@ -378,6 +436,11 @@ namespace phantom::er::RenderProbe
 				{ "ID3D12GraphicsCommandList::DrawIndexedInstanced", Slot(l, kListDrawIndexedInstanced), reinterpret_cast<void*>(&DrawIndexedDetour),
 					reinterpret_cast<void**>(&g_drawIndexed) },
 				{ "ID3D12GraphicsCommandList::Dispatch", Slot(l, kListDispatch), reinterpret_cast<void*>(&DispatchDetour), reinterpret_cast<void**>(&g_dispatch) },
+				{ "ID3D12GraphicsCommandList::CopyTextureRegion", Slot(l, kListCopyTextureRegion), reinterpret_cast<void*>(&CopyRegionDetour),
+					reinterpret_cast<void**>(&g_copyRegion) },
+				{ "ID3D12GraphicsCommandList::CopyResource", Slot(l, kListCopyResource), reinterpret_cast<void*>(&CopyResDetour), reinterpret_cast<void**>(&g_copyRes) },
+				{ "ID3D12GraphicsCommandList::ResolveSubresource", Slot(l, kListResolveSubresource), reinterpret_cast<void*>(&ResolveDetour),
+					reinterpret_cast<void**>(&g_resolve) },
 				{ "ID3D12GraphicsCommandList::ExecuteIndirect", Slot(l, kListExecuteIndirect), reinterpret_cast<void*>(&IndirectDetour), reinterpret_cast<void**>(&g_indirect) },
 				{ "ID3D12GraphicsCommandList::OMSetStencilRef", Slot(l, kListOmSetStencilRef), reinterpret_cast<void*>(&StencilRefDetour), reinterpret_cast<void**>(&g_stencilRef) },
 				{ "ID3D12GraphicsCommandList::SetPipelineState", Slot(l, kListSetPipelineState), reinterpret_cast<void*>(&SetPsoDetour), reinterpret_cast<void**>(&g_setPso) },

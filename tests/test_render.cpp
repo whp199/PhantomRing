@@ -4,6 +4,7 @@
 // Elden Ring's G-buffer encodings mirrored on the CPU.
 #include "Config.h"
 #include "D3D12Util.h"
+#include "DebugLayer.h"
 #include "Log.h"
 #include "RenderMesh.h"
 #include "RenderNvg.h"
@@ -391,6 +392,36 @@ static void TestSunCascadeAtlas()
 	CHECK(!RenderShadow::SunCascadeAtlas(0, 0, cascades, 3));
 }
 
+// [Render] debug_layer (er/DebugLayer.h): which validation messages reach the log; inert while off (the default).
+static void TestDebugLayer()
+{
+	using namespace phantom::er;
+	CHECK(!RenderConfig{}.debugLayer && RenderConfig{}.gpuValidation);
+	CHECK(!std::strcmp(DebugLayer::SeverityName(D3D12_MESSAGE_SEVERITY_ERROR), "ERROR"));
+	CHECK(!std::strcmp(DebugLayer::SeverityName(D3D12_MESSAGE_SEVERITY_CORRUPTION), "CORRUPTION"));
+	CHECK(!std::strcmp(DebugLayer::SeverityName(99), "?"));
+
+	DebugLayer::MessageFilter f(3, 5);
+	bool first = true;
+	CHECK(!f.Take(D3D12_MESSAGE_SEVERITY_INFO, 7, &first) && !first);  // info: counted, never logged
+	CHECK(f.Take(D3D12_MESSAGE_SEVERITY_ERROR, 100, &first) && !first);
+	CHECK(f.Take(D3D12_MESSAGE_SEVERITY_ERROR, 100));
+	CHECK(f.Take(D3D12_MESSAGE_SEVERITY_ERROR, 100));
+	CHECK(!f.Take(D3D12_MESSAGE_SEVERITY_ERROR, 100, &first) && first);  // the 4th of an id: dropped, said once
+	CHECK(!f.Take(D3D12_MESSAGE_SEVERITY_ERROR, 100, &first) && !first);
+	CHECK(f.Take(D3D12_MESSAGE_SEVERITY_WARNING, 200));
+	CHECK(f.Take(D3D12_MESSAGE_SEVERITY_CORRUPTION, 300));
+	CHECK(!f.Take(D3D12_MESSAGE_SEVERITY_ERROR, 400, &first) && !first);  // total cap (5) reached: dropped silently
+	CHECK(f.Count(D3D12_MESSAGE_SEVERITY_ERROR) == 6 && f.Count(D3D12_MESSAGE_SEVERITY_INFO) == 1 && f.Logged() == 5 && f.Dropped() == 3);
+	CHECK(f.Summary().starts_with("1 corruption, 6 errors, 1 warnings, 1 info (4 ids; 5 logged, 3 not logged)"));
+
+	// Off: no device kept, nothing polled.
+	CHECK(!DebugLayer::Enabled());
+	DebugLayer::Attach(nullptr);
+	DebugLayer::Poll();
+	CHECK(DebugLayer::Describe() == "debug layer: off");
+}
+
 int main()
 {
 	phantom::Log::Init(L"test_render.log", "test");
@@ -402,6 +433,7 @@ int main()
 	TestWaitFence();
 	TestRetire();
 	TestSunCascadeAtlas();
+	TestDebugLayer();
 	std::printf("test_render: %s (%d failures)\n", g_failures ? "FAILED" : "ok", g_failures);
 	return g_failures ? 1 : 0;
 }

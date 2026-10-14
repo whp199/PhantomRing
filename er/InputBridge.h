@@ -64,6 +64,8 @@ namespace phantom::er
 		// While Snake plays, View held for [Input] view_hold_ms opens MGSV's iDroid (as Start held) and never reaches Elden Ring; a tap
 		// still opens Elden Ring's map (passed on when released). Count of holds handed to MGSV.
 		std::uint32_t ViewHoldsToGuest();
+		std::uint32_t IdroidCancels();     // View holds sent to MGSV that the chord took back (Start within chord_window_ms)
+		std::uint32_t GuestMenuCloses();   // ...and MGSV's menu, opened anyway, closed with a Start tap
 
 		// Hook -> game thread: the last real pad seen (for menu learning / console).
 		std::uint16_t LastButtons();

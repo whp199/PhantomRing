@@ -425,8 +425,84 @@ static void TestTransforms()
 	CHECK(FocalToFovY(NAN, 24.0f) == 0.0f);
 }
 
+static void TestIDroidRequest()
+{
+	using R = IDroidRequest;
+	R::Event ev{};
+	{  // accepted at once: opened, no override
+		R r;
+		CHECK(r.Update(0, true, false, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kArmed);
+		CHECK(r.Update(60, true, true, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kOpened && r.OpenedAfterMs() == 60 && r.Retries() == 0);
+		CHECK(r.Update(100, true, true, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kNone);
+		CHECK(r.Update(200, false, true, true, 3000, ev) == R::Pad::kPass && !r.Active());
+	}
+	{  // refused (aiming): neutral, then Start alone, until it opens
+		R r;
+		r.Update(0, true, false, true, 3000, ev);
+		CHECK(r.Update(R::kAcceptMs - 1, true, false, true, 3000, ev) == R::Pad::kPass);
+		CHECK(r.Update(R::kAcceptMs, true, false, true, 3000, ev) == R::Pad::kNeutral);
+		CHECK(r.Update(R::kAcceptMs + R::kReleaseMs, true, false, true, 3000, ev) == R::Pad::kNeutralStart && ev == R::Event::kRetry && r.Retries() == 1);
+		CHECK(r.Update(R::kAcceptMs + R::kReleaseMs + R::kPressMs, true, false, true, 3000, ev) == R::Pad::kNeutral);
+		CHECK(r.Update(R::kAcceptMs + R::kReleaseMs + R::kPressMs + 10, true, true, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kOpened);
+		CHECK(r.Update(2000, false, false, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kNone);  // Start up: idle again
+		CHECK(r.Update(2100, true, false, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kArmed);
+	}
+	{  // never opens: given up within the window, then waits for Start to go up
+		R r;
+		r.Update(0, true, false, true, 1000, ev);
+		int retries = 0, expired = 0;
+		for (std::uint64_t t = 10; t <= 1500; t += 10) {
+			r.Update(t, true, false, true, 1000, ev);
+			retries += ev == R::Event::kRetry;
+			expired += ev == R::Event::kExpired;
+		}
+		CHECK(retries >= 1 && expired == 1 && !r.Active());
+		CHECK(r.Update(1600, true, false, true, 1000, ev) == R::Pad::kPass && ev == R::Event::kNone);  // still held: no new request
+	}
+	{  // the host's 1200 ms hold ends while a retry still waits: the retries go on (only an early release is a cut)
+		R r;
+		r.Update(0, true, false, true, 3000, ev);
+		int retries = 0;
+		for (std::uint64_t t = 10; t <= 1190; t += 10) {
+			r.Update(t, true, false, true, 3000, ev);
+			retries += ev == R::Event::kRetry;
+		}
+		CHECK(r.Update(1200, false, false, true, 3000, ev) != R::Pad::kPass || r.Active());
+		CHECK(retries >= 1 && r.Active() && ev != R::Event::kCut);
+	}
+	{  // ER agent 2026-10-14: the host cut its hold for the View+Start chord (Start up 150 ms into it) while Snake aimed:
+	   // no Start of ours afterwards (it opened the iDroid as Tarnished mode began)
+		R r;
+		r.Update(0, true, false, true, 3000, ev);
+		CHECK(r.Update(150, false, false, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kCut && !r.Active());
+		bool start = false;
+		for (std::uint64_t t = 160; t <= 3500; t += 10) {
+			start = start || r.Update(t, false, false, true, 3000, ev) == R::Pad::kNeutralStart;
+		}
+		CHECK(!start && !r.Active());
+		// ... also when it is cut during one of our retries (after the first refusal)
+		R q;
+		q.Update(0, true, false, true, 3000, ev);
+		q.Update(R::kAcceptMs, true, false, true, 3000, ev);
+		CHECK(q.Update(R::kAcceptMs + R::kReleaseMs, true, false, true, 3000, ev) == R::Pad::kNeutralStart && q.Retries() == 1);
+		CHECK(q.Update(R::kAcceptMs + R::kReleaseMs + 20, false, false, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kCut);
+		// The host's own Start tap that closes a menu opened anyway is no request (the menu is open).
+		CHECK(q.Update(1000, true, true, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kNone && !q.Active());
+	}
+	{  // a Start inside a menu, or while not eligible, is no request; losing eligibility drops one
+		R r;
+		CHECK(r.Update(0, true, true, true, 3000, ev) == R::Pad::kPass && ev == R::Event::kNone && !r.Active());
+		R q;
+		q.Update(0, true, false, true, 3000, ev);
+		CHECK(q.Update(300, true, false, false, 3000, ev) == R::Pad::kPass && ev == R::Event::kDropped);
+		R off;
+		CHECK(off.Update(0, true, false, true, 0, ev) == R::Pad::kPass && ev == R::Event::kNone && !off.Active());
+	}
+}
+
 int main()
 {
+	TestIDroidRequest();
 	TestOdometer();
 	TestTreadmill();
 	TestLife();

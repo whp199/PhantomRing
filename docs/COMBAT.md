@@ -132,6 +132,54 @@ is `CSTeamTypeEnemy` or `CSTemaTypeRival` (sic). Read offline, the Tarnished (te
   `HitKey` keeps the sleep sum in 10 bits (up to 1023; the default ladder tops at 1000); more never shares the row.
 - Rate limit: `max_hits_per_second` token bucket. Drops are counted.
 
+### Damage that syncs: the damage ladder (`[Combat] damage_route = speffect`, off by default; the rows arrive live, the split needs work: §10; roadmap §4 C1)
+
+The top-up above is a direct HP write. In a networked session (Seamless Co-op) the session host owns its enemies' HP
+(DESIGN §14c), so a top-up on a guest's machine never reaches the host and the enemy's two copies disagree. With
+`damage_route = speffect` the whole hit is Elden Ring's own: the hit bullet carries the wanted damage as **fixed-damage
+SpEffect rows** in its BulletParam `spEffectId0..4`, the slots the sleep ladder already rides in (§2 "Sleep rides on the hit
+bullet"), so whatever carries the hit to the enemy's owner carries the damage too. Code: `combat::DamageLadder`,
+`combat::NativeDamage` (`er/CombatLogic.{h,cpp}`, unit-tested), `er/Combat.cpp` (`LadderReady`, `Apply`, `Tick`).
+
+- **The ladder.** 36 SpEffectParam rows from `damage_speffect_base` (20010640), one per decimal digit of each place: row
+  base + 9p + (d - 1) deals d x 10^p HP (`changeHpPoint`, positive = damage like Elden Ring's own hemorrhage rows; once:
+  `effectEndurance` 0). A hit carries one row per non-zero digit, so 1..9999 HP is exact in at most 4 rows (`max_damage` is
+  9999). When sleep rungs leave fewer free slots the amount rounds to that many significant digits (half up: 1234 in two
+  slots = 1200); a lethal hit carries no sleep, so this does not happen today.
+- **The carriers.** Elden Ring has no ladder of fixed-damage rows (its fixed-damage rows are 10, 20, 25, 50, 80, 100, 140,
+  160, 300 and 700 HP, each with its own purpose), so 36 **blank** rows are written: 20010640..20010679 are 40 rows identical
+  to Elden Ring's default row, referenced by no i32 in any of the 183 param files of this regulation (`test_host_combat`
+  checks both, and that each would equal 99441, a plain "10 HP once" row, but for its damage, priority and target bits).
+  While Snake plays each gets its `changeHpPoint` and the target bits of the sleep rungs that our hit bullet VERIFIABLY lands
+  on enemies (0x7E / 0x03: everyone but the shooter); at run time every row must still be blank first, or the ladder stays
+  off and the log says which row. They are put back with the bullet rows when the puppet stops. The values are fixed, so
+  every PhantomRing player's game holds the same rows; a player without PhantomRing would not (C4: everyone runs it).
+  `isDisableNetSync` stays 0. (EMEVD/ESD scripts can't be read offline: that nothing applies these ids is checked for params only.)
+- **The split.** The bullet still flies, with a small AtkParam correction: Elden Ring's own hit (the Tarnished's weapon x
+  the correction, §2) is aimed at `speffect_bullet_share` (10%) of the wanted damage and still gives the flinch, the poise,
+  the aggro and the guard reaction. Its 100% hit on that kind of enemy (the reference) is learned from landed hits (ER's part /
+  correction, a moving average); until one has landed the bullet flies with `speffect_first_correction` (10%) and the ladder
+  carries all of the wanted damage (the first hit is ~4 HP over). The ladder carries wanted - ER's expected part. Stun and
+  sleep hits keep the top-up (their part must never kill).
+- **Guard.** A hit whose ER part is under half the expected one is guarded (as the top-up's rule; only judged when ER's part
+  is 4 HP or more, so its rounding of a boss's ~2 HP part is no guard). Whether Elden Ring also drops a guarded bullet's
+  SpEffects is not known yet, so it is learned on the first guarded hit and logged (`damage ladder on a guarded hit: ...`):
+  if the rows' damage still arrived (*applies*), the target's next hits within `speffect_guard_ms` (1.5 s) carry only the
+  share of a normal hit its shield let through (5 of 42: 12%), and an unguarded hit clears that; if it did not (*skipped*),
+  Elden Ring blocks it itself and nothing is scaled. Either way the first guarded hit of a raised shield is decided by
+  Elden Ring.
+- **Did it arrive?** Each landed hit's HP loss is split into ER's part and the ladder (the rows are exact). Until one
+  hit's rows have arrived the ladder is unconfirmed: a hit whose rows did not arrive (and was not guarded) is topped up as
+  before, and `verify_failures` (3) such hits in a row give the ladder up for the session (`damage_route topup`, logged;
+  `combat damage_route speffect` retries). Once confirmed, a missing ladder is counted, not topped up. Only rows that
+  arrived confirm it: a guarded hit whose rows did not arrive is no evidence either way (`combat::ReportLadder`, review
+  2026-10-14: it used to confirm the ladder, so with rows that never work one shield left every later hit at ER's ~10% for
+  the session), and "Elden Ring drops it on a guarded hit" is learned only once the ladder is confirmed.
+- **Limits.** Everything else is unchanged: hits that can't take a bullet (another bullet holds the row, `combat::MayFly`; a
+  blast's other targets; a shotgun's other pellets; Elden Ring refusing the spawn) still take the HP route, which does not
+  sync. Elden Ring's absorption does not apply to the ladder (the top-up ignored it too). Kills by the ladder should give
+  runes as hemorrhage kills do (UNVERIFIED).
+
 **Params at run time** (`er/Params.cpp`): `SoloParamRepository` (`0x3D85F58`, vtable
 `CS::SoloParamRepositoryImp`) → holder (`+0x80 + 0x48·i`) → `CS::ParamResCap` (vtable checked, name at
 `+0x08`) → `+0x80` FD4ParamResCap → `+0x80` ParamFile. A table is used only if its resource name (or,
@@ -195,6 +243,9 @@ mode switched live between shots): off 35, level 31, weapon 35, both 31 (`progre
 | `targets` | hostile | hostile (ER's team relation) \| all. |
 | `bullet_id`, `bullet_hide_sfx`, `bullet_offset`, `bullet_damage_mult` | 10170000, true, 0.6, 1.9 | bullet route row, flight effect, spawn distance before the hit, atkPhys = damage × this |
 | `top_up` | true | complete the wanted damage with ChangeHp after ER's own (weapon-based) bullet damage (§2) |
+| `damage_route` | topup | topup (ER's hit + the top-up, local only) \| speffect (the damage ladder on the bullet: Elden Ring carries all of it; UNVERIFIED live, §2 "Damage that syncs") |
+| `damage_speffect_base`, `damage_speffect_digits` | 20010640, 4 | the ladder's carrier rows: 9 x digits SpEffectParam rows from base (blank in this regulation) |
+| `speffect_bullet_share`, `speffect_first_correction`, `speffect_guard_ms` | 0.1, 10, 1500 | ER's own part of the wanted damage; its correction (%) before its full hit is known; how long a target seen guarding scales the ladder |
 | `verify_ms`, `verify_failures` | 300, 3 | how long a bullet may take to land before it counts as a miss (a landed hit is topped up the next frame) |
 | `units_per_life` | 40 | class units in one soldier's life (when MGSV sends no share) |
 | `big_from`, `boss_from`, `boss_lives` | 1.5, 5, 45 | max HP / the Tarnished's: ordinary up to big_from, a boss (worth boss_lives soldiers) from boss_from (45: an assault-rifle magazine with MGSV's share takes ~15% of a boss; live, Margit, §8) |
@@ -314,6 +365,8 @@ pr er "combat effects <n>"           n's active SpEffect ids;  "combat speffect 
 pr er "combat hit|sleep <n> ... above"   the bullet comes down on top of n (a raised shield can't take it)
 pr er "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction <v>"   live tuning
 pr er "combat route auto|bullet|hp|ini"
+pr er "combat damage_route [topup|speffect|ini]"   the damage route (§2 "Damage that syncs"): ladder rows written?, confirmed?,
+                                     rows arrived / missing, guarded, topped up, % of the wanted damage dealt, the guard rule
 pr er "boom lethal|stun|sleep|smoke [radius]"   an explosion visual 5 m in front of the Tarnished (§9); `boom` = status
 pr er "boom mode auto|bullet|sfx|off|ini"       `boom restore` puts the carrier rows back now
 pr er status                         the puppet line includes host falls and "DYING for Snake"
@@ -586,3 +639,85 @@ in Elden Ring (on the ground, not floating). Sleep grenade: mist renewed every 2
 kind 1 -> sleep ...` about 5 times; `pr er boom` counts the skipped repeats), enemies inside still fall asleep (our sleep
 build-up). Smoke grenade: clouds for as long as MGSV's smoke lasts. Report: what each looked and sounded like, size vs
 MGSV's blast, any `SpawnBullet(...) refused` line, frame-rate dips during a big cloud.
+
+## 10. Live test: damage that syncs (`damage_route = speffect`, roadmap §4 C1)
+
+Everything in §2 "Damage that syncs" is UNVERIFIED live. Offline: the ladder's row selection and rounding, the split, the
+guard rules and the kills per magazine are unit-tested (`test_host_combat`: `TestDamageLadder`, `TestNativeDamage`, with the
+live numbers below as an Elden Ring model), and the 36 carrier rows and every SpEffectParam offset written are checked
+against this regulation. No new game address. Single player first; co-op only once single player passes.
+
+Setup: back up the save (`pr` does it on launch), stay offline. In the deployed `PhantomRingHost.ini` set `[Combat]
+damage_route = speffect` (or leave the ini and switch live with `pr er "combat damage_route speffect"`) and `[Debug] debug =
+true`. `tools/pr launch --er-only` + `tools/pr fake-mgsv` (Stage A of §6), `pr lua '!walk off'`, `pr lua '!autofire off'`.
+
+**A. Do the rows land at all** (the question the route stands on). Stand near one Limgrave soldier (219 HP at Gatefront).
+1. `pr er "combat damage_route"` -> `damage route speffect (...; ladder SpEffectParam 20010640..20010675 not written, unknown)`.
+2. `pr er "combat targets"`, then `pr er "combat hit <n> 46 20"`. Expect H-log `combat: damage ladder ready -- SpEffectParam
+   20010640..20010675 carry 1..9999 HP`, then `bullet 46 ... = ER ~0 (10%) + ladder 46 (2 rows)` and `bullet on ... landed ...:
+   hp 219 -> ~169 (wanted -46) = ER ~4 (expected 0, correction 10%) + ladder 46 ARRIVED`, then `damage ladder CONFIRMED`. The
+   soldier flinches and turns on the Tarnished.
+   - If instead `ladder 46 MISSING` with ER's ~4 only: the first three such hits are topped up (`+42 topped up (ladder
+     unconfirmed)`), then `the damage ladder's rows did not arrive on 3 hits in a row -- damage_route topup`. Record the lines,
+     `pr er "combat effects <n>"` right after a hit (are 20010645/20010652 listed for a frame?), and stop: the carriers need
+     another template (next try: copy all of 99441, i.e. also category_priority 101 and target bits 127/7).
+3. Hit him again 4 more times: `= ER ~5 (expected 5, correction 12%) + ladder 41 ARRIVED`; dead on the 5th hit, **runes
+   given** (note the rune count before/after: +64 at Gatefront with the top-up). If he dies but no runes: record it (the
+   ladder's kill is not credited to the Tarnished) and switch back to topup.
+4. `pr er combat` -> the second line `damage route speffect (ini|console; ... written, confirmed): N ladder hits, rows arrived
+   N / missing 0, ... dealt ~100-105% of the wanted damage`.
+
+**B. Same kills per magazine as §8** (the regression). With the real MGSV (or `combat shoot rifle x y z 0.2115` at the body):
+1. A Limgrave soldier: 5 body hits / 1 headshot (`HEADSHOT ... bullet 230`: `ladder 2xx` in 3 rows), as with the top-up.
+2. Margit (the player's save, fog wall at Stormveil): one 30-round assault-rifle magazine at his chest -> 14-15% (topup:
+   600 HP = 14.4%, 4174 -> ~3574). Each line `= ER ~2 (...) + ladder ~18 ARRIVED`. Then `combat damage_route topup` and a second
+   magazine for the comparison in the same fight.
+3. D-Walker's flamethrower on a soldier for 3 s: each flame hit `+ ladder ~11 ARRIVED`, his HP 133 -> ~42 as in §8 (the
+   burning VFX still from ER's fire part).
+4. Stun round / sleep dart / sleep gas: unchanged (they keep the top-up: no `ladder` in their lines).
+
+**C. Guard.** A shield soldier (Gatefront / the Stormhill shack) with his shield up, shot from the front 5 times in 2 s:
+- the first blocked hit logs `GUARDED (12% through)` and then `damage ladder on a guarded hit: <rule>`. Record the rule:
+  - `a guarded hit still delivers it`: the next blocked hits carry `shield up: x0.12` and deal ~5-10 HP each (topup: 5 + 40);
+    after he lowers the shield, full hits again;
+  - `Elden Ring drops it on a guarded hit`: blocked hits deal ER's ~1 only (a shield blocks Snake completely: playable?
+    compare with the topup's 12% through and say which feels right).
+- either way: no `MISSING` counted as a route failure (the ladder stays confirmed).
+
+**D. Restore.** Stop the puppet (`pr er "puppet off"` or the toggle): H-log `combat: bullet/AtkParam rows restored`; as the
+Tarnished hit an enemy with a Throwing Dagger (Bullet 10170000) and a bleed weapon: normal damage, no stray ladder damage.
+
+**E. Co-op (only after A-D pass; Seamless, both players on this build and the same ini).** The client (not the session
+host) shoots the host's enemy: both screens show the same HP after each hit, the enemy dies on both, both get runes (C1's
+check). Then the reverse (host shoots). With `damage_route = topup` for comparison: the client's top-up shows on the client
+only (that is the bug this route fixes).
+
+Report: the H-log lines of A.2, the rule of C, the Margit %, and the `combat` summary at the end.
+
+### Live 2026-10-14 (single player, fake MGSV, Stormveil soldiers npc 30003214 / 30200014, 221 / 317 HP)
+
+**A. The rows land -- a few frames late.** The first runs read `ladder 46 MISSING` on every hit and gave the ladder up after
+three (`the damage ladder's rows did not arrive on 3 hits in a row -- damage_route topup`), each hit topped up. But each
+target's HP before the next hit was another ~46 / ~41 lower than the hit's own line said (221 -> 220 + 45 topped up = 175,
+then 129 at the next hit: the 46 of the ladder). Measured with the soldier's HP read every ~65 ms (`peek
+[[chr+0x190]+0]+0x138 i32`): 221 at the hit, 220 at 131 ms (Elden Ring's own part, 1 HP), 129 at 199 ms (+45 topped up and the
+ladder's 46). The rows arrive ~1-4 frames after Elden Ring's own hit; the check judged on the first HP drop (10-64 ms).
+Both carrier forms delivered: the blank rows (default) and copies of Elden Ring's own "10 HP once" row 99441 (`[Combat]
+speffect_template = 99441`, `combat set speffect_template 99441`; the HP fell by the ladder's amount the same way).
+**Fix:** a ladder hit is judged once its damage showed, or `[Combat] speffect_wait_ms` (300) after Elden Ring's own part did.
+With it (after a respawn, 3 hits on a fresh soldier): hit 1 waited 300 ms and still read `MISSING` (221 -> 178: 43, 3 short of the
+ladder's 46 alone -- the check wants all of it), +3 topped up; hit 2 `= ER 1 (expected 4) + ladder 42
+ARRIVED` -> `damage ladder CONFIRMED`; it was also read as GUARDED (ER's part 1 of an expected 4: the guard rule's 4 HP floor
+is too low for these ~1 HP parts) -> `a guarded hit still delivers it`, so hit 3 carried only `ladder 10 (shield up: x0.23)`
+and the soldier still lost 62 (ER 52 by the split: another source in that window, UNVERIFIED which). Route summary: 3 ladder
+hits, rows arrived 2 / missing 1, dealt 107% of the wanted damage.
+**B. Kills, the same as the top-up** (a fresh launch, the Tarnished unhittable with `flag nohit on`, assault-rifle shots
+`combat shoot rifle x y z 0.2115` at a soldier's chest, 0.8 s apart): `topup` -- 5 hits of 47 (221 -> 174 -> 127 -> 80 -> 33 ->
+0); `speffect` -- the first hit `= ER 1 + ladder 47 ARRIVED` -> `damage ladder CONFIRMED`, then `= ER 5 (expected 5, correction
+47%) + ladder 42 ARRIVED` on each, 47 a hit, dead on the 5th landed hit (its ladder `MISSING` there: Elden Ring's own 8 HP part
+had already killed him -- not counted as a failure). **Rapid fire** (4 shots 67 ms apart, inside each other's 300 ms wait):
+221 -> 34, 187 of the wanted 188. Not done: Margit, a real shield (C), D-Walker's flame, D/E. **Verdict:** in single player the
+ladder now deals what the top-up deals, hit for hit; the earlier noise (a first hit read short, then a false "guarded") came
+from judging before the rows arrived. **`topup` stays the default** all the same: the ladder's only gain is co-op sync (not
+played yet), and a boss, a shield and the flame are untested; `pr er "combat damage_route speffect"` (or the ini) to play it.
+Next: the guard rule should not judge Elden Ring parts of a few HP, and the arrival test could accept a ladder a few HP short.

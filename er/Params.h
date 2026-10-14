@@ -72,6 +72,9 @@ namespace phantom::er::params
 	// Read only ([Progression] weapon: a weapon's reinforce type and its levels; fromsoftware-rs SoloParam indices 0 and 4).
 	inline constexpr Spec kEquipParamWeapon{ L"EquipParamWeapon", "EQUIP_PARAM_WEAPON_ST", 0x298, 0 };
 	inline constexpr Spec kReinforceParamWeapon{ L"ReinforceParamWeapon", "REINFORCE_PARAM_WEAPON_ST", 0x80, 4 };
+	// Read only (er/Fulton.h: the runes a fultoned enemy would have dropped; fromsoftware-rs SoloParam index 6).
+	inline constexpr Spec kNpcParam{ L"NpcParam", "NPC_PARAM_ST", 0x2E0, 6 };
+	inline constexpr std::uint32_t kNpcGetSoul = 0x2C;  // u32 get_soul (tools/re/er_params.py fields NPC_PARAM_ST; soldier 30003214: 114)
 
 	class Table
 	{
@@ -182,5 +185,20 @@ namespace phantom::er::params
 	{
 		inline constexpr std::uint32_t kStateInfo = 0x156;          // u16 (436 = sleep)
 		inline constexpr std::uint32_t kSleepAttackPower = 0x338;   // i32
+		// The damage ladder's carriers ([Combat] damage_route = speffect; combat::DamageLadder).
+		inline constexpr std::uint32_t kEffectEndurance = 0x08;     // f32 s (0 = once, as Elden Ring's hemorrhage proc)
+		inline constexpr std::uint32_t kMotionInterval = 0x0C;      // f32 s
+		inline constexpr std::uint32_t kChangeHpRate = 0x9C;        // f32 % of max HP (positive = damage)
+		inline constexpr std::uint32_t kChangeHpPoint = 0xA0;       // i32 HP (positive = damage: 99441 = 10, hemorrhage 1490001 = 100)
+		inline constexpr std::uint32_t kReplaceSpEffectId = 0x124;  // i32
+		inline constexpr std::uint32_t kCycleSpEffectId = 0x128;    // i32
+		inline constexpr std::uint32_t kTargetBits = 0x15F;         // u8 effect_target_self 0, friend 1, enemy 2, player 3, ai 4, live 5, ghost 6
+		inline constexpr std::uint32_t kTargetBits2 = 0x16C;        // u8 effect_target_oppose_target 0, friendly_target 1, self_target 2
+		inline constexpr std::uint32_t kBits259 = 0x259;            // u8 bit1 is_use_atk_param_atk_power_correct, bit4 is_disable_net_sync
+		inline constexpr std::uint32_t kVfxId = 0x170;              // i32
+		// The carriers' target bits: those of Elden Ring's sleep build-up rows (25000..), which our hit bullet VERIFIABLY
+		// lands on enemies: everyone but the shooter (0x7E), the opposing and friendly target (0x03).
+		inline constexpr std::uint8_t kLadderTargetBits = 0x7E;
+		inline constexpr std::uint8_t kLadderTargetBits2 = 0x03;
 	}
 }

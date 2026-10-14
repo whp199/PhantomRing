@@ -63,6 +63,9 @@ namespace phantom::er::InputBridge
 		std::atomic<bool>          g_erBack{ false };      // ... and Back (View)
 		std::atomic<std::uint32_t> g_chords{ 0 };          // the chord fired (Host toggles Tarnished mode)
 		std::atomic<bool>          g_gateHolding{ false };
+		std::atomic<std::uint32_t> g_idroidCancels{ 0 };   // View holds sent to MGSV that became the chord (Start within chord_window_ms)
+		std::atomic<std::uint32_t> g_guestMenuCloses{ 0 };  // ...after which MGSV opened its menu anyway and got a Start tap to close it
+		std::atomic<std::uint16_t> g_guestMask{ 0 };        // Start/View the chord holds: out of MGSV's pad, its own menu included
 		// The View that opened MGSV's iDroid stays out of MGSV's pad until released: once the iDroid is up MGSV gets the
 		// whole pad, and a still-held View would be its Back (pause menu / back out of the iDroid).
 		std::atomic<bool> g_backHeldOver{ false };
@@ -78,6 +81,7 @@ namespace phantom::er::InputBridge
 			p.idroidStartMs = c.guestIdroidStartMs;
 			p.startWaitMs = c.startWaitMs;
 			p.chordMs = c.chordMs;
+			p.chordWindowMs = c.chordWindowMs;
 			PadGate::Input in;
 			in.nowMs = ::GetTickCount64();
 			in.start = (a_buttons & XINPUT_GAMEPAD_START) != 0;
@@ -97,6 +101,14 @@ namespace phantom::er::InputBridge
 			if (o.chord) {
 				g_chords.fetch_add(1, std::memory_order_relaxed);
 			}
+			if (o.idroidCancelled) {
+				g_idroidCancels.fetch_add(1, std::memory_order_relaxed);
+			}
+			if (o.guestMenuClosed) {
+				g_guestMenuCloses.fetch_add(1, std::memory_order_relaxed);
+			}
+			g_guestMask.store(static_cast<std::uint16_t>((o.guestMaskStart ? XINPUT_GAMEPAD_START : 0) | (o.guestMaskView ? XINPUT_GAMEPAD_BACK : 0)),
+				std::memory_order_relaxed);
 			g_erStart.store(o.erStart, std::memory_order_relaxed);
 			g_erBack.store(o.erView, std::memory_order_relaxed);
 			g_guestStart.store(o.guestStart, std::memory_order_relaxed);
@@ -155,7 +167,12 @@ namespace phantom::er::InputBridge
 				}
 				if (g_guestMenu.load(std::memory_order_relaxed)) {
 					// MGSV's own menu (iDroid, pause) is open: it gets the whole pad, Start/View and Y included, to work it
-					// and to close it; Elden Ring gets a neutral pad meanwhile.
+					// and to close it; Elden Ring gets a neutral pad meanwhile. Not the Start/View held for the chord; and
+					// a menu MGSV opened from an iDroid hold the chord cut short gets the gate's Start tap that closes it.
+					pad.buttons &= static_cast<std::uint16_t>(~g_guestMask.load(std::memory_order_relaxed));
+					if (g_guestStart.load(std::memory_order_relaxed)) {
+						pad.buttons |= XINPUT_GAMEPAD_START;
+					}
 				} else {
 					if (g_prompt.load(std::memory_order_relaxed) || g_promptLatch.load(std::memory_order_relaxed) ||
 						g_deferLatch.load(std::memory_order_relaxed)) {
@@ -494,6 +511,8 @@ namespace phantom::er::InputBridge
 	void          NoteMenuPress() { g_menuPresses.fetch_add(1, std::memory_order_relaxed); }
 	bool GuestMenu() { return g_guestMenu.load(std::memory_order_relaxed); }
 	std::uint32_t ViewHoldsToGuest() { return g_viewToGuest.load(std::memory_order_relaxed); }
+	std::uint32_t IdroidCancels() { return g_idroidCancels.load(std::memory_order_relaxed); }
+	std::uint32_t GuestMenuCloses() { return g_guestMenuCloses.load(std::memory_order_relaxed); }
 
 	std::uint16_t LastButtons() { return g_lastButtons.load(std::memory_order_relaxed); }
 	std::int16_t  LastRightStickX() { return g_lastRx.load(std::memory_order_relaxed); }

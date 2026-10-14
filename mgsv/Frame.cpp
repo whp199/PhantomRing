@@ -1,5 +1,6 @@
 #include "Frame.h"
 
+#include "ActorProxy.h"
 #include "Addresses.h"
 #include "Ammo.h"
 #include "Capture.h"
@@ -8,6 +9,7 @@
 #include "Config.h"
 #include "Death.h"
 #include "Follow.h"
+#include "FultonAnchor.h"
 #include "FramePace.h"
 #include "Hold.h"
 #include "Blast.h"
@@ -70,6 +72,7 @@ namespace phantom::guest::frame
 		ULONGLONG         g_regenHitAt{ 0 };
 		float             g_regenBase{ 0 };
 		std::uint64_t     g_regenCapped{ 0 };  // frames the cap wrote life back down (!status)
+		std::uint8_t      g_lastPhase{ 0 };    // MGSV's alert phase last published (logged on change)
 		bool              g_nativeHoldWarned{ false };
 		bool              g_wasReady{ false };
 		Vec3              g_buddyLast;        // buddy heading from its motion (no per-frame GetRotationY)
@@ -388,8 +391,32 @@ namespace phantom::guest::frame
 				Log::Info("motion: hold mode {} radius {:.1f} m", req->mode, m.radius);
 			}
 			const auto& c = Cfg();
+			// Fulton anchor (FultonAnchor.cpp, docs/GUEST.md 20.4): Snake beside a sleeping MGSV soldier, or back to the sandbox. The native
+			// placement as the treadmill's (camera kept, odometer rebased: Elden Ring sees no jump), the walker moved along with him.
+			if (const auto p = fulton::TakePlacement()) {
+				bool ok = a_ready && (hold::Available() || hold::Init()) && hold::Available();
+				const Vec3 shift = p->pos - a_root;
+				ok = ok && hold::Place(p->pos + Vec3{ 0.0f, c.warpLift, 0.0f }, logic::MatrixToQuat(a_cam.root));
+				if (ok) {
+					g_odo.Rebase(p->pos);
+					state::SetCentre(p->centre);
+					g_warpAt = ::GetTickCount64();
+					++g_warps;
+					if (a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId && a_lua.buddyActive == state::kBuddyTypeWalker) {
+						const Vec3 b = a_lua.buddyPos + Vec3{ shift.x, 0.0f, shift.z };
+						state::QueueCommand(std::format("owarp {} {} {} {} {}", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw));
+						follow::OnShift({ shift.x, 0.0f, shift.z });
+					} else if (a_lua.buddyActive == state::kBuddyTypeHorse) {
+						follow::OnShift({ shift.x, 0.0f, shift.z });
+					}
+				}
+				Log::Info("fulton: Snake {} {:.2f},{:.2f},{:.2f} ({}; {:.1f} m)", ok ? "placed at" : "NOT placed at", p->pos.x, p->pos.y, p->pos.z, p->why,
+					shift.LengthXZ());
+				fulton::PlacementDone(ok, shift);
+				return;
+			}
 			const auto  centre = state::Centre();
-			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled() || state::Parked()) {
+			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled() || state::Parked() || fulton::Anchored()) {
 				return;
 			}
 			const bool onVehicle = (a_lua.flags & state::kLVehicle) || a_vars.vehicleId != kNullId || a_lua.ridden != kNullId;
@@ -485,7 +512,10 @@ namespace phantom::guest::frame
 			if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId &&
 				a_lua.buddyActive == state::kBuddyTypeHorse) {
 				follow::OnShift(d.shift);  // D-Horse can't be moved (no SetPosition): it is whistled back to Snake at once
-			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId) {
+			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId &&
+			           a_lua.buddyActive != state::kBuddyTypeDog && a_lua.buddyActive != state::kBuddyTypeQuiet) {
+				// (D-Dog and Quiet ignore SetPosition -- live 2026-10-14, D-Dog stayed put -- and its Vector3 form sends D-Walker to the
+				// world origin: they are left to MGSV, which brings them back to Snake by itself.)
 				const Vec3 b = a_lua.buddyPos + d.shift;
 				cmd += std::format("{}owarp {} {} {} {} {}", cmd.empty() ? "" : ";", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw);
 				follow::OnShift(d.shift);  // and where it is walking to
@@ -738,6 +768,18 @@ namespace phantom::guest::frame
 		s.buddyType = v.buddyType;
 		s.vehicleId = riding ? (v.vehicleId != kNullId ? v.vehicleId : lua.ridden) : kNullId;
 		s.phase = v.phase;
+		if (v.phase != g_lastPhase && ready) {
+			// MGSV's alert phase (vars.playerPhase: 0 sneak .. 3 combat) belongs at 0 in the sandbox: anything else means an MGSV
+			// soldier saw Snake (live 2026-10-14 with `!proxy on` and the real Elden Ring: phase 3 and a riot-shield reinforcement
+			// shooting Snake on the apron). Logged so it is found.
+			if (v.phase > 0 && g_lastPhase == 0) {
+				Log::Warn("alert: MGSV's alert phase {} -> {} -- an MGSV soldier saw Snake{}", g_lastPhase, v.phase,
+					Cfg().proxies ? " ([Proxies] are on: their slot soldiers are the likely ones)" : "");
+			} else {
+				Log::Info("alert: MGSV's alert phase {} -> {}", g_lastPhase, v.phase);
+			}
+			g_lastPhase = v.phase;
+		}
 
 		// Buddy (D-Walker first).
 		std::uint32_t bf = 0;
@@ -782,6 +824,17 @@ namespace phantom::guest::frame
 			link::PublishState(s);
 			g_last = s;
 			g_lastFrameMs = ::GetTickCount64();
+		}
+		// ActorProxy v0 ([Proxies] Enabled, docs/GUEST.md 20): the pool soldiers to the nearest hostile Elden Ring characters, with
+		// the treadmill offset of exactly what was just published (rootPos - odo).
+		if (c.ProxiesRun()) {
+			const auto centre = ready ? state::Centre() : std::nullopt;
+			if (centre) {
+				const Vec3 buddy{ s.buddyPos[0], s.buddyPos[1], s.buddyPos[2] };
+				proxy::OnFrame(root, s.odo, (bf & proto::kBuddyPosValid) ? &buddy : nullptr, *centre, ::GetTickCount64());
+			} else {
+				proxy::Suspend();  // no OnFrame: nothing may act on the last placements (review 2026-10-14)
+			}
 		}
 
 		if (g_frame % 30 == 0) {

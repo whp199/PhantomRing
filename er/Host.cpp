@@ -12,6 +12,7 @@
 #include "Console.h"
 #include "DebugDraw.h"
 #include "Events.h"
+#include "Fulton.h"
 #include "Hud.h"
 #include "InputBridge.h"
 #include "Interaction.h"
@@ -246,6 +247,7 @@ namespace phantom::er::Host
 			}
 			++g_rests;
 			PushEvent(proto::kHEvRested, 0, 0, a_f.index);
+			Fulton::OnEnemiesBack("a rest at a grace");
 			Log::Info("ER: rested at a grace ({}; Elden Ring refills the flasks) -> kHEvRested 0: Snake's ammo refilled (rest #{})",
 				g_restPress ? "Snake's Y on its rest prompt" :
 				ownPress    ? "the Tarnished's Y on its rest prompt" :
@@ -565,9 +567,18 @@ namespace phantom::er::Host
 		{
 			static bool          open{ false };
 			static std::uint32_t holds{ 0 };
+			static std::uint32_t cancels{ 0 }, closes{ 0 };
 			if (const auto h = InputBridge::ViewHoldsToGuest(); h != holds) {
 				holds = h;
 				Log::Info("input: View held {} ms -> MGSV Start held {} ms (its iDroid; {} so far)", Cfg().viewHoldMs, Cfg().guestIdroidStartMs, h);
+			}
+			if (const auto c = InputBridge::IdroidCancels(); c != cancels) {
+				cancels = c;
+				Log::Info("input: Start within {} ms of View -> View+Start chord; the iDroid hold sent to MGSV is cut short ({} so far)", Cfg().chordWindowMs, c);
+			}
+			if (const auto c = InputBridge::GuestMenuCloses(); c != closes) {
+				closes = c;
+				Log::Info("input: MGSV opened its menu from the cut iDroid hold anyway -> a Start tap closes it, the chord goes on ({} so far)", c);
 			}
 			if (a_open != open) {
 				open = a_open;

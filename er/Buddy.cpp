@@ -3,10 +3,12 @@
 #include "Config.h"
 #include "Game.h"
 #include "Host.h"
+#include "Hud.h"
 #include "Link.h"
 #include "Log.h"
 #include "Puppet.h"
 
+#include <atomic>
 #include <cmath>
 #include <format>
 
@@ -23,6 +25,14 @@ namespace phantom::er::Buddy
 		float         g_heading{ 0 };
 		const char*   g_source{ "none" };
 		bool          g_loggedFirst{ false };
+		std::atomic<bool> g_absent{ false };
+		bool          g_seenOut{ false };      // this guest has had a buddy out (Present / Loading) since it attached
+		std::uint64_t g_nonce{ 0 };            // the guest session those belong to
+		std::uint16_t g_typeShown{ 0xFFFF };   // what the last corner message was about
+		bool          g_outShown{ false };
+		std::uint64_t g_changeFrames{ 0 };     // frames the new state has held (a change shows once it held 10 frames)
+		std::uint16_t g_pendingType{ 0xFFFF };
+		bool          g_pendingOut{ false };
 
 		// Mean translation of the buddy's draw matrices (3x4 row-major, translation in [3], [7],
 		// [11], relative to the list's anchor). Skinning matrices carry bind-pose offsets, so this
@@ -77,6 +87,27 @@ namespace phantom::er::Buddy
 		}
 	}
 
+	bool Absent() { return g_absent.load(std::memory_order_relaxed); }
+
+	std::string ChangeText(std::uint16_t a_typeBefore, bool a_outBefore, std::uint16_t a_typeAfter, bool a_outAfter)
+	{
+		const bool before = a_outBefore && a_typeBefore != kNone;
+		const bool after = a_outAfter && a_typeAfter != kNone;
+		if (before && !after) {
+			return std::format("{} dismissed -- no buddy now", TypeName(a_typeBefore));
+		}
+		if (!after) {
+			return "";
+		}
+		if (!before) {
+			return std::format("Buddy: {} is out", TypeName(a_typeAfter));
+		}
+		if (a_typeBefore != a_typeAfter) {
+			return std::format("Buddy: {} instead of {}", TypeName(a_typeAfter), TypeName(a_typeBefore));
+		}
+		return "";
+	}
+
 	void Update(const Frame& a_f)
 	{
 		g_estimate = false;
@@ -84,6 +115,43 @@ namespace phantom::er::Buddy
 			return;
 		}
 		const auto& g = a_f.guest;
+		// A buddy out or not, and changes of it in the corner (MGSV's own buddy menu: iDroid > Buddy Support, or `!buddy`).
+		{
+			const std::uint64_t nonce = Link::Get().Nonce() ^ (std::uint64_t(g.odoEpoch) << 32);
+			if (nonce != g_nonce) {
+				g_nonce = nonce;
+				g_seenOut = false;
+				g_typeShown = 0xFFFF;
+				g_changeFrames = 0;
+			}
+			const bool out = g.buddyType != kNone && (g.buddyFlags & (proto::kBuddyPresent | proto::kBuddyLoading));
+			g_seenOut = g_seenOut || out;
+			const bool absent = g.buddyType == kNone || (g_seenOut && !out);
+			if (absent != g_absent.load(std::memory_order_relaxed)) {
+				g_absent = absent;
+				Log::Info("buddy: {}", absent ? std::format("none out (type {}, flags {:#x}): its draws are left out, it is not placed", TypeName(g.buddyType), g.buddyFlags)
+				                              : std::format("{} out again: drawn and placed", TypeName(g.buddyType)));
+			}
+			if (g_typeShown == 0xFFFF) {
+				g_typeShown = g.buddyType;  // the first state after attaching: MGSV's corner text already said what is out
+				g_outShown = out;
+			} else if (g.buddyType != g_typeShown || out != g_outShown) {
+				if (g.buddyType != g_pendingType || out != g_pendingOut) {
+					g_pendingType = g.buddyType;
+					g_pendingOut = out;
+					g_changeFrames = 0;
+				}
+				if (++g_changeFrames >= 10) {
+					if (const auto text = ChangeText(g_typeShown, g_outShown, g.buddyType, out); !text.empty()) {
+						Hud::Notify(text, Hud::Tone::kInfo);
+						Log::Info("buddy: {} (type {} -> {}, out {} -> {})", text, g_typeShown, g.buddyType, g_outShown, out);
+					}
+					g_typeShown = g.buddyType;
+					g_outShown = out;
+				}
+			}
+		}
+		const auto before = g_type;
 		if (g.buddyType != g_type) {
 			g_type = g.buddyType;
 			Log::Info("buddy: MGSV buddy is {} ({})", TypeName(g_type), g_type);
@@ -97,14 +165,14 @@ namespace phantom::er::Buddy
 				Log::Info("buddy: {} deployed (object id {:#x})", TypeName(g_type), g.buddyObjectId);
 			}
 			if ((g_flags & proto::kBuddyPresent) && !(g.buddyFlags & proto::kBuddyPresent)) {
-				Log::Info("buddy: {} gone", TypeName(g_type));
+				Log::Info("buddy: {} gone", TypeName(before == 0xFFFF || before == kNone ? g_type : before));
 			}
 			if ((rising | (g_flags & ~g.buddyFlags)) & proto::kBuddyRidden) {
 				Log::Info("buddy: Snake {} {}", (g.buddyFlags & proto::kBuddyRidden) ? "rides" : "got off", TypeName(g_type));
 			}
 			g_flags = g.buddyFlags;
 		}
-		if (!Puppet::Active()) {
+		if (!Puppet::Active() || g_absent.load(std::memory_order_relaxed)) {
 			return;
 		}
 		// Source: the guest's own buddy pose (protocol v2) when it has one this frame, else the
@@ -160,8 +228,8 @@ namespace phantom::er::Buddy
 	std::string Describe()
 	{
 		const auto& g = Host::Current().guest;
-		std::string s = std::format("buddy {} ({}) flags {:#x} object {:#x} ammo {}, Snake {}", TypeName(g_type == 0xFFFF ? 0 : g_type), g_type, g_flags,
-			g.buddyObjectId, g.buddyAmmo, Puppet::Riding() ? "RIDING" : "on foot");
+		std::string s = std::format("buddy {} ({}) flags {:#x} object {:#x} ammo {}, Snake {}{}", TypeName(g_type == 0xFFFF ? 0 : g_type), g_type, g_flags,
+			g.buddyObjectId, g.buddyAmmo, Puppet::Riding() ? "RIDING" : "on foot", g_absent.load() ? ", NONE OUT (draws left out)" : "");
 		if (g_estimate) {
 			s += std::format(", placed from {} ({} draws) at ({:.2f}, {:.2f}, {:.2f}) heading {:.2f}, ground offset {:.2f}", g_source, g_draws, g_pos.x,
 				g_pos.y, g_pos.z, g_heading, g_groundOffset);

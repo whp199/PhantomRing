@@ -31,6 +31,9 @@ namespace phantom::er::game
 	inline constexpr std::uint32_t kChrBaseTransparency = 0x24C;  // f32 base_transparency (1 opaque .. 0 gone: body, armour AND weapons) [V live]
 	inline constexpr std::uint32_t kChrTransparencyMod = 0x250;  // f32 base_transparency_modifier (-1 fade out, +1 in) [V-src]
 	inline constexpr std::uint32_t kChrDebugFlags = 0x538;    // u32: bit3 no hit, bit4 no attack, bit5 no move [V-src]
+	// ... bit 12 character_disabled (fromsoftware-rs ChrDebugFlags: no updates, no rendering, no physics; "set most of the time
+	// on remote characters' horses"): the Fulton's way to take an enemy out of the world without a death (er/Fulton.h) [V-src]
+	inline constexpr std::uint32_t kChrDebugDisabled = 0x1000;
 	// modules
 	inline constexpr std::uint32_t kModData = 0x0;
 	inline constexpr std::uint32_t kModPhysics = 0x68;
@@ -92,6 +95,7 @@ namespace phantom::er::game
 		Quat          orientation;
 		std::int32_t  hp{ 0 }, maxHp{ 0 };
 		bool          dead{ false };
+		bool          disabled{ false };  // ChrIns+0x538 bit 12 (kChrDebugDisabled): out of the world (fultoned)
 		float         distance{ 0 };
 	};
 
@@ -132,8 +136,12 @@ namespace phantom::er::game
 	bool          DrawLine(const Vec3& a_from, const Vec3& a_to);
 	void          SetDrawColor(float a_r, float a_g, float a_b, float a_a);
 
-	// Up to a_max characters by distance (WorldChrMan's distance-sorted list), including the player.
-	std::vector<Character> Characters(std::size_t a_max);
+	// Up to a_max characters by distance (WorldChrMan's distance-sorted list), including the player. Disabled ones (fultoned:
+	// kChrDebugDisabled) only with a_includeDisabled: nothing may shoot, target or mark a character out of the world.
+	std::vector<Character> Characters(std::size_t a_max, bool a_includeDisabled = false);
+	// A validated ChrIns (any character: vtables of the ChrIns and its data/physics modules, a controller) as a Player, for
+	// SetPosition and the like; empty if it isn't one.
+	Player ChrAsPlayer(std::uint8_t* a_chr);
 
 	// CSMenuMan UI states (0x46 bytes) or empty.
 	std::vector<std::uint8_t> UiStates();

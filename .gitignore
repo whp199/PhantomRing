@@ -19,3 +19,5 @@ __pycache__/
 *.sl2.bak
 # Maintainer notes about publishing (local only)
 docs/PUBLISHING.md
+# Real-MGSV test recordings (contain MGSV assets: never commit)
+/recordings/

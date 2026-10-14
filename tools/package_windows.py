@@ -13,6 +13,7 @@ writes dist/PhantomRing-<version>-windows.zip plus its .sha256:
       PhantomRingHost.ini
       mgsv/dinput8.dll           MGSV guest; the host copies it into MGSV's folder (er/GuestInstall.h)
       mgsv/PhantomRingGuest.ini
+      collect-logs.cmd           tools/windows/collect-logs.cmd: both logs, both inis, BUILD.txt, dxdiag -> a zip on the Desktop
       README-WINDOWS.md          docs/WINDOWS.md
       THIRD-PARTY-NOTICES.md     incl. the MinGW runtime, MinHook and HDE licences the DLLs carry
       LICENSE                    PhantomRing's own (MIT)
@@ -63,6 +64,7 @@ def entries(build: Path) -> dict:
 		"PhantomRing/PhantomRingHost.ini": ROOT / "er/PhantomRingHost.ini",
 		"PhantomRing/mgsv/dinput8.dll": build / "dinput8.dll",
 		"PhantomRing/mgsv/PhantomRingGuest.ini": ROOT / "mgsv/PhantomRingGuest.ini",
+		"PhantomRing/collect-logs.cmd": ROOT / "tools/windows/collect-logs.cmd",
 		"PhantomRing/README-WINDOWS.md": ROOT / "docs/WINDOWS.md",
 		"PhantomRing/THIRD-PARTY-NOTICES.md": ROOT / "THIRD-PARTY-NOTICES.md",
 		"PhantomRing/LICENSE": ROOT / "LICENSE",
@@ -70,7 +72,8 @@ def entries(build: Path) -> dict:
 
 
 def crlf(data: bytes) -> bytes:
-	# Notepad copes with LF these days, but older Windows tools don't: text files get CRLF.
+	# Notepad copes with LF these days, but older Windows tools don't: text files get CRLF. cmd.exe needs it (a batch file
+	# with LF line ends can mis-parse labels and jumps).
 	return data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
 
 
@@ -106,7 +109,7 @@ def main() -> int:
 	data = {}
 	for name, src in files.items():
 		raw = src if isinstance(src, bytes) else src.read_bytes()
-		data[name] = crlf(raw) if name.endswith((".ini", ".md", ".me3", ".txt")) else raw
+		data[name] = crlf(raw) if name.endswith((".ini", ".md", ".me3", ".txt", ".cmd")) else raw
 	listed = {name.removeprefix("PhantomRing/"): raw for name, raw in data.items()}
 	data["PhantomRing/BUILD.txt"] = crlf(P.build_txt("Windows", tags, listed).encode())
 

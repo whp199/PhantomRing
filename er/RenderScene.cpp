@@ -130,6 +130,7 @@ namespace phantom::er::RenderScene
 				matrixCount = list->matrixCount;
 			}
 			const auto& rc = Cfg().render;
+			const bool  buddyOut = rc.drawBuddy && !Buddy::Absent();  // dismissed in MGSV: what it still draws (leaving) stays out
 			a_s.draws.reserve(drawCount);
 			for (std::uint32_t i = 0; i < drawCount; ++i) {
 				const auto& d = recs[i];
@@ -137,7 +138,7 @@ namespace phantom::er::RenderScene
 					++g_badLists;
 					continue;
 				}
-				if ((d.owner == proto::kOwnerPlayer && !rc.drawPlayer) || (d.owner == proto::kOwnerBuddy && !rc.drawBuddy) ||
+				if ((d.owner == proto::kOwnerPlayer && !rc.drawPlayer) || (d.owner == proto::kOwnerBuddy && !buddyOut) ||
 					(d.owner >= proto::kOwnerVehicle && !rc.drawOther)) {
 					continue;
 				}

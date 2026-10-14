@@ -1,5 +1,7 @@
 #include "Skeleton.h"
 
+#include "ActorProxy.h"
+
 #include "Addresses.h"
 #include "Hook.h"
 #include "Link.h"
@@ -10,6 +12,8 @@
 #include <windows.h>
 
 #include <atomic>
+#include <algorithm>
+#include <vector>
 #include <cmath>
 #include <format>
 #include <string>
@@ -54,6 +58,9 @@ namespace phantom::guest::skeleton
 		// whistle): the nearest other skin with a full skeleton (53+ bones, not Snake's 178) within the hint's radius. After that
 		// every publication of that pair is the buddy's position and heading; a pair not published for 3 s is forgotten.
 		constexpr std::uint32_t kSnakeBones = 178;
+		// A buddy's full skeleton: D-Horse 69 bones (live); D-Walker's skins are rigid parts (it answers GetPosition anyway).
+		constexpr std::uint32_t kMinBuddyBones = 53;
+		std::atomic<std::uint32_t> g_rejectedBones{ 0 };
 		struct M16
 		{
 			float v[16];
@@ -91,9 +98,46 @@ namespace phantom::guest::skeleton
 			return count;
 		}
 
+		// `!skins` (dev): every skinned model published for a while, with its root and bone count.
+		struct Surveyed
+		{
+			std::uintptr_t driver, binding;
+			std::uint32_t  bones;
+			float          pos[3];
+			std::uint32_t  seen;
+		};
+		std::mutex                g_surveyLock;
+		std::vector<Surveyed>     g_survey;
+		std::atomic<std::uint64_t> g_surveyUntil{ 0 };
+
+		void SurveySkin(std::uintptr_t a_driver, std::uintptr_t a_binding, std::uint64_t a_now)
+		{
+			if (a_now > g_surveyUntil.load(std::memory_order_relaxed)) {
+				return;
+			}
+			M16 mm;
+			if (!Read(a_binding, mm)) {
+				return;
+			}
+			std::scoped_lock lock(g_surveyLock);
+			for (auto& e : g_survey) {
+				if (e.driver == a_driver && e.binding == a_binding) {
+					e.pos[0] = mm.v[12];
+					e.pos[1] = mm.v[13];
+					e.pos[2] = mm.v[14];
+					++e.seen;
+					return;
+				}
+			}
+			if (g_survey.size() < 512) {
+				g_survey.push_back({ a_driver, a_binding, BonesOf(a_driver), { mm.v[12], mm.v[13], mm.v[14] }, 1 });
+			}
+		}
+
 		void ObserveBuddySkin(std::uintptr_t a_driver, std::uintptr_t a_binding)
 		{
 			const auto now = ::GetTickCount64();
+			SurveySkin(a_driver, a_binding, now);
 			if (a_driver == g_buddyDriver && a_binding == g_buddyBinding) {
 				M16 mm;
 				if (!Read(a_binding, mm) || !logic::MatrixTranslation(mm.v).Finite()) {
@@ -141,8 +185,12 @@ namespace phantom::guest::skeleton
 				}
 			}
 			const auto bones = BonesOf(a_driver);
-			if (bones < 53 || bones > proto::kMaxPoseBones || bones == kSnakeBones || (g_buddyBonesLearned && bones != g_buddyBonesLearned)) {
+			if (bones < kMinBuddyBones || bones > proto::kMaxPoseBones || bones == kSnakeBones || (g_buddyBonesLearned && bones != g_buddyBonesLearned)) {
+				g_rejectedBones.store(bones, std::memory_order_relaxed);  // `!buddy`: what stood in the hint's window but didn't count
 				return;
+			}
+			if (const float at[3] = { m[12], m[13], m[14] }; proxy::NearAnyProxy(at, 1.0f)) {
+				return;  // an ActorProxy soldier ([Proxies], docs/GUEST.md 20), never the buddy
 			}
 			std::scoped_lock lock(g_buddyLock);
 			// The nearest within the hint's window; taken once the same pair stayed the nearest for 10 publications (~1/6 s).
@@ -356,14 +404,43 @@ namespace phantom::guest::skeleton
 		return a_pos.Finite() && std::isfinite(a_yaw);
 	}
 
+	void StartSurvey(std::uint64_t a_ms)
+	{
+		std::scoped_lock lock(g_surveyLock);
+		g_survey.clear();
+		g_surveyUntil.store(::GetTickCount64() + a_ms);
+	}
+
+	std::string DescribeSurvey(const logic::Vec3& a_at, float a_radius)
+	{
+		std::scoped_lock lock(g_surveyLock);
+		std::vector<std::pair<float, const Surveyed*>> hits;
+		for (const auto& e : g_survey) {
+			const float dx = e.pos[0] - a_at.x, dz = e.pos[2] - a_at.z;
+			const float d = std::sqrt(dx * dx + dz * dz);
+			if (d <= a_radius) {
+				hits.emplace_back(d, &e);
+			}
+		}
+		std::sort(hits.begin(), hits.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		std::string out = std::format("{} skins published ({} within {:.0f} m of {:.1f},{:.1f},{:.1f})\n", g_survey.size(), hits.size(), a_radius, a_at.x, a_at.y,
+			a_at.z);
+		for (const auto& [d, e] : hits) {
+			out += std::format("  driver {:#x} binding {:#x} {} bones at {:.2f},{:.2f},{:.2f} ({:.1f} m, {} times)\n", e->driver, e->binding, e->bones, e->pos[0],
+				e->pos[1], e->pos[2], d, e->seen);
+		}
+		return out;
+	}
+
 	std::string DescribeBuddy()
 	{
 		std::scoped_lock lock(g_buddyLock);
 		const auto now = ::GetTickCount64();
 		if (!g_buddyDriver) {
-			return std::format("buddy skin: not known ({} learned so far; {})", g_buddyLearns,
+			return std::format("buddy skin: not known ({} learned so far; {}; last skin in a hint's window not taken: {} bones)", g_buddyLearns,
 				g_hint.untilMs > now ? std::format("learning near {:.1f},{:.1f},{:.1f} r {:.1f}", g_hint.pos[0], g_hint.pos[1], g_hint.pos[2], g_hint.radius)
-				                     : std::string("no hint"));
+				                     : std::string("no hint"),
+				g_rejectedBones.load());
 		}
 		const auto p = logic::MatrixTranslation(g_buddyRoot);
 		return std::format("buddy skin: driver {:#x} ({} bones) at {:.2f},{:.2f},{:.2f} yaw {:.1f}, {} ms ago, learned {} s ago ({} learns)", g_buddyDriver,

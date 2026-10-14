@@ -1,9 +1,12 @@
 #include "Capture.h"
 
+#include "ActorProxy.h"
+
 #include "CaptureAssets.h"
 #include "CaptureMesh.h"
 #include "CaptureRing.h"
 #include "Config.h"
+#include "FultonAnchor.h"
 #include "D3D11Hooks.h"
 #include "Hud.h"
 #include "Ini.h"
@@ -116,7 +119,7 @@ namespace phantom::guest::capture
 		};
 		std::unordered_map<std::uint64_t, MeshEntry>   g_meshes;    // by MeshSource::Hash (session-local identity)
 		std::unordered_map<ID3D11Texture2D*, TexEntry> g_textures;  // by the game's texture (AddRef'd by assets)
-		std::atomic<std::uint64_t>                      g_published{ 0 }, g_lastDraws{ 0 }, g_skipped{ 0 }, g_meshesSent{ 0 }, g_texturesSent{ 0 };
+		std::atomic<std::uint64_t>                      g_published{ 0 }, g_lastDraws{ 0 }, g_skipped{ 0 }, g_meshesSent{ 0 }, g_texturesSent{ 0 }, g_proxyDrops{ 0 };
 		std::uint64_t                                   g_presentCount{ 0 };
 		std::vector<std::uint8_t>                       g_list;
 
@@ -181,6 +184,12 @@ namespace phantom::guest::capture
 				owner = proto::kOwnerBuddy;
 			}
 			if (owner == ~0u) {
+				return;
+			}
+			// ActorProxy ([Proxies]): a pool soldier standing in for an Elden Ring enemy near Snake or the buddy is never theirs.
+			// The Fulton anchor's sleeping soldier lies right beside Snake (FultonAnchor.cpp): never his either.
+			if (const float at[3] = { world[3], world[7], world[11] }; proxy::ExcludesDraw(at, root) || fulton::ExcludesDraw(at, root)) {
+				g_proxyDrops.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
 			Captured c;
@@ -664,8 +673,9 @@ namespace phantom::guest::capture
 			return std::format("capture: describing the next {} frame(s) into PhantomRingCapture.txt (present hooked: {})", n, d3d::PresentHooked());
 		}
 		const auto st = d3d::Counters();
-		return std::format("capture: lists published {} (last {} draws), meshes sent {} ({} known), textures sent {} ({} known), skipped {}, ring pending {} KB; {}\n",
-			g_published.load(), g_lastDraws.load(), g_meshesSent.load(), g_meshes.size(), g_texturesSent.load(), g_textures.size(), g_skipped.load(), ring::Pending() / 1024,
+		return std::format("capture: lists published {} (last {} draws), meshes sent {} ({} known), textures sent {} ({} known), skipped {}, proxy draws dropped {}, ring pending {} KB; {}\n",
+			g_published.load(), g_lastDraws.load(), g_meshesSent.load(), g_meshes.size(), g_texturesSent.load(), g_textures.size(), g_skipped.load(), g_proxyDrops.load(),
+			ring::Pending() / 1024,
 			assets::Describe()) +
 		hud::Describe() + "\n" +
 		std::format("capture: device {} present hooked {} presents {} draws {} (deferred {}) cbMaps {} cbUpdates {} executes {} finishes {} contexts {} layouts {} vs {} ps {}",

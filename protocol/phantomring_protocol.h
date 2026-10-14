@@ -28,13 +28,14 @@
 namespace phantom::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x47524850;  // "PHRG"
-	inline constexpr std::uint32_t kVersion = 11;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
+	inline constexpr std::uint32_t kVersion = 12;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
 	                                              // v5: kGEvThrow, kGEvPlaced, kGEvPlacedGone, kHEvDetonate;
 	                                              // v6: GuestState aimThrow* (0xA8..0xC4) + kGuestThrowAim; v7: kGEvBuddyOrder;
 	                                              // v8: kGuestInBox, kGuestBoxPoster, kGEvFire pad[1] = MGSV damage share;
 	                                              // v9: kPlacedAgain (kGEvPlaced pad[0]: an announcement repeated);
 	                                              // v10: kGuestNvg, kHEvRested, kHEvTarnished;
-	                                              // v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100)
+	                                              // v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100);
+	                                              // v12: kGEvFulton
 	inline constexpr wchar_t       kDefaultMapping[] = L"file:Z:\\dev\\shm\\phantomring_v1";
 
 	// ---- region offsets ---------------------------------------------------------------------
@@ -306,6 +307,10 @@ namespace phantom::proto
 		// its own way (a voice line, its HUD's log); the host shows it plainly too, so a player can tell an order was given.
 		kGEvBuddyOrder = 11,   // a = MGSV buddy command (20 whistle D-Walker, 21 Normal, 24 Stealth, 25 Search, 26 Intercept Mode,
 		                       // others: other buddies; docs/GUEST.md 18.3), b = MGSV buddy type (BuddyType: 4 = D-Walker)
+		kGEvFulton = 12,       // (v12) Snake fultoned the MGSV proxy soldier that stood in for an Elden Ring character (ActorProxy):
+		                       // pad[0] | pad[1] << 32 = that character's ActorRecord handle, v0 = the proxy's position (MGSV world),
+		                       // a = 1 the balloon went up (MGSV's own fulton succeeded), 0 = it failed/was cancelled; the host
+		                       // removes that enemy from Elden Ring's world (no death drop) and shows the balloon
 	};
 
 	// (v9) kGEvPlaced pad[0] bit: this one was announced before (to this host or an earlier one) and is announced again (the

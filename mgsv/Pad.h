@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 
 namespace phantom::guest::pad
 {
@@ -42,4 +43,6 @@ namespace phantom::guest::pad
 	[[nodiscard]] bool SequenceRunning();
 
 	[[nodiscard]] std::uint64_t Polls();
+	// `!pad` / `!menu`: the iDroid requests ([Menu] IDroidRetryMs) so far.
+	std::string DescribeIDroid();
 }

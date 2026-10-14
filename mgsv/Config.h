@@ -164,6 +164,11 @@ namespace phantom::guest
 		// [Menu]
 		bool safePauseMenu{ true };  // MGSV's pause menu keeps only Controls & Manual and Options (no checkpoint/ACC/title)
 		bool blockMissions{ true };  // the iDroid can't start a mission or leave the area (the sandbox would be gone)
+		bool buddyDismiss{ true };   // ...but its Buddy Support > DISMISS stays: the guest follows the player's choice (no buddy)
+		// The iDroid hold (Start) the host sends: MGSV ignores Start while Snake aims, uses the binoculars or is in a dive/CQC/climb;
+		// IDroidRetryMs > 0 keeps such a request and presses Start again (the rest of the pad neutral for that moment) until the
+		// iDroid opens or this many ms passed. 0 = MGSV sees the host's Start only.
+		int  idroidRetryMs{ 3000 };
 
 		// [Loadout] TppEquip.EQP_* names (empty = the save's own). Weapons go into the sortie loadout before the sandbox
 		// mission loads (MGSV loads their models); Support is given with Player.ChangeEquip at the setup.
@@ -178,6 +183,31 @@ namespace phantom::guest
 		bool capture{ true };  // observe MGSV's D3D11 device and publish Snake's draws (phase 2)
 		bool hud{ true };      // MGSV's own HUD as a transparent layer (Hud.cpp; needs capture)
 		int  hudEvery{ 1 };    // publish the HUD layer every Nth frame
+
+		// [Proxies] ActorProxy v0 (ActorProxy.h, docs/GUEST.md §20). UNVERIFIED live; off by default.
+		bool  proxies{ false };              // the sandbox's disabled soldiers stand in for the nearest hostile Elden Ring characters
+		// [Fulton] (FultonAnchor.cpp, docs/GUEST.md 20.4): MGSV's own Fulton on a sleeping Elden Ring enemy (ActorTable kActorAsleep).
+		bool  fultonAnchor{ true };          // [Fulton] Enabled: MGSV's Fulton on sleeping Elden Ring enemies
+		// [Fulton] Method: proxy = an asleep proxy soldier is moved to the enemy (ActorProxy v1 for sleepers only, also with [Proxies]
+		// off); anchor = a soldier near the sandbox is put to sleep and Snake placed beside him as by that enemy (20.4)
+		std::string fultonMethod{ "proxy" };
+		[[nodiscard]] bool FultonProxies() const { return fultonAnchor && fultonMethod == "proxy"; }
+		// ActorProxy runs: for every hostile ([Proxies] Enabled) or only for sleeping ones ([Fulton] Method = proxy)
+		[[nodiscard]] bool ProxiesRun() const { return proxies || FultonProxies(); }
+		float fultonReach{ 3.0f };           // the enemy this near Snake (m, horizontal) starts it
+		float fultonLeave{ 5.0f };           // Snake this far from the enemy (m) ends it (the soldier back, Snake back to the sandbox)
+		float fultonCandidates{ 90.0f };     // anchor soldiers: standing within this of the sandbox centre (m) at its height
+		float fultonRise{ 8.0f };            // the soldier this far above where he lay (m): MGSV's balloon took him -> kGEvFulton (a balloon
+		                                     // that hits a roof drops him again after ~3-4 m: live, under the terminal's overhang)
+		int   proxyMax{ 4 };                 // soldiers used as proxies; every other soldier and hostage is parked
+		float proxyMaxDistance{ 60.0f };     // m from Snake (the host publishes characters within its [Actors] radius, 60)
+		float proxySnakeClearance{ 3.5f };   // nearer to Snake's root than this: parked (Capture takes draws within 2.5 m as his)
+		float proxyBuddyClearance{ 5.5f };   // nearer to the buddy than this: parked (Capture takes draws within 4 m as the buddy's)
+		float proxyParkDepth{ 100.0f };      // parked soldiers wait this far below the sandbox centre
+		int   proxyTableLagMs{ 33 };         // the ActorTable's age when it arrives (treadmill warps inside it are taken out)
+		bool  proxyAutoAim{ true };          // MGSV's Auto-Aim Correction on while every pool soldier is placed (saves guarded)
+		bool  proxyKeepMarkers{ true };      // no periodic TppMarker.DisableAll while proxies run (marking them is the point)
+		float proxyCaptureRadius{ 1.5f };    // Capture drops G-buffer draws this near a proxy (and nearer to it than to Snake)
 
 		// [Lua]
 		std::wstring luaOverride{ L"phantomring.lua" };

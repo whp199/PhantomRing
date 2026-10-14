@@ -1,5 +1,6 @@
 #include "Chord.h"
 
+#include <algorithm>
 #include <initializer_list>
 
 namespace phantom::er
@@ -14,8 +15,10 @@ namespace phantom::er
 		const bool              idroid = a_in.mode == Mode::kSnake && a_p.viewHoldMs > 0;  // else View works like Start
 
 		// Presses and releases.
+		bool startPressed = false;
 		auto edge = [&](Button& b, bool a_down) {
 			if (a_down && !b.down) {
+				startPressed = startPressed || &b == &start_;
 				const auto tap = b.tapUntil;
 				b = Button{};
 				b.tapUntil = tap;
@@ -50,14 +53,39 @@ namespace phantom::er
 			}
 		}
 
-		// The chord: both down, neither passed on yet (nor View's iDroid hold done).
-		if (armed && chordOn && start_.undecided() && view_.undecided()) {
+		// The chord: both down, neither passed on yet. Or (player report 2026-10-14: "the chord failed when View went down a bit
+		// before Start") View's iDroid hold already went to MGSV and Start came within chord_window_ms of View: MGSV opens its
+		// iDroid on that Start at once (live: 34 ms after the hold), and the player's Start would then be MGSV's, closing it
+		// again or not. Now the chord wins: the hold's Start is cut, the real Start stays out of MGSV's pad, and MGSV's menu, if
+		// it opened, gets a Start tap that closes it (below).
+		const bool lateStart = startPressed && view_.down && view_.tracked && view_.toGuest && (a_in.mode == Mode::kSnake || a_in.mode == Mode::kGuestMenu) &&
+		                       start_.downAt >= view_.downAt && start_.downAt - view_.downAt <= static_cast<std::uint64_t>(std::max(a_p.chordWindowMs, 0));
+		if (chordOn && ((armed && start_.undecided() && view_.undecided()) || lateStart)) {
+			if (view_.toGuest) {
+				view_.toGuest = false;
+				guestStartUntil_ = 0;
+				cancelAt_ = now;
+				closeTaps_ = 0;
+				lastCloseAt_ = 0;
+				o.idroidCancelled = true;
+			}
+			start_.tracked = view_.tracked = true;
 			start_.consumed = view_.consumed = true;
 			start_.chord = view_.chord = true;
 			chordSince_ = now;
 			fired_ = false;
 		}
-		if (armed && start_.down && view_.down && start_.chord && view_.chord && !fired_ &&
+		// MGSV's menu, opened by the hold the chord cut: a Start tap closes it (MGSV: Start in its menu closes it; README), sent
+		// kCloseGapMs after the cut so that MGSV sees the hold's Start released first, and once more if it is still open
+		// kCloseRetryMs later. The chord still counts meanwhile.
+		const bool closing = a_in.mode == Mode::kGuestMenu && cancelAt_ != 0 && now - cancelAt_ <= kCloseWatchMs;
+		if (closing && closeTaps_ < 2 && now >= cancelAt_ + kCloseGapMs && (closeTaps_ == 0 || now >= lastCloseAt_ + kCloseRetryMs)) {
+			++closeTaps_;
+			lastCloseAt_ = now;
+			guestCloseUntil_ = now + kTapMs;
+			o.guestMenuClosed = true;
+		}
+		if ((armed || closing) && start_.down && view_.down && start_.chord && view_.chord && !fired_ &&
 			now - chordSince_ >= static_cast<std::uint64_t>(a_p.chordMs)) {
 			fired_ = true;
 			o.chord = true;
@@ -87,7 +115,11 @@ namespace phantom::er
 			o.erStart = seen(start_);
 			o.erView = seen(view_);
 		}
-		o.guestStart = a_in.mode == Mode::kSnake && now < guestStartUntil_;
+		o.guestStart = (a_in.mode == Mode::kSnake && now < guestStartUntil_) || (a_in.mode == Mode::kGuestMenu && now < guestCloseUntil_);
+		// The real Start/View the chord holds stay out of MGSV's pad too, also in its own menu (a Start pressed in MGSV's menu
+		// is MGSV's: it closes the iDroid).
+		o.guestMaskStart = start_.down && start_.chord;
+		o.guestMaskView = view_.down && view_.chord;
 		return o;
 	}
 }

@@ -4,6 +4,9 @@
 // mission -> load the sandbox -> setup -> D-Walker -> centre -> ready), the dev console over a real
 // mapping, and the phantomring.lua override. Built only when PHANTOM_LUA51_SRC points at Lua 5.1.5's
 // src/ (target check_guest).
+#include "ActorProxy.h"
+#include "FultonAnchor.h"
+#include "Menu.h"
 #include "Config.h"
 #include "Ini.h"
 #include "Link.h"
@@ -92,6 +95,27 @@ namespace phantom::guest::hidden
 namespace phantom::guest::saves
 {
 	bool SteamGuarded() { return true; }
+}
+// ActorProxy's game glue (mgsv/ActorProxyGame.cpp, not linked here; [Proxies] is off in this test).
+namespace phantom::guest::proxy
+{
+	void SetPool(const plan::Pool&) {}
+	bool AutoAimWanted(bool) { return false; }
+	bool AllPlaced() { return false; }
+	bool Active() { return false; }
+	bool TakePoolRequest() { return false; }
+	void LuaStep(std::uint64_t, const std::function<std::string(const std::string&)>&) {}
+	std::string Fulton(std::uint64_t, bool, const char*) { return {}; }
+}
+// The Fulton anchor (mgsv/FultonAnchor.cpp) and MGSV's menus (mgsv/Menu.cpp, read by Pad.cpp's iDroid request): not linked here.
+namespace phantom::guest::fulton
+{
+	void LuaStep(std::uint64_t, const std::function<std::string(const std::string&)>&) {}
+	void Reset(const char*) {}
+}
+namespace phantom::guest::menu
+{
+	bool Open() { return false; }
 }
 
 static bool MockLog(const char* a_entry)

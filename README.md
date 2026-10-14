@@ -173,7 +173,7 @@ your controller now plays Venom Snake. Use an Xbox-style pad.
 | A | tap: crouch / stand up, hold: lie down |
 | X | dive |
 | B | reload |
-| Y | MGSV's action (next to D-Walker: get on; riding: hold to get off; pick up a supply box), **or Elden Ring's** whenever Elden Ring shows its own prompt ("Y: Rest at site of grace", "Y: Retrieve lost runes", items) |
+| Y | MGSV's action (next to D-Walker: get on; riding: hold to get off; pick up a supply box; next to a sleeping enemy: hold for MGSV's Fulton), **or Elden Ring's** whenever Elden Ring shows its own prompt ("Y: Rest at site of grace", "Y: Retrieve lost runes", items) |
 | LT / RT | aim / fire; RT without LT, standing, next to an enemy = CQC strike |
 | D-pad | tap up: primary weapons (by default an SVG-76 assault rifle at the hip and an FB MR R-LAUNCHER rocket launcher on the back: hold up and push the right stick to switch), down: handgun (a WU S.PISTOL with tranquilizer darts), right: support items (grenades, mines), left: items -- hold it and push the right stick to pick one (the cardboard box, the night-vision goggles), a quick tap uses the one picked |
 | RB (while aiming) | first person / down the scope: you aim with the gun's own sights (MGSV shows no reticle there) |
@@ -181,7 +181,7 @@ your controller now plays Venom Snake. Use an Xbox-style pad.
 | **Start** | **Elden Ring's** menu (equipment, items, system, quit) |
 | **View, tapped** | **Elden Ring's** map (and fast travel from it) |
 | **View, held a moment (0.4 s)** | **MGSV's iDroid** (supply drops, buddy support, Mother Base); while it is open MGSV has the whole pad; Start closes it |
-| **View + Start, held together 1 s** | **Tarnished mode**: you play the Tarnished (flasks, spirit ashes, Torrent, jumps, answering NPCs); the same again gives Snake back, where the Tarnished stands. Neither button opens a menu or the iDroid |
+| **View + Start, held together 1 s** | **Tarnished mode**: you play the Tarnished (flasks, spirit ashes, Torrent, jumps, answering NPCs); the same again gives Snake back, where the Tarnished stands. Neither button opens a menu. Either may go down first: Start up to 0.7 s after View still makes the chord (MGSV's iDroid may flash open for a moment and closes by itself) |
 
 **Tarnished mode.** Everything Snake can't do yet, the Tarnished does: hold **View + Start together for a second** and the
 corner says "Tarnished mode -- View+Start to return to Snake". He shows with his weapon and Elden Ring has the whole pad: X
@@ -209,14 +209,27 @@ few times you hold LB it also shows how, and it tells you when you let go withou
   flamethrower; hold Y to get off. If D-Walker is ever destroyed in MGSV's world, PhantomRing has MGSV bring it back
   after ~10 s (not yet seen live).
 
+**Changing or dismissing the buddy** (MGSV's own menu): hold View for the iDroid, RB to **Missions** > **Buddy Support**: pick
+**D-Horse**, **D-Dog** or **D-Walker** and confirm the drop point (A; GMP is spent in memory only, MGSV never saves), or **Dismiss**
+the one that is out. MGSV sends the old one away (a dismissed D-Horse leaves under a Fulton balloon, in Elden Ring's sky too) and
+the new one arrives in 10-30 s; the corner says "Buddy: D-Dog is out" / "D-Walker dismissed -- no buddy now". With no buddy out
+nothing is drawn or placed. D-Dog follows Snake and marks Elden Ring's enemies ("D-Dog: Found enemy"); Quiet is untested. The next
+launch deploys the ini's buddy again (`[Buddy] Type`).
+
 **D-Horse instead of D-Walker** (optional): set `[Buddy] Type = horse` in `PhantomRingGuest.ini` (in MGSV's folder) before
-`tools/pr launch`, or switch while you play: MGSV's iDroid (hold View) > Missions > Buddy Support > D-Horse ("Request deployment",
-GMP spent in memory only, MGSV never saves), or `tools/pr lua '!buddy horse'` (`!buddy walker` back). The horse waits where it
+`tools/pr launch`, or deploy it from the iDroid as above, or `tools/pr lua '!buddy horse'` (`!buddy walker` back). The horse waits where it
 is; hold LB and pick **Whistle** and it gallops over (PhantomRing also whistles it when it is more than 15 m away). Y next to
 it mounts, the left stick walks it, **tap X** to canter and gallop (13-17 m/s), Y gets off. It is drawn under Snake and
 stands on Elden Ring's ground; walls and ruins stop it as they stop Snake, and galloping off a ledge hurts like a fall. The
 ride is limited by MGSV's own world (Known issues), so ride it from point to point (100 m at a time is fine), not for
 kilometres. The next launch deploys the ini's buddy again.
+
+**Fulton.** A sleeping Elden Ring enemy can be sent to Mother Base with MGSV's own Fulton: put him to sleep (two tranquilizer
+darts in the body, or sleep gas), walk right up to him -- MGSV's Fulton prompt shows (a balloon, "100%", your balloons left) --
+and **hold Y** for about two seconds. Snake attaches the balloon; a few seconds later Elden Ring lifts the enemy away under a
+balloon, "Fulton: the enemy is on its way to Mother Base", and you get the runes he would have dropped. He stays gone until you
+rest at a grace (as if killed, without a death or a drop). Be quick: Elden Ring's sleep lasts about 50 s, and an enemy that wakes
+can't be fultoned. Not for bosses.
 
 **Guns.** Each round does what it does in MGSV: an assault-rifle round takes a fifth of a soldier's life (five body hits kill
 a Limgrave soldier, so does one headshot), a rocket kills the soldier it hits. Rockets fly visibly (a dark body with a bright trail) and blow up
@@ -292,6 +305,10 @@ A boss counts as many soldiers: one 30-round SVG-76 magazine takes about 14.5% o
 The full list, with measurements: [docs/STATUS.md](docs/STATUS.md#known-issues).
 
 - Elden Ring's grass is drawn over Snake's models even where it stands behind them.
+- Snake can't go under anything lower than him: standing he stops at the edge of a staircase's underside or a table, crouched
+  (A) he gets further; prone further still. Pushed into a corner for a few seconds he is put back where he stood free.
+- D-Dog's coat (and D-Walker when it is right next to the camera) is sometimes drawn in false colours (orange, green, magenta).
+- Fulton: Elden Ring's balloon goes up ~5 s after you let go of Y (MGSV's own balloon lifts its stand-in first).
 - D-Walker's footsteps are loud, and it follows Snake 2-3 s late.
 - MGSV's own effects (explosions, muzzle flashes, smoke, flames) are replaced by Elden Ring's pot effects
   and Dragonfire flames; muzzle flashes are missing. Grenades and rockets in flight are simple shapes.
@@ -303,7 +320,7 @@ The full list, with measurements: [docs/STATUS.md](docs/STATUS.md#known-issues).
 - Snake's life can tick up by up to ~2% for a moment after a hit before MGSV's recovery curve holds it back again.
 - D-Horse can't be moved by PhantomRing inside MGSV's world, so while Snake rides it MGSV's own map limits the ride (the
   airport's terminal ~40 m one way, open ground ~250 m another); and after getting off far away, the horse jumps back to
-  Snake in Elden Ring and gallops in. D-Dog and Quiet are untested.
+  Snake in Elden Ring and gallops in. Quiet is untested.
 - At a ladder's top, walking into the hole drops Snake down the shaft (face the hole and press Y on "Descend" instead).
 - `[Puppet] motion = root_motion` (Elden Ring's own movement for the hidden Tarnished) is there to try
   (`tools/pr er "puppet motion root_motion"`); `kinematic` stays the default: neither is clearly better yet.
@@ -390,7 +407,7 @@ run the offline tests above first, and keep to the project's rules:
 | 3 | Fight (shots/CQC/stun hit Elden Ring enemies; grenades, mines, tranq darts; their hits drain Snake's life; death/respawn) | done, live (C4 detonation open) |
 | 4 | D-Walker (deployed, following, drawn, rideable, flamethrower) | done, live |
 | 5 | Polish: MGSV HUD layer, Elden Ring lighting, interaction prompts, audio (done); keyboard and mouse | mostly done |
-| 6 | MGSV collision from Elden Ring (vault, climb, cover), proxies for native MGSV combat | planned |
+| 6 | MGSV collision from Elden Ring (vault, climb, cover), proxies for native MGSV combat | Fulton of sleeping enemies done (through MGSV's own Fulton); full proxies experimental, off |
 | 7 | Windows players ([docs/WINDOWS.md](docs/WINDOWS.md)) | built, tested under Wine; not yet run on Windows |
 | 8 | Seamless Co-op | planned |
 

@@ -303,6 +303,62 @@ namespace phantom::guest::logic
 		std::uint64_t last_{ 0 };
 	};
 
+	// The iDroid request (Pad.cpp, [Menu] IDroidRetryMs; docs/GUEST.md 18.6): the host sends MGSV's Start only to open the iDroid
+	// (View held). MGSV ignores Start while Snake aims (LT), looks through the binoculars (RB) or is inside an action (a dive,
+	// live 2026-10-14), and opens the iDroid ~50 ms after a Start it accepts. A Start that hasn't opened it after kAcceptMs is
+	// kept: the pad goes neutral (that ends the aim / binoculars) and Start is pressed again every cycle until the iDroid
+	// opens or a_retryMs pass since the first press. A new request needs Start released first.
+	class IDroidRequest
+	{
+	public:
+		enum class Pad
+		{
+			kPass,          // the host's pad as it is
+			kNeutral,       // nothing pressed (Start up between two presses)
+			kNeutralStart,  // nothing but Start
+		};
+		enum class Event
+		{
+			kNone,
+			kArmed,    // a Start went down while the iDroid could open
+			kRetry,    // MGSV didn't take it: pressed again (Retries() so far)
+			kOpened,   // the iDroid (or a popup) opened: OpenedAfterMs()
+			kExpired,  // still shut after a_retryMs: given up
+			kDropped,  // not eligible any more (Snake not playing, the host gone)
+			kCut,      // the host's Start went up before kCutMs: it cut its iDroid hold (the View+Start chord) -- no retries
+		};
+		static constexpr std::uint64_t kAcceptMs = 250;   // a Start MGSV takes opens the iDroid within ~70 ms (live)
+		static constexpr std::uint64_t kReleaseMs = 120;  // Start up between presses (MGSV wants a new press)
+		static constexpr std::uint64_t kPressMs = 200;
+		// The host's iDroid request is Start held [Input] guest_idroid_start_ms (1200); one that goes up sooner, before the iDroid
+		// opened, was cut for the View+Start chord (er/Chord.h): pressing Start again then opened the iDroid as Tarnished mode
+		// began (an aiming Snake, ER agent 2026-10-14). Assumes guest_idroid_start_ms >= this.
+		static constexpr std::uint64_t kCutMs = 600;
+
+		// One poll of MGSV's pad: a_hostStart = the host's Start, a_menu = an MGSV menu/popup is open, a_eligible = Snake plays
+		// with the host's pad (not dead, parked, in a cutscene or booting). Returns what MGSV should see; a_event what happened.
+		Pad Update(std::uint64_t a_nowMs, bool a_hostStart, bool a_menu, bool a_eligible, std::uint64_t a_retryMs, Event& a_event);
+		[[nodiscard]] bool Active() const { return phase_ != Phase::kIdle && phase_ != Phase::kWaitRelease; }
+		[[nodiscard]] int Retries() const { return retries_; }
+		[[nodiscard]] std::uint64_t OpenedAfterMs() const { return openedAfter_; }
+
+	private:
+		enum class Phase
+		{
+			kIdle,
+			kFirst,        // the host's own press: waiting kAcceptMs for the iDroid
+			kRelease,      // our retry: Start up
+			kPress,        // our retry: Start down
+			kWait,         // after our press: waiting kAcceptMs
+			kWaitRelease,  // done or given up: wait for the host's Start to go up before arming again
+		};
+		Phase         phase_{ Phase::kIdle };
+		std::uint64_t start_{ 0 };   // the first press
+		std::uint64_t since_{ 0 };   // the current phase's start
+		int           retries_{ 0 };
+		std::uint64_t openedAfter_{ 0 };
+	};
+
 	// The refill's magazine sizes (Ammo.cpp): PR.Magazines() answers "equip/magazine/sub,equip/magazine/sub,equip/magazine/sub"
 	// for weapon slots 0-2. False on anything else.
 	struct SlotMagazine

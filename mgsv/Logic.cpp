@@ -470,4 +470,78 @@ namespace phantom::guest::logic
 		}
 		return a_text.empty();
 	}
+
+	IDroidRequest::Pad IDroidRequest::Update(std::uint64_t a_nowMs, bool a_hostStart, bool a_menu, bool a_eligible, std::uint64_t a_retryMs, Event& a_event)
+	{
+		a_event = Event::kNone;
+		const auto enter = [&](Phase a_phase) {
+			phase_ = a_phase;
+			since_ = a_nowMs;
+		};
+		if (phase_ == Phase::kWaitRelease) {
+			if (!a_hostStart) {
+				enter(Phase::kIdle);
+			}
+			return Pad::kPass;
+		}
+		if (phase_ == Phase::kIdle) {
+			if (a_hostStart && a_eligible && !a_menu && a_retryMs > 0) {
+				start_ = a_nowMs;
+				retries_ = 0;
+				enter(Phase::kFirst);
+				a_event = Event::kArmed;
+			} else if (a_hostStart) {
+				enter(Phase::kWaitRelease);  // pressed in a menu or while it can't open: not a request
+			}
+			return Pad::kPass;
+		}
+		// A request is under way.
+		if (a_menu) {
+			openedAfter_ = a_nowMs - start_;
+			enter(Phase::kWaitRelease);
+			a_event = Event::kOpened;
+			return Pad::kPass;
+		}
+		if (!a_eligible) {
+			enter(Phase::kWaitRelease);
+			a_event = Event::kDropped;
+			return Pad::kPass;
+		}
+		if (!a_hostStart && a_nowMs - start_ < kCutMs) {
+			enter(Phase::kWaitRelease);
+			a_event = Event::kCut;
+			return Pad::kPass;
+		}
+		const auto in = a_nowMs - since_;
+		switch (phase_) {
+		case Phase::kFirst:
+		case Phase::kWait:
+			if (in < kAcceptMs) {
+				return phase_ == Phase::kFirst ? Pad::kPass : Pad::kNeutral;
+			}
+			if (a_nowMs - start_ + kReleaseMs + kPressMs > a_retryMs) {
+				enter(Phase::kWaitRelease);
+				a_event = Event::kExpired;
+				return Pad::kPass;
+			}
+			enter(Phase::kRelease);
+			return Pad::kNeutral;
+		case Phase::kRelease:
+			if (in < kReleaseMs) {
+				return Pad::kNeutral;
+			}
+			++retries_;
+			enter(Phase::kPress);
+			a_event = Event::kRetry;
+			return Pad::kNeutralStart;
+		case Phase::kPress:
+			if (in < kPressMs) {
+				return Pad::kNeutralStart;
+			}
+			enter(Phase::kWait);
+			return Pad::kNeutral;
+		default:
+			return Pad::kPass;
+		}
+	}
 }

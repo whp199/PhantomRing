@@ -2,6 +2,7 @@
 
 #include "BuddyOrders.h"
 #include "Combat.h"
+#include "Fulton.h"
 #include "Host.h"
 #include "InputBridge.h"
 #include "Link.h"
@@ -58,6 +59,9 @@ namespace phantom::er::Events
 			case proto::kGEvBuddyOrder:
 				BuddyOrders::OnOrder(e);
 				break;
+			case proto::kGEvFulton:
+				Fulton::OnEvent(a_f, e);
+				break;
 			case proto::kGEvLog:
 				Log::Info("guest message {}", e.a);
 				break;
@@ -71,6 +75,7 @@ namespace phantom::er::Events
 		Rounds::Tick(a_f);
 		Stealth::Tick(a_f);
 		Mines::Tick(a_f);
+		Fulton::Tick(a_f);
 	}
 
 	unsigned long long Count() { return g_count; }

@@ -28,4 +28,7 @@ namespace phantom::guest::skeleton
 	// Its model root's position and heading from the last publication, if not older than a_maxAgeMs.
 	bool BuddyPose(logic::Vec3& a_pos, float& a_yaw, std::uint64_t a_maxAgeMs = 500);
 	std::string DescribeBuddy();
+	// `!skins [radius] [ms]` (dev): note every skinned model SkinPublish sees for a_ms, then list those within a_radius (m) of a_at.
+	void        StartSurvey(std::uint64_t a_ms);
+	std::string DescribeSurvey(const logic::Vec3& a_at, float a_radius);
 }

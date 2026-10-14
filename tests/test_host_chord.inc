@@ -11,8 +11,10 @@ namespace
 		PadGate         gate;
 		PadGate::Params params;
 		std::uint64_t   t{ 1000 };
-		int             presses{ 0 }, chords{ 0 }, toGuest{ 0 };
-		bool            erStart{ false }, erView{ false }, guestStart{ false };
+		int             presses{ 0 }, chords{ 0 }, toGuest{ 0 }, cancels{ 0 }, closes{ 0 };
+		bool            erStart{ false }, erView{ false }, guestStart{ false }, maskStart{ false };
+		std::uint64_t   guestStartMs{ 0 };  // how long MGSV's pad carried the synthesized Start since Clear()
+		std::uint64_t   guestRealStartMs{ 0 };  // ...and the real Start, unmasked, in MGSV's menu (MGSV takes it there)
 		bool            sawErStart{ false }, sawErView{ false }, sawGuestStart{ false };
 		std::uint64_t   firstErStart{ 0 };  // when Elden Ring first saw Start since Clear()
 
@@ -28,6 +30,11 @@ namespace
 				presses += o.menuPresses;
 				chords += o.chord ? 1 : 0;
 				toGuest += o.viewToGuest ? 1 : 0;
+				cancels += o.idroidCancelled ? 1 : 0;
+				closes += o.guestMenuClosed ? 1 : 0;
+				maskStart = o.guestMaskStart;
+				guestStartMs += o.guestStart ? 5 : 0;
+				guestRealStartMs += a_start && a_mode == PadGate::Mode::kGuestMenu && !o.guestMaskStart ? 5 : 0;
 				erStart = o.erStart;
 				erView = o.erView;
 				guestStart = o.guestStart;
@@ -42,7 +49,8 @@ namespace
 		}
 		void Clear()
 		{
-			presses = chords = toGuest = 0;
+			presses = chords = toGuest = cancels = closes = 0;
+			guestStartMs = guestRealStartMs = 0;
 			sawErStart = sawErView = sawGuestStart = false;
 			firstErStart = 0;
 		}
@@ -59,11 +67,11 @@ static void TestChord()
 		r.Step(false, false, M::kSnake, 300);
 		CHECK(r.sawErStart && r.presses == 1 && r.chords == 0 && !r.erStart);  // a 120 ms press, then released
 	}
-	{  // Start held: Elden Ring gets it 150 ms after it went down, for as long as it is held
+	{  // Start held: Elden Ring gets it 400 ms after it went down (room for the chord), for as long as it is held
 		GateRun r;
 		const auto down = r.t;
 		r.Step(true, false, M::kSnake, 600);
-		CHECK(r.erStart && r.presses == 1 && r.firstErStart >= down + 150 && r.firstErStart <= down + 160);
+		CHECK(r.erStart && r.presses == 1 && r.firstErStart >= down + 400 && r.firstErStart <= down + 410);
 		r.Step(false, false, M::kSnake, 200);
 		CHECK(!r.erStart && r.presses == 1);
 	}
@@ -105,9 +113,95 @@ static void TestChord()
 		r.Step(false, false, M::kSnake, 300);
 		CHECK(!r.sawErStart && !r.sawErView && r.presses == 0);
 	}
+	{  // Start first, View 300 ms later (inside the 400 ms wait): the chord
+		GateRun r;
+		r.Step(true, false, M::kSnake, 300);
+		r.Step(true, true, M::kSnake, 1100);
+		CHECK(r.chords == 1 && !r.sawErStart && !r.sawErView && r.presses == 0 && r.toGuest == 0);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(!r.sawErStart && !r.sawErView && r.presses == 0);
+	}
+	{  // the player's case: View a bit before Start -- the iDroid hold already went to MGSV (400 ms), Start 550 ms after View:
+	   // still the chord; MGSV's synthesized Start is cut after ~150 ms (it opens the iDroid only after ~1 s of it)
+		GateRun r;
+		r.Step(false, true, M::kSnake, 550);
+		CHECK(r.toGuest == 1 && r.guestStart);
+		r.Step(true, true, M::kSnake, 1100);
+		CHECK(r.chords == 1 && r.cancels == 1 && !r.guestStart && r.guestStartMs <= 160 && !r.sawErStart && !r.sawErView && r.presses == 0);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(r.presses == 0 && !r.sawErView && !r.gate.Holding());
+	}
+	{  // ...but Start 900 ms after View (past chord_window_ms 700): View's iDroid stays, no chord
+		GateRun r;
+		r.Step(false, true, M::kSnake, 900);
+		r.Step(true, true, M::kSnake, 1500);
+		CHECK(r.chords == 0 && r.cancels == 0 && r.toGuest == 1 && r.guestStartMs >= 1100);
+		r.Step(false, false, M::kSnake, 300);
+	}
+	{  // the cut hold opened MGSV's menu anyway: it gets one Start tap to close it (the held Start stays out of its pad), and
+	   // the chord still fires
+		GateRun r;
+		r.Step(false, true, M::kSnake, 500);
+		r.Step(true, true, M::kSnake, 200);
+		CHECK(r.cancels == 1 && r.maskStart);
+		r.Clear();
+		r.Step(true, true, M::kGuestMenu, 400);
+		CHECK(r.closes == 1 && r.guestStartMs >= 115 && r.guestStartMs <= 125 && r.maskStart && !r.guestStart);
+		r.Step(true, true, M::kSnake, 600);
+		CHECK(r.chords == 1 && r.closes == 1 && !r.sawErStart && !r.sawErView);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(!r.maskStart && r.presses == 0);
+	}
+	{  // as live: the hold opens MGSV's iDroid at once (34 ms after it), Start comes 550 ms after View in MGSV's menu -- the chord:
+	   // the real Start stays out of MGSV's pad, one Start tap 100 ms after the cut closes the iDroid, the chord fires at 1 s
+		GateRun r;
+		r.Step(false, true, M::kSnake, 435);
+		CHECK(r.toGuest == 1 && r.guestStart);
+		r.Step(false, true, M::kGuestMenu, 115);  // MGSV's menu is up; View still held
+		r.Clear();
+		r.Step(true, true, M::kGuestMenu, 95);
+		CHECK(r.cancels == 1 && r.closes == 0 && r.maskStart && r.guestRealStartMs == 0 && r.guestStartMs == 0);
+		r.Step(true, true, M::kGuestMenu, 150);
+		CHECK(r.closes == 1 && r.guestStartMs >= 115 && r.guestStartMs <= 125 && r.guestRealStartMs == 0);
+		r.Step(true, true, M::kSnake, 800);  // the iDroid closed
+		CHECK(r.chords == 1 && r.closes == 1 && !r.sawErStart && !r.sawErView && r.presses == 0 && r.guestRealStartMs == 0);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(!r.sawErStart && !r.sawErView && r.presses == 0 && !r.gate.Holding());
+	}
+	{  // ...and should MGSV's menu still be open 700 ms after the first tap, a second one; never a third
+		GateRun r;
+		r.Step(false, true, M::kSnake, 450);
+		r.Step(false, true, M::kGuestMenu, 100);
+		r.Clear();
+		r.Step(true, true, M::kGuestMenu, 2000);
+		CHECK(r.cancels == 1 && r.closes == 2 && r.chords == 1 && r.guestRealStartMs == 0);
+		r.Step(true, true, M::kGuestMenu, 2000);
+		CHECK(r.closes == 2 && r.chords == 1);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(!r.sawErStart && r.presses == 0);
+	}
+	{  // the iDroid opened by View held on, Start pressed 1.5 s after View to close it: MGSV's Start, no chord
+		GateRun r;
+		r.Step(false, true, M::kSnake, 450);
+		r.Step(false, true, M::kGuestMenu, 1050);
+		r.Clear();
+		r.Step(true, true, M::kGuestMenu, 200);
+		CHECK(r.cancels == 0 && r.chords == 0 && !r.maskStart && r.guestRealStartMs == 200 && r.closes == 0);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(!r.sawErStart && !r.sawErView && r.presses == 0);
+	}
+	{  // MGSV's menu opened by a plain iDroid hold: a Start there is MGSV's (it closes the iDroid), never masked
+		GateRun r;
+		r.Step(false, true, M::kSnake, 600);
+		r.Step(false, false, M::kGuestMenu, 200);
+		r.Step(true, false, M::kGuestMenu, 100);
+		CHECK(!r.maskStart && r.closes == 0 && r.chords == 0);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(!r.sawErStart && r.presses == 0);
+	}
 	{  // Start already passed on (its menu opening), then View: no chord -- that is menu use
 		GateRun r;
-		r.Step(true, false, M::kSnake, 200);
+		r.Step(true, false, M::kSnake, 450);
 		CHECK(r.erStart && r.presses == 1);
 		r.Step(true, true, M::kSnake, 1500);
 		CHECK(r.chords == 0);

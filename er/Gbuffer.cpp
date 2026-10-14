@@ -469,7 +469,46 @@ namespace phantom::er::Gbuffer
 		return g_peek.wanted && g_peek.gbufRecorded && !g_peek.velRecorded && g_peek.pendingKind == 0;
 	}
 
-	bool RecordGbuffer(render::Recording& a_rec, const RenderSnapshot* a_snap, UINT a_count, ID3D12CommandList* const* a_lists)
+	bool PeekPending()
+	{
+		std::scoped_lock lock(g_lock);
+		return g_peek.wanted && !g_peek.gbufRecorded && g_readback;
+	}
+
+	bool RecordPeek(render::Recording& a_rec)
+	{
+		std::scoped_lock    lock(g_lock);
+		RenderDepth::Target gb[kTargets];
+		RenderDepth::Target depth;
+		if (!(g_peek.wanted && !g_peek.gbufRecorded && g_readback) || !RenderDepth::Gbuffer(gb) || !RenderDepth::Current(depth)) {
+			return false;
+		}
+		D3D12_RESOURCE_STATES stencilState = depth.state;
+		RenderDepth::StencilPlane(stencilState);
+		auto*                               list = a_rec.list;
+		std::vector<D3D12_RESOURCE_BARRIER> in, out;
+		for (int i = 0; i < kTargets; ++i) {
+			Move(in, out, gb[i].resource, gb[i].state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+		}
+		Move(in, out, depth.resource, depth.state, D3D12_RESOURCE_STATE_COPY_SOURCE, 0);
+		Move(in, out, depth.resource, stencilState, D3D12_RESOURCE_STATE_COPY_SOURCE, 1);
+		if (!in.empty()) {
+			list->ResourceBarrier(static_cast<UINT>(in.size()), in.data());
+		}
+		for (int i = 0; i < kTargets; ++i) {
+			CopyPeek(list, i, gb[i].resource, 0);
+		}
+		CopyPeek(list, 5, depth.resource, 0);
+		CopyPeek(list, 6, depth.resource, 1);
+		if (!out.empty()) {
+			list->ResourceBarrier(static_cast<UINT>(out.size()), out.data());
+		}
+		g_peek.gbufRecorded = true;
+		g_peek.pendingKind = 1;
+		return true;
+	}
+
+	bool RecordGbuffer(render::Recording& a_rec, const RenderSnapshot* a_snap, UINT a_count, ID3D12CommandList* const* a_lists, bool a_peekHere)
 	{
 		std::scoped_lock    lock(g_lock);
 		RenderDepth::Target gb[kTargets];
@@ -489,7 +528,7 @@ namespace phantom::er::Gbuffer
 			g_peek.wanted = true;
 			g_peek.learning = true;
 		}
-		const bool peek = g_peek.wanted && !g_peek.gbufRecorded && g_readback;
+		const bool peek = a_peekHere && g_peek.wanted && !g_peek.gbufRecorded && g_readback;
 		if (!drawing && !peek) {
 			return false;
 		}

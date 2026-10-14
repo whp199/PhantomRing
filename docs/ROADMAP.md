@@ -4,7 +4,7 @@ NVG only darkens the picture: recreate it on Elden Ring's frame from the guest's
 layer); an option for Elden Ring levels / weapons to scale Snake's damage (2.12); the mist step-aside and the boss-bar-after-
 cutscene fix (both UNVERIFIED live); never build while the player plays (builds dropped Elden Ring to ~10 fps). -->
 
-# PhantomRing next-steps roadmap (as of 2026-10-12, HEAD `654c760`)
+# PhantomRing next-steps roadmap (written 2026-10-12, HEAD `654c760`; status rows updated 2026-10-14, 0.3.0-alpha)
 
 Everything below comes from README (Status, Known issues, How to play), docs/DESIGN.md (§12–14c), HOST.md, GUEST.md, COMBAT.md, WINDOWS.md, docs/research/re-backlog.md, the code (`er/`, `mgsv/`, `protocol/`) and the git log. I worked read-only and did not touch the games, `build/` or `/dev/shm`.
 
@@ -23,6 +23,11 @@ Effort: **S** ≤ 1 day, **M** 2–5 days, **L** 1–3 weeks (agent work plus th
 
 The route to Margit runs Church of Elleh → Gatefront (Melina gives Torrent at the third grace) → Stormhill → Stormgate or Castleward Tunnel → fog wall → Margit.
 
+**Status 2026-10-14 (0.3.0-alpha):** the player beat Margit with rockets ("that fight felt fair"); their session-6 reports are
+fixed and verified with both games (rows "Session 6 reports", 2.4, 2.11 below; docs/STATUS.md). Next, from what was seen: full
+proxies set MGSV on alert with the real host (2.1); D-Dog's coat and D-Walker's near-camera fade in false colours (5.2); the
+cardboard box very dark (5.2); Elden Ring's balloon ~5 s after Y (2.11: start it at MGSV's attach, not its yank?).
+
 **Status 2026-10-13 (step 1 done; combined live run with the real MGSV and Elden Ring, the player's save, Castleward Tunnel
 and Margit's arena; details in docs/STATUS.md):**
 
@@ -36,6 +41,10 @@ and Margit's arena; details in docs/STATUS.md):**
 | 1.6 Aim assist | **DONE** | MGSV's own "Auto-Aim Correction" turned off in memory in the sandbox (`boot: auto-aim correction: off (was on)`); 50 aim directions, LT never turned the camera more than 5.7 deg (the over-the-shoulder parallax in a tunnel), no direction it snapped to |
 | 1.7 Ladders | **DONE** (real MGSV, 2026-10-13 morning) | Snake's Y on "Climb"/"Descend" -> the puppet steps aside, Elden Ring climbs with the Tarnished (whole pad), Snake back where he gets off; with the real MGSV at Fort Haight's tower (no ladder near the save's graces): up three times (`+19.1 m up`, `puppet ON`, "Snake is in control"), down once ("Descend" shows when Snake faces the hole; `-18.8 m`); walking on into the hole from the top drops Snake down the shaft (92% of his life, twice by the script): README says to face it and press Y. The chord on a ladder is Tarnished mode (HOST.md "Ladders") |
 | (2.3) D-Horse | **DONE** (real MGSV + Elden Ring, 2026-10-13 morning) | booted with `[Buddy] Type = horse` (`PHANTOMRING_BUDDY=horse`): "MGSV: ready (Africa, D-Horse deployed)", drawn beside Snake at the Stormhill Shack grace, whistled over by itself (`whistled #3 (7.7 m from Snake after a treadmill jump)`); mounted with the horse's values (`max 32 m/s, step-up 0.80 m, radius 0.45 m`); open Stormhill slope: **98.3 of 98.3 m** asked in 8 s at MGSV's 15-16 m/s gallop, 0 walls; into the shack's ruins: blocked, one unstick; off a 13 m ledge at a gallop: `landed at 16.5 m/s -> 55%`; Y dismounts; `!buddy walker` back to D-Walker in 1 s; 0 warnings. Open: no treadmill while riding (MGSV's own map limits a ride; the horse jumps after a far dismount), D-Dog and Quiet |
+| (2.1) ActorProxy | **Fulton-only (the default) live with the real host; full proxies not ready, off** (2026-10-14) | v0 failed live (the player location manager knows only Snake). v1 (GUEST.md §20.5): *enabled puppet* soldiers moved by their own location object stand at the ER enemies' places. With the stand-in host: aim assist swings onto them, MGSV marks them, one dart = one kGEvFire, phase 0. **With the real Elden Ring (0.3.0-alpha run): `[Fulton] Method = proxy` works end to end (2.11); `!proxy on` set MGSV on alert within 80 s (an MGSV riot-shield reinforcement shot Snake) and flapped on Elden Ring's heights (the flat apron can't hold a soldier 1-5 m below Snake).** Next: find what the alert comes from (the 150 ms of live AI before SetPuppet, the re-placements), flatten or skip proxies MGSV can't hold, a stability hour |
+| (2.4) Buddy change | **DONE** (real MGSV + Elden Ring, 2026-10-14) | MGSV's own iDroid > Missions > Buddy Support: DISMISS D-Walker (no buddy: nothing drawn or placed), D-Horse, D-Dog, D-Walker deployed in turn; the corner names each change. Quiet: not in the test save |
+| (2.11) Fulton | **DONE** (real MGSV + Elden Ring, 2026-10-14) | a darted Gatefront soldier: his asleep proxy, MGSV's Fulton prompt beside him, Y held -> kGEvFulton -> Elden Ring's balloon lifts him away, gone until a rest, +64 runes. Elden Ring's balloon ~5 s after Y; its sleep lasts ~50 s |
+| Session 6 reports | **fixed** (0.3.0-alpha) | see-through Snake/D-Walker (drawn right after Elden Ring's depth clear: A/B frames at the player's spot day and night and at a grace), stuck under the Roundtable Hold's basement stairs (stance heights, a free Snake never goes under anything lower than him, seam-proof headroom, a way out from under one), View-then-Start chord (and the guest stops its iDroid retries when the hold is cut), buddy change/dismiss, Fulton |
 | (2.12) Progression | **DONE**, off by default | `[Progression] damage_scaling = level\|weapon\|both` (COMBAT.md "Progression"); with the real MGSV, one soldier, the mode switched live between shots: off 35, level 31 (x0.87 at rune level 15), weapon 35 (+0), both 31; Vigor already counts through `hurt_share` |
 | Regen balance | **DONE** (real MGSV + Elden Ring) | MGSV's own post-hit curve for Elden Ring's hits (`[Combat] RegenGate`, GUEST.md 18.15): an 18% fall held ~3 s, full 7.25 s after (gate off: 2.0 s); Margit, Snake standing still: dead after 5 hits in 12 s (gate off: 22 hits in 75 s, alive) |
 | 1.8 Esc menu | **DONE** | `key 0x1b (Esc: its menu) pressed` -> `menu OPEN`, MGSV's HUD layer gone; Esc again closes it |
@@ -98,7 +107,7 @@ What WINDOWS.md lists as untested: me3 for Windows with the profile; MGSV starte
 
 | Step | What | Effort | Pass criteria |
 |---|---|---|---|
-| W1 | **Dev aids before shipping to friends:** a `[Render] debug_layer` option (`D3D12GetDebugInterface` + GPU-based validation; there is none in `er/` now) and `collect-logs.bat` in the zip (both logs, both inis, BUILD.txt, dxdiag) | S | Zip builds reproducibly (`package_windows.py`) |
+| W1 | **Dev aids before shipping to friends:** ~~a `[Render] debug_layer` option and `collect-logs.bat`~~ **built (UNVERIFIED live):** `[Render] debug_layer` (off by default; `er/DebugLayer.h`: D3D12 debug layer + GPU-based validation + DRED, messages to the host log through `ID3D12InfoQueue`), `collect-logs.cmd` in the Windows zip (both logs, both inis, BUILD.txt, dxdiag, a system summary; user name, PC name and Steam id redacted) and the testers' checklist in WINDOWS.md "For testers" | S | Zip builds reproducibly (`package_windows.py`, `test_release.py` checks the script's structure). Still to see: the script run once on Windows, the debug layer's `render: debug layer: Elden Ring's device ... has the debug layer` line |
 | W2 | **Host alone:** me3 + the profile with MGSV not installed | S | `exe identity OK`, `address table: 70/70`, 4 tasks registered, offline, isolated save created; plain ER plays |
 | W3 | **MGSV once, normally:** accept Konami's ToS and region outside PhantomRing; check D-Walker is developed (the guest reports `kBuddyMissing` otherwise) | S | (The friend does this in a normal MGSV session) |
 | W4 | **Full run** | S (their time) | MGSV started by ER (log), window hidden, never on the taskbar, boot ≤ 4 min, "Snake is in control"; capture frames counted in the guest log; MGSV ≥ 55 fps (`!pace`) |
@@ -107,7 +116,7 @@ What WINDOWS.md lists as untested: me3 for Windows with the profile; MGSV starte
 | W7 | **Input** | S | XInput pad; a DualSense through Steam Input on ER (MGSV gets the pad through shared memory, so Steam Input on MGSV doesn't matter); KB/M after 2.14 |
 | W8 | **AV / SmartScreen** | S | An unsigned `dinput8.dll` proxy plus a process that starts a game: check Defender; publish the sha256 values (BUILD.txt already has them) |
 
-Dependencies: friends with both games. Risk: high for W5 (the only path never run on real drivers). Verification: logs back through `collect-logs.bat`, plus a short screen capture.
+Dependencies: friends with both games. Risk: high for W5 (the only path never run on real drivers). Verification: logs back through `collect-logs.cmd`, plus a short screen capture (the steps as testers see them: WINDOWS.md "For testers").
 
 ---
 
@@ -125,6 +134,15 @@ Dependencies: friends with both games. Risk: high for W5 (the only path never ru
 | C5 **Friendly fire and blasts** | `Hostile()` uses ER's team relation table (`er/Combat.cpp`), so co-op phantoms should be safe. Check blasts, mines and D-Walker flames near teammates | S | Low | Grenade between two players: teammates are unharmed |
 
 Order: Windows (§3) → C0 → C1 → C2 → C3. C1 is worth doing early because it also simplifies single-player damage.
+
+**C1 status (2026-10-14): live in single player with fake MGSV (COMBAT §10): the rows arrive 1-4 frames after Elden Ring's own
+hit (now waited for, `speffect_wait_ms`), and the ladder then deals what the top-up deals, hit for hit; `topup` stays the default
+until co-op (a shield, Margit and D-Walker's flame untested). Review fix: only rows that arrived confirm the ladder.**
+Earlier: **C1 status (2026-10-13): built, offline-tested, UNVERIFIED live.** `[Combat] damage_route = speffect` (default `topup`):
+the hit bullet carries the wanted damage as a decimal ladder of fixed-damage SpEffect rows (36 blank carrier rows
+20010640..20010675, 1..9999 HP exact in ≤ 4 of its 5 slots), Elden Ring's own hit is kept to 10% of it for the reaction,
+guards are learned (does ER drop a guarded bullet's SpEffects?), and an unconfirmed ladder falls back to the top-up.
+COMBAT §2 "Damage that syncs" has the design, §10 the live test (single player A-D first, then co-op E).
 
 ---
 

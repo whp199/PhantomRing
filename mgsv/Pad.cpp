@@ -5,6 +5,9 @@
 #include "Hook.h"
 #include "Link.h"
 #include "Log.h"
+#include "Logic.h"
+#include "Menu.h"
+#include "State.h"
 
 #include <windows.h>
 #include <xinput.h>
@@ -14,7 +17,9 @@
 #include <atomic>
 #include <cstring>
 #include <cwctype>
+#include <format>
 #include <mutex>
+#include <string>
 
 namespace phantom::guest::pad
 {
@@ -59,6 +64,77 @@ namespace phantom::guest::pad
 			return false;
 		}
 
+		// The iDroid request ([Menu] IDroidRetryMs, logic::IDroidRequest): MGSV's poll thread only.
+		logic::IDroidRequest       g_idroid;
+		std::atomic<std::uint32_t> g_idroidOpened{ 0 }, g_idroidRetried{ 0 }, g_idroidExpired{ 0 };
+		std::uint32_t              g_idroidRefusal{ 0 };  // the host pad's buttons/triggers when MGSV didn't take the Start
+
+		const char* RefusalName(std::uint32_t a_pad)
+		{
+			if (a_pad & 0x10000) {
+				return "aiming (LT)";
+			}
+			if (a_pad & XINPUT_GAMEPAD_RIGHT_SHOULDER) {
+				return "binoculars (RB)";
+			}
+			return "an action (dive, CQC, climb, a weapon change ...)";
+		}
+
+		void IDroid(ULONGLONG a_now, XINPUT_GAMEPAD& a_pad, bool a_fromHost)
+		{
+			const int retryMs = Cfg().idroidRetryMs;
+			if (retryMs <= 0) {
+				return;
+			}
+			const bool hostStart = a_fromHost && (a_pad.wButtons & XINPUT_GAMEPAD_START) != 0;
+			const auto boot = state::CurrentBoot();
+			const auto lua = state::Lua();
+			const bool eligible = a_fromHost && boot == state::Boot::kReady && lua.InGame() && !(lua.flags & state::kLDead) && !state::Parked();
+			logic::IDroidRequest::Event ev{};
+			const auto out = g_idroid.Update(a_now, hostStart, menu::Open(), eligible, static_cast<std::uint64_t>(retryMs), ev);
+			using E = logic::IDroidRequest::Event;
+			switch (ev) {
+			case E::kArmed:
+				break;
+			case E::kRetry:
+				if (g_idroid.Retries() == 1) {
+					g_idroidRefusal = a_pad.wButtons | (a_pad.bLeftTrigger > 64 ? 0x10000u : 0u);
+					g_idroidRetried.fetch_add(1);
+					Log::Info("pad: MGSV didn't open the iDroid on Start -- Snake is busy ({}); pressing it again with the pad neutral",
+						RefusalName(g_idroidRefusal));
+				}
+				break;
+			case E::kOpened:
+				g_idroidOpened.fetch_add(1);
+				if (g_idroid.Retries() > 0) {
+					Log::Info("pad: the iDroid opened {} ms after Start ({} presses again; Snake was {})", g_idroid.OpenedAfterMs(), g_idroid.Retries(),
+						RefusalName(g_idroidRefusal));
+				}
+				break;
+			case E::kExpired:
+				g_idroidExpired.fetch_add(1);
+				Log::Warn("pad: the iDroid didn't open within {} ms of Start ({} presses again; Snake was {}) -- given up", retryMs, g_idroid.Retries(),
+					RefusalName(g_idroidRefusal));
+				break;
+			case E::kDropped:
+				Log::Info("pad: iDroid request dropped (Snake isn't playing any more)");
+				break;
+			case E::kCut:
+				if (g_idroid.Retries() > 0) {
+					Log::Info("pad: the host cut its iDroid hold (View+Start chord) -- no more Start presses");
+				}
+				break;
+			default:
+				break;
+			}
+			if (out == logic::IDroidRequest::Pad::kNeutral || out == logic::IDroidRequest::Pad::kNeutralStart) {
+				a_pad = {};
+				if (out == logic::IDroidRequest::Pad::kNeutralStart) {
+					a_pad.wButtons = XINPUT_GAMEPAD_START;
+				}
+			}
+		}
+
 		std::mutex      g_lock;
 		XINPUT_GAMEPAD  g_last{};
 		DWORD           g_packet{ 0 };
@@ -74,6 +150,7 @@ namespace phantom::guest::pad
 			}
 			g_polls.fetch_add(1, std::memory_order_relaxed);
 			XINPUT_GAMEPAD pad{};
+			bool           fromHost = false;
 			if (g_source.load(std::memory_order_acquire) == Source::kHost && !g_blocked.load(std::memory_order_acquire) &&
 			    !g_parked.load(std::memory_order_acquire)) {
 				proto::PadState slot{};
@@ -85,9 +162,11 @@ namespace phantom::guest::pad
 					pad.sThumbLY = slot.thumbLY;
 					pad.sThumbRX = slot.thumbRX;
 					pad.sThumbRY = slot.thumbRY;
+					fromHost = true;
 				}
 			}
 			const auto now = ::GetTickCount64();
+			IDroid(now, pad, fromHost);
 			if (now < g_pulseUntil.load(std::memory_order_acquire)) {
 				pad.wButtons |= g_pulseButtons.load(std::memory_order_relaxed);
 			}
@@ -226,4 +305,10 @@ namespace phantom::guest::pad
 	}
 
 	std::uint64_t Polls() { return g_polls.load(); }
+
+	std::string DescribeIDroid()
+	{
+		return std::format("iDroid requests: {} opened, {} needed Start again, {} given up (IDroidRetryMs {}){}", g_idroidOpened.load(), g_idroidRetried.load(),
+			g_idroidExpired.load(), Cfg().idroidRetryMs, g_idroid.Active() ? " -- one under way" : "");
+	}
 }
