@@ -1,10 +1,12 @@
 #include "Combat.h"
 
+#include "ActorProxy.h"
 #include "Addresses.h"
 #include "Config.h"
 #include "Hook.h"
 #include "Link.h"
 #include "Log.h"
+#include "ProjectileTag.h"
 #include "Verify.h"
 
 #include <windows.h>
@@ -37,11 +39,15 @@ namespace phantom::guest::combat
 		std::atomic<bool>          g_damageOk{ false };
 		std::atomic<std::uint64_t> g_shared{ 0 }, g_unshared{ 0 };
 		std::atomic<std::uint32_t> g_lastAttack{ 0 }, g_lastShare{ 0 }, g_soldierLife{ 0 };
+		// Cqc.cpp's view of the CQC state (game thread only, like PollMelee).
+		CqcProbe g_probe;
 
 		// CQC poll state (game thread only)
 		std::uint16_t g_lastSerial{ 0 };
 		bool          g_serialPrimed{ false };
 		bool          g_cqcWarned{ false };
+		std::uint32_t g_staleShapes{ 0 };          // strikes whose attack shape still sat at the last strike's place
+		constexpr float kShapeReach = 2.5f;         // m (horizontal) from Snake's root a strike's centre may be
 
 		template <class T>
 		std::optional<T> Get(std::uintptr_t a_at)
@@ -160,13 +166,22 @@ namespace phantom::guest::combat
 				e.b = pellets;
 				e.frame = static_cast<std::uint32_t>(g_frame.load(std::memory_order_relaxed));
 				std::memcpy(e.v0, a_origin, sizeof(e.v0));
-				std::memcpy(e.v1, a_dir, sizeof(e.v1));
+				// A round aimed at a proxy standing on the sandbox ground goes to its Elden Ring enemy's real height ([Proxies]
+				// Height = ground, AimHeightFix; docs/GUEST.md 20.6). A copy: MGSV's own a_dir stays as it is.
+				float dir[3] = { a_dir[0], a_dir[1], a_dir[2] };
+				proxy::CorrectShot(a_origin, dir);
+				std::memcpy(e.v1, dir, sizeof(e.v1));
 				// Not in the protocol's fields: the raw bulletId (explosives are lethal kind + this id) and
 				// a bit for "explosive" so the host can do area damage at the hit point.
 				e.pad[0] = bullet.value_or(0) | (kind == BulletKind::kExplosive ? 0x80000000u : 0u);
 				// v8: one body hit's lethal damage (per pellet for shotguns) as a share of a standard MGSV soldier's life.
 				e.pad[1] = ShareOf(attack.value_or(0), equip.value_or(0), bullet.value_or(0));
 				link::PushEvent(e);
+				if (snake && kind == BulletKind::kExplosive) {
+					// a rocket's mesh, for the host's flown copy: along MGSV's own a_dir, where MGSV draws its rocket (e.v1 may be the
+					// proxy aim correction's copy, which MGSV's rocket doesn't follow)
+					projectile::NoteRound(g_frame.load(std::memory_order_relaxed), e.v0, a_dir);
+				}
 				Log::Debug("shots: {} equip {} bullet {} attack {} share {} kind {} pellets {} origin {:.2f},{:.2f},{:.2f} dir {:.2f},{:.2f},{:.2f}",
 					snake ? "snake" : "buddy", equip.value_or(0), bullet.value_or(0), attack.value_or(0), e.pad[1], static_cast<int>(kind), pellets,
 					a_origin[0], a_origin[1], a_origin[2], a_dir[0], a_dir[1], a_dir[2]);
@@ -219,8 +234,11 @@ namespace phantom::guest::combat
 		}
 	}
 
+	CqcProbe Probe() { return g_probe; }
+
 	void PollMelee(const float a_root[3], float a_yaw)
 	{
+		g_probe.valid = false;
 		if (!Cfg().melee) {
 			return;
 		}
@@ -256,6 +274,7 @@ namespace phantom::guest::combat
 		if (!serial || !attack) {
 			return;
 		}
+		g_probe = { .valid = true, .attack = *attack, .action = Get<std::uintptr_t>(s + 0x10).value_or(0) != 0 };
 		if (!g_serialPrimed) {
 			g_serialPrimed = true;
 			g_lastSerial = *serial;
@@ -279,9 +298,20 @@ namespace phantom::guest::combat
 						float gc[3], gr;
 						std::memcpy(gc, geo + 0x10, sizeof(gc));
 						std::memcpy(&gr, geo + 0x20, sizeof(gr));
-						if (std::isfinite(gc[0]) && std::isfinite(gc[1]) && std::isfinite(gc[2]) && gr > 0.05f && gr < 10.0f) {
+						// The shape is MGSV's own object for every strike, and on the frame its serial moves it can still sit
+						// where the last strike was (live pass B 2026-10-15: a punch after an 8 m walk came out 8 m behind
+						// Snake): a centre that far from him is taken as stale and the strike goes 1 m in front of him.
+						const float dx = gc[0] - a_root[0], dz = gc[2] - a_root[2], dy = gc[1] - a_root[1];
+						const bool  nearSnake = dx * dx + dz * dz <= kShapeReach * kShapeReach && dy > -1.0f && dy < 3.0f;
+						if (std::isfinite(gc[0]) && std::isfinite(gc[1]) && std::isfinite(gc[2]) && gr > 0.05f && gr < 10.0f && nearSnake) {
 							std::copy_n(gc, 3, centre);
 							radius = gr;
+						} else if (std::isfinite(gc[0]) && std::isfinite(gc[2]) && !nearSnake) {
+							++g_staleShapes;
+							if (g_staleShapes <= 3) {
+								Log::Info("melee: MGSV's attack shape is {:.1f} m from Snake (stale: the last strike's) -- 1 m in front of him instead ({} so far)",
+									std::sqrt(dx * dx + dz * dz), g_staleShapes);
+							}
 						}
 					}
 				}

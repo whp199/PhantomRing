@@ -249,6 +249,8 @@ namespace phantom::er::RenderAssets
 			tex->height = t.height;
 			tex->mips = t.mipLevels;
 			tex->slices = slices;
+			// What the texture is by content (er/MaterialRoles.h): a normal map sent as a diffuse, a box poster or a layer mask.
+			tex->traits = MaterialRoles::Analyse(static_cast<std::uint32_t>(fmt), t.width, t.height, t.mipLevels, a_p + sizeof(t), t.dataBytes);
 			tex->resource = Committed(D3D12_HEAP_TYPE_DEFAULT, desc, D3D12_RESOURCE_STATE_COPY_DEST);
 			if (!tex->resource) {
 				return Fail("texture (no GPU memory / unsupported)", t.key);

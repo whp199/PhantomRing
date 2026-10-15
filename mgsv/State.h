@@ -37,6 +37,8 @@ namespace phantom::guest::state
 		kLCbox = 1u << 20,    // PlayerStatus CBOX: inside a cardboard box
 		kLPoster = 1u << 21,  // ...one with a poster on it (vars.cboxPosterIndices of the current item)
 		kLNvg = 1u << 22,     // night-vision goggles on (vars.items[vars.currentItemIndex] == EQP_IT_Nvg)
+		// (high bit, away from the next stance/state bits) Snake smokes the Phantom Cigar: MGSV's time-lapse runs ([Cigar], Cigar.cpp)
+		kLCigar = 1u << 28,
 	};
 
 	// BuddyType.WALKER_GEAR (VERIFIED from the enum registration at 0x140A46E21, mgsvtpp.exe 1.0.15.4;

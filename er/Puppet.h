@@ -38,6 +38,7 @@ namespace phantom::er
 		[[nodiscard]] bool          RidingHorse();  // ...D-Horse (its own speed, step-up, radius and eye height)
 		[[nodiscard]] float         GroundY();
 		[[nodiscard]] float         FallSpeed();
+		[[nodiscard]] bool          Jumping();  // in the air from a jump of Snake's (kGuestJumping, er/Kinematic.h KinematicJump)
 		[[nodiscard]] float         HpFrac();
 		// Seconds since Snake (or the puppet) died, until Elden Ring respawns the player; -1 when nobody is
 		// dying. While >= 0 the renderer fades Snake out ([Render] death_visual) and the Tarnished stays hidden.

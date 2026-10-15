@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Game.h"
 #include "Log.h"
+#include "Projectiles.h"
 #include "Puppet.h"
 #include "RenderMarkers.h"
 #include "ThrowLogic.h"
@@ -238,6 +239,7 @@ namespace phantom::er::Throw
 		ThrowLog("throw {}: {} (equip {}, {}) released at ER ({:.2f}, {:.2f}, {:.2f}) at {:.1f} m/s", g.id, KindName(g.kind), g.equip,
 			g.fuseMs ? std::format("fuse {} ms", g.fuseMs) : std::string("impact"), g.p.pos.x, g.p.pos.y, g.p.pos.z, Length(g.p.vel));
 		g_live.push_back(g);
+		Projectiles::NoteRelease(Projectiles::KeyOf(Projectiles::Source::kThrow, g.equip), g.p.vel);  // MGSV's mesh of it (roadmap 5.4)
 	}
 
 	bool OnExplosion(const Frame& a_f, const proto::GuestEvent& a_e)
@@ -284,6 +286,7 @@ namespace phantom::er::Throw
 		LARGE_INTEGER t0, t1, freq;
 		::QueryPerformanceCounter(&t0);
 		std::vector<Marker> markers;
+		std::vector<Projectiles::Flying> flying;  // drawn with MGSV's mesh when one was learned (er/Projectiles.h)
 		const bool          showing = Showing(a_f);
 		if (!g_live.empty() && Puppet::Active() && a_f.player && game::CanCastRay()) {
 			const auto ray = GameRay(a_f);
@@ -307,7 +310,12 @@ namespace phantom::er::Throw
 						Blast(a_f, g, radius, landedNow ? "landed (impact)" : "MGSV went off first");
 					}
 				}
+				const auto key = Projectiles::KeyOf(Projectiles::Source::kThrow, g.equip);
 				if (showing && !g.p.lost && !(g.blasted && !IsCloud(g.kind))) {
+					flying.push_back({ key, g.id, g.p.pos, g.p.vel, g.p.age });
+				}
+				// The ball only goes once MGSV's mesh was really put at this copy (last frame's scene), not merely when one is known.
+				if (showing && !g.p.lost && !(g.blasted && !IsCloud(g.kind)) && !Projectiles::Drawn(Projectiles::Source::kThrow, g.id, a_f.index)) {
 					Marker m;
 					m.shape = Marker::Shape::kBall;
 					m.pos = g.p.pos;
@@ -341,6 +349,7 @@ namespace phantom::er::Throw
 			g_tickMsMax = std::max(g_tickMsMax, ms);
 		}
 		RenderMarkers::Set(RenderMarkers::Owner::kThrow, std::move(markers));
+		Projectiles::Set(Projectiles::Source::kThrow, std::move(flying));
 	}
 
 	void OnPuppetStop()
@@ -350,6 +359,7 @@ namespace phantom::er::Throw
 		}
 		g_live.clear();
 		RenderMarkers::Set(RenderMarkers::Owner::kThrow, {});
+		Projectiles::Set(Projectiles::Source::kThrow, {});
 	}
 
 	void OnWorldShift(const Vec3& a_delta)
@@ -370,6 +380,14 @@ namespace phantom::er::Throw
 	std::string Console(const std::vector<std::string>& a_w, const Frame& a_f)
 	{
 		(void)a_f;
+		if (a_w.size() > 2 && a_w[1] == "meshes") {
+			// throw meshes on|off: [Render] projectile_meshes live (not saved; the guest's [Capture] ProjectileMeshes tags the draws)
+			if (a_w[2] != "on" && a_w[2] != "off") {
+				return "throw meshes on|off";
+			}
+			Cfg().render.projectileMeshes = a_w[2] == "on";
+			return Describe() + "\n" + Projectiles::Describe();
+		}
 		if (a_w.size() > 2 && a_w[1] == "arc") {
 			if (a_w[2] != "on" && a_w[2] != "off" && a_w[2] != "auto" && a_w[2] != "ini") {
 				return "throw arc on|off|auto|ini";
@@ -377,7 +395,7 @@ namespace phantom::er::Throw
 			g_arcMode = a_w[2] == "ini" ? "" : a_w[2];
 			return Describe();
 		}
-		std::string out = Describe();
+		std::string out = Describe() + "\n" + Projectiles::Describe();
 		for (const auto& g : g_live) {
 			out += std::format("\n {} {} equip {} {}: ({:.2f}, {:.2f}, {:.2f}) v {:.1f} m/s, {:.1f} s, {} bounce(s){}{}{}", g.id, KindName(g.kind), g.equip,
 				g.fuseMs ? std::format("fuse {} ms", g.fuseMs) : "impact", g.p.pos.x, g.p.pos.y, g.p.pos.z, Length(g.p.vel), g.p.age, g.p.bounces,

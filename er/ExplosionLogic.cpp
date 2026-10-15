@@ -68,6 +68,8 @@ namespace phantom::er::explosion
 			return "breaker";
 		case Kind::kShrapnel:
 			return "shrapnel";
+		case Kind::kMuzzle:
+			return "muzzle";
 		}
 		return "?";
 	}
@@ -110,6 +112,9 @@ namespace phantom::er::explosion
 		}
 		if (a_name == "shrapnel") {
 			return Kind::kShrapnel;
+		}
+		if (a_name == "muzzle" || a_name == "muzzleflash") {
+			return Kind::kMuzzle;
 		}
 		return std::nullopt;
 	}
@@ -341,6 +346,19 @@ namespace phantom::er::explosion
 				Set<float>(a_row, off, a_speed);
 			}
 		}
+	}
+
+	void MakeFlash(std::uint8_t* a_row, float a_life)
+	{
+		namespace b = params::bullet;
+		MakeSingleShot(a_row, 0.0f);
+		for (const auto off : { b::kInitVelocity, b::kMaxVelocity, b::kMinVelocity }) {
+			Set<float>(a_row, off, 0.0f);
+		}
+		Set<float>(a_row, b::kLife, std::isfinite(a_life) ? std::clamp(a_life, 0.02f, 0.5f) : 0.06f);
+		Set<std::int8_t>(a_row, b::kSfxDeleteByLifeDead, 1);
+		Set<std::int32_t>(a_row, b::kHitBulletId, -1);  // nothing after it (MakeCarrier already cuts a chain it isn't told to keep)
+		Set<std::int32_t>(a_row, b::kIntervalCreateBulletId, -1);
 	}
 
 	bool OnlyAttack(const std::uint8_t* a_row, std::int32_t a_atk)

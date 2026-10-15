@@ -49,6 +49,7 @@ namespace phantom::er
 			std::uint8_t*   chr{ nullptr };
 			std::uint64_t   handle{ 0 };
 			Quat            orientation;
+			std::int32_t    maxHp{ 0 };
 		};
 		std::vector<Foe> HostilesNear(const Frame& a_frame, const Vec3& a_centre, float a_radius);
 		// Is a character of that team hostile to the Tarnished (Elden Ring's team relation table, the rule every hit uses)?
@@ -57,6 +58,17 @@ namespace phantom::er
 		// "helpless" row, stateInfo 434, that comes with the proc; live 2026-10-14, a Stormveil soldier slept by our ladder:
 		// 25019 (436) and 54 (434) from 0.9 s to 4.4 s, both gone when he woke at ~5 s; 434 alone is a stance break)?
 		bool Asleep(std::uint8_t* a_chr);
+
+		// CQC holds and throws (er/Cqc.h): one hit on the character a_handle, if he is still within a_reach of a_from, through the
+		// same route as every hit (a bullet carries the poise, dmgLevel and sleep rungs). False when he is gone or damage is off.
+		bool HitCharacter(const Frame& a_frame, std::uint64_t a_handle, const Vec3& a_from, float a_reach, const combat::HitEffect& a_effect,
+			std::string_view a_what);
+		// A bullet of ours is in flight (bullet route): a hit with other numbers would find the row busy (combat::MayFly) and lose
+		// its poise / sleep. CQC waits for it (er/Cqc.cpp).
+		bool RowBusy();
+		// The [Combat] numbers as every hit uses them (the Tarnished's max HP included: how big an enemy is).
+		combat::HitRules    CurrentRules();
+		combat::MeleeValues CurrentMelee();
 
 		void Tick(const Frame& a_frame);  // FrameBegin, after the events: verifies pending bullet hits
 		void OnPuppetStop();               // puts every patched param byte back

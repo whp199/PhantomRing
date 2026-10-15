@@ -25,6 +25,10 @@ namespace phantom::er::CameraDriver
 		float            g_feetY{ 0 };  // the puppet's feet height as the camera follows it (eased)
 		bool             g_feetYValid{ false };
 		std::uint64_t    g_feetYFrame{ 0 };
+		// Snake's jump ([Puppet] jump_camera_hold): the camera's height over his root before it, held while the puppet is in
+		// the air (the guest lifts Snake in MGSV and he falls there: MGSV's camera follows that, Elden Ring's must not bob).
+		float            g_camRelY{ 0 };
+		bool             g_camRelYValid{ false };
 		// The camera as last mapped (DrawParamUpdate), for the compass write early in the next frame.
 		struct Rows
 		{
@@ -85,6 +89,12 @@ namespace phantom::er::CameraDriver
 			q = paced.camQuat;
 			camRel = paced.camRel;
 			fovY = paced.fovY;
+		}
+		if (Cfg().jumpCameraHold && Puppet::Jumping() && g_camRelYValid) {
+			camRel.y = g_camRelY;  // as before the jump (UNVERIFIED live)
+		} else {
+			g_camRelY = camRel.y;
+			g_camRelYValid = std::isfinite(camRel.y);
 		}
 
 		const Vec3 fwd = Normalize(anchor.DirToEr(Rotate(q, { 0, 0, anchor.axes.mgsvCamForward })));

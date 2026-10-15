@@ -280,6 +280,7 @@ mode switched live between shots): off 35, level 31, weapon 35, both 31 (`progre
 | `round_flight`, `round_speed_rocket`, `round_speed_grenade` | true, 16, 80 | explosive rounds fly (m/s) from Snake's muzzle (§9) |
 | `round_speed_rocket_boost`, `round_rocket_boost_after` | 60, 1 | a rocket's motor: from 16 to 60 m/s over 0.3 s after 1 s (docs/HOST.md "Rocket motor") |
 | `flame_fx`, `flame_per_second`, `flame_speed` | true, 6, 14 | D-Walker's flamethrower drawn with Elden Ring flames |
+| `muzzle_flash`, `muzzle_per_second`, `muzzle_life`, `muzzle_ahead`, `muzzle_tranq` | false, 10, 0.06, 0.1, false | (roadmap 5.4, UNVERIFIED live) a muzzle flash at each shot: `explosion_muzzle` (the Fire Pot's fireball) cut after `muzzle_life` s, carrier 10302005 (docs/HOST.md "Projectile meshes and muzzle flashes") |
 | `[Puppet] motion`, `catch_up`, `unstick`, `unstick_seconds` | kinematic, 0.6, true, 0.5 | docs/HOST.md "Motion" |
 | `[Stealth] box_hide`, `speffect`, `still_speed`, `slow_speed`, `slow_grace`, `reveal_distance` | true, 20004999, 0.4, 1.8, 1.5, 2 | the cardboard box (docs/HOST.md) |
 | `[Stealth] poster`, `poster_range`, `poster_stare`, `poster_cooldown` | true, 15, 4, 12 | enemies stop and stare at a poster box |
@@ -371,11 +372,14 @@ pr er "boom lethal|stun|sleep|smoke [radius]"   an explosion visual 5 m in front
 pr er "boom mode auto|bullet|sfx|off|ini"       `boom restore` puts the carrier rows back now
 pr er status                         the puppet line includes host falls and "DYING for Snake"
 pr er "progression [off|level|weapon|both]"   the Tarnished's level, attributes, right-hand armament and its upgrade, the factors
+pr er cqc                            CQC holds and throws (§7a): on/off, counts per answer, who is held; "cqc on|off" this session;
+                                     "cqc grab|throw|choke|interrogate|release" as if the guest had sent it (Snake's place and facing);
+                                     "cqc set throw_dmg_level|throw_poise|grab_poise|stagger_poise|range|hold_seconds <v>" live tuning
 ```
 
 fake_mgsv (`pr fake-mgsv`, guest console `pr lua '!…'`): `!walk on|off`, `!autofire on|off`,
 `!fire <lethal|handgun|rifle|sniper|buck|tranq|stun|explosive> [n] [yaw_deg] [pitch_deg]`,
-`!cqc <punch|kick|throw|choke>`, `!blast [radius]`, `!die`.
+`!cqc <punch|kick|throw|choke>`, `!grab <grab|hold|throw|choke|interrogate|release>` (v13 kGEvCqc, §7a), `!blast [radius]`, `!die`.
 
 ## 5. Files
 
@@ -473,8 +477,8 @@ attack ids.
   `verify_ms`, 300 ms). Applying it inside the enemy's ReceiveDamage would save one more frame but needs a hook on every
   enemy's damage module; not worth it at 2-3 frames.
 - Guard detection is a heuristic (ER's damage of one of our bullets vs the best seen on that kind of enemy).
-- CQC: punches (80) and the kick (83) are identified; throws and chokes need a live target in MGSV (MGSV runs
-  them only on its own soldiers, and the sandbox has none): Snake's CQC in Elden Ring is strikes only.
+- CQC: punches (80) and the kick (83) are identified; MGSV runs throws and chokes only on its own soldiers (the sandbox
+  has none), so holds, throws and chokes come from the player's input instead (§7a, tier 1, off by default).
 - Thrown and placed explosives (protocol v5/v6): the host flies its own copy of each throw through Elden Ring's world and
   keeps placed ones where they were put; MGSV's `kGEvExplosion` (pad[1] = the id) is put where our copy is (HOST.md "Thrown
   and placed explosives"); without an id, as before at MGSV's point through the anchor. `Blast()`: smoke nothing, sleep
@@ -487,6 +491,83 @@ attack ids.
 - Hits on characters ER's world ray passes through (no collision) still count, through our capsules;
   walls stop shots. Foliage stops them too when ER's ray hits it (a soldier behind a bush: "-> world").
 - The ActorProxy model (DESIGN §8.1 "later") would replace all of this with MGSV's own ballistics.
+
+## 7a. CQC holds and throws (ROADMAP 2.2 tier 1; protocol v13 kGEvCqc; `[Cqc] enabled = true` since live pass B 2026-10-15)
+
+MGSV grabs, throws, chokes and interrogates only its own soldiers. In the sandbox there is no one to grab, so RT next to an
+Elden Ring enemy is only ever a punch. Tier 1 takes the player's intent from MGSV's own pad bits and lets Elden Ring answer it
+with its own reactions (no paired animation: Snake grabs the air in MGSV; tier 2 is an ActorProxy soldier in his hands).
+
+**Live pass B (2026-10-15, both games, Gatefront's Godrick soldiers, `cqc on`):** RT held 4 s next to a guard: `Snake CQC grab
+(MGSV attack 0) -> hold on npc 43114010 ... hp 214/219` -> `CQC hold -> ... bullet 1 poise 15 lv 1` (Elden Ring applied our
+bullet), then `CQC choke (MGSV attack 80) -> sleep ... sleep +249 (resist 226, 2 rungs)` -- he slept (the purple sleep cloud in
+the frame) -- and was then fultoned (+64 runes); RT with the stick pushed at another: `CQC throw -> knockdown` -> `poise 120 lv 4`,
+he went down; held + LB: `interrogation` (the corner's line); a second grab 2 s after a release: `-> flinch (hold cooldown)`.
+`cqc`: `fired late 0, lost 0`. The hold and the throw cost 1 HP each. Seen around them: the punch MGSV throws with each RT press
+(`CQC kind 0`, wanted 27) dealt 25-44, and twice a held or guarding soldier lost another ~25 HP within 0.3-1.7 s after a punch
+landed, with no hit of ours logged (82 -> 57, 29 -> 4); the console's `combat strike` on a free soldier took one step (219 -> 175)
+and nothing after. Not chased further: README Known issues. On by default since; bosses were not tried (never fight one for a test).
+
+| Player (MGSV's controls) | Guest (`mgsv/Cqc.cpp`, `CqcLogic.h`) | Host (`er/Cqc.cpp`, `CqcLogic.h`) |
+|---|---|---|
+| RT (unaimed) held 350 ms | `kGEvCqc a = kCqcGrab` | the nearest hostile within `range` (1.6 m) of Snake's chest inside `arc_deg` (70) in front: a flinch (`grab_poise` 15, dmgLevel 1) and held in place (ChrIns+0x538 no attack / no move; only the bits we set go back); let go less than `hold_cooldown` (8 s) ago: the flinch only |
+| ...kept held 2.5 s after the grab | `kCqcChoke` (once per hold) | the one held only (nobody held: `no hold`, nothing): `[Combat] choke_sleep` / `choke_share` (1.1 x his sleep resistance) on the sleep ladder: an ordinary enemy sleeps |
+| ...LB (MGSV's CALL/INTERROGATE bit) | `kCqcInterrogate` (once per hold) | the one held only: a corner line (`Hud::Notify`), nothing else |
+| ...RT let go (or a menu, a fall, a vehicle) | `kCqcRelease` | the held one is let go |
+| RT pressed with the left stick past 0.6 | `kCqcThrow` (no hold first) | let go if held, then a knockdown: `throw_poise` 120, `throw_dmg_level` 4 |
+| any of these on a boss (Bigness >= `boss_bigness` 0.5, max HP >= `boss_hp` 2000, or the Tarnished's max HP not read yet) | | a stagger only (`stagger_poise` 40, dmgLevel 2), never held |
+
+- **Only a token of damage.** The flinch, the knockdown and a boss's stagger fly with AtkParam correction `hit_correction`
+  (10%) and a token 1 HP, non-lethal (combat::NonLethalCorrection caps Elden Ring's own part by his HP): a correction-0 bullet
+  is a sleep dart's, and live that is "no damage, no flinch" (§2), while the stun rounds' 15% staggers. `hit_correction = 0`
+  is the damage-free bullet again. The choke stays damage-free (the darts' verified sleep route). MGSV's own punch at the
+  press (kGEvMelee, attack 80) is the damage, as before.
+- **Every hit waits for the bullet row.** MGSV's punch of the same press is pushed before the kGEvCqc (the guest polls melee
+  first) and its bullet holds Combat's one patched row until it lands (verify_ms, 300 at most); any other key is then
+  "busy" (combat::MayFly) and a damage-free hit lands nothing. So a CQC hit waits `settle_ms` (150: the punch takes the row
+  first), then until `Combat::RowBusy()` is false, at most `retry_ms` (450) more; at the deadline it fires anyway and logs
+  `waited ... fired into a busy one`.
+- **A hold ends** at the release, a throw, `hold_seconds` (6), Snake `leave_distance` (3 m) from him, his death (the bits go
+  back on the corpse too: a revive in place must not stand frozen), a Fulton (the lift's hold bits take over: nothing written
+  back) or the puppet stopping; then `hold_cooldown` (8 s) before he can be held again (release + re-grab kept an enemy frozen
+  6 s of every ~7). Bits someone else cleared during the hold (a poster stare that ended) are set again and become ours; the
+  poster never stares at the one held. The held one is the target of the choke, interrogation and throw while he stays within
+  `leave_distance`; a grab or a throw otherwise takes the nearest in front, a choke or an interrogation nobody.
+- **UNVERIFIED:** which `dmgLevel` is Elden Ring's knockdown (4 is assumed; 3 is the large flinch the stun rounds use); whether
+  `hit_correction` 10% is enough for the reaction (the stun rounds use 15%), and whether a damage-free bullet carries poise and
+  dmgLevel at all (the sleep darts carry the sleep build-up that way, VERIFIED); the boss test is by max HP only (a boss bar
+  for his handle would need CSFeMan, not mapped: a small field boss under `boss_hp`, e.g. a Bloodhound Knight, can be held); MGSV's pad bits
+  for RT (FIRE 0x10 and CQC 0x8000 are both taken) and LB (CALL 0x200); MGSV's own hold signals (PlayerStatus CQC_HOLD /
+  CQC_CONTINUOUS, the CQC state's action callback `s+0x10`): logged, they start a grab only with `[Cqc] MgsvHold = true`.
+- Ini: host `[Cqc]` (`enabled`, `range`, `arc_deg`, `boss_bigness`, `hold_seconds`, `leave_distance`, `grab_poise`,
+  `throw_poise`, `throw_dmg_level`, `stagger_poise`, `interrogate`, `boss_hp`, `hold_cooldown`, `hit_correction`, `settle_ms`,
+  `retry_ms`; all but `enabled`/`interrogate` also live via `pr er "cqc set <key> <value>"`); guest `[Cqc]` (`Enabled`, `MgsvHold`, `HoldMs`, `ChokeMs`,
+  `MaxHoldMs`, `CooldownMs`, `ThrowStick`, `Buttons`, `AimButtons`, `InterrogateButtons`, `ChokeButtons`, `Range`).
+- Tests: `test_guest_cqc` (check_guest: strike vs grab, choke and interrogate once per hold, throw, aim and not-allowed,
+  MGSV's hold, the stick), `test_host_combat` (`TestCqcSelection`, `TestCqcResponses`, `TestCqcIni`).
+
+### Live test (§7a)
+
+1. **Elden Ring + fake_mgsv** (no MGSV): `[Cqc] enabled = true`. Walk the puppet up to a Gatefront soldier (`pr er "combat
+   targets"`: < 1.5 m, in front). `pr lua '!grab grab'` -> host log `Snake CQC grab (MGSV attack 0) -> hold on npc ...` and
+   `combat: CQC hold -> npc ... bullet 1 poise 15 lv 1` about 0.15 s later; he flinches and stands still (no attacks) for 6 s
+   or until `pr lua '!grab release'` (`cqc: npc ... let go (Snake let go)`). No flinch: `pr er "cqc set hit_correction 15"`
+   (then 25) and grab another; note the value. `!grab grab` again on him within 8 s: `-> flinch (hold cooldown)`, no hold.
+   `!grab throw` on another: `bullet 1 poise 120 lv 4`, he falls (screenshot; if he only flinches, try `pr er "cqc set
+   throw_dmg_level 6"` (then 7), note the value for the ini). `!grab grab` then `!grab choke`: `sleep +... (resist 226)` and
+   he sleeps (`combat resist <n>`). `!grab interrogate`: a corner line. `!grab release`, then `!grab choke` with him in front:
+   `no hold`, he stays awake. On Margit/a Tree Sentinel: `-> stagger on ... (boss)`, never `hold`. `pr er cqc`: the counts
+   (`fired late 0`, `lost 0`). HP before/after each: at most a few HP (the token).
+2. **Both games**: RT held next to the soldier -> guest log `cqc: kGEvCqc grab (RT held; ...)` ~0.35 s after the punch's
+   `melee: serial ...`; keep holding -> `choke (RT held on)`; LB during the hold -> `interrogate (interrogate button)` (if not:
+   the `cqc: [holding] pad bits 0x.. -> 0x..` lines show which bit LB sets: put it in `InterrogateButtons`); let go ->
+   `release (let go)`; RT while running at him -> `throw (RT with the stick pushed)`. Note any false grab/throw in normal play
+   (sprint punches, the box, the D-pad menus) and whether MGSV shows `MGSV CQC status 1` / `action callback 1` on a plain
+   punch (if never: `MgsvHold = true` is safe for proxies).
+   **The punch and the throw together** (the review's case: fake_mgsv's `!grab throw` sends no punch with it): RT while running
+   at a soldier. Host log: the punch's `combat: CQC kind ... bullet ...` first, then `combat: CQC knockdown -> ... bullet 1 poise
+   120 lv 4` (never `nothing applied`, never `waited ... fired into a busy one`), and he falls. Same for a grab: the punch,
+   then ~0.5 s later `CQC hold -> ... poise 15`.
 
 ## 8. Verified live, both games (2026-10-12, Gatefront / Agheel Lake, Limgrave)
 

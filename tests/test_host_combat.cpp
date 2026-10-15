@@ -39,6 +39,7 @@ static int g_failures = 0;
 static bool Near(float a, float b, float eps = 1e-3f) { return std::fabs(a - b) <= eps; }
 
 #include "test_host_throw.inc"
+#include "test_host_decoy.inc"
 
 static void TestShapes()
 {
@@ -411,9 +412,12 @@ static void TestExplosionLogic()
 	CHECK(!ParseLook("") && !ParseLook("abc") && !ParseLook("1 2 3") && !ParseLook("-5") && !ParseLook("10030001 x"));
 	auto ids = ParseIds("10048000, 10048001, 10302000, 10302001");  // an ini from before the flame and breaker kinds
 	CHECK(ids && ids->size() == 4 && (*ids)[3] == 10302001);
-	ids = ParseIds("10048000, 10048001, 10302000, 10302001, 10302002, 10302003, 10302004");
-	CHECK(ids && ids->size() == kKinds && (*ids)[6] == 10302004);
-	CHECK(!ParseIds("1, 2, 3") && !ParseIds("1, 2, 3, 3") && !ParseIds("1 2 3 4 5 6 7 8") && !ParseIds("1, 2, 0, 4"));
+	ids = ParseIds("10048000, 10048001, 10302000, 10302001, 10302002, 10302003, 10302004");  // ... and before the muzzle flash
+	CHECK(ids && ids->size() == 7 && (*ids)[6] == 10302004);
+	ids = ParseIds("10048000, 10048001, 10302000, 10302001, 10302002, 10302003, 10302004, 10302005");
+	CHECK(ids && ids->size() == kKinds && (*ids)[7] == 10302005);
+	CHECK(!ParseIds("1, 2, 3") && !ParseIds("1, 2, 3, 3") && !ParseIds("1 2 3 4 5 6 7 8 9") && !ParseIds("1, 2, 0, 4"));
+	CHECK(FromName("muzzle") == Kind::kMuzzle && !IsBreaker(Kind::kMuzzle) && !IsCloud(Kind::kMuzzle));
 	CHECK(IsBreaker(Kind::kBreaker) && IsBreaker(Kind::kShrapnel) && !IsBreaker(Kind::kFlame) && !IsCloud(Kind::kFlame) && !IsCloud(Kind::kBreaker));
 
 	// Burst size from the hit radius; layout.
@@ -590,6 +594,18 @@ static void TestExplosionRows(const std::string& a_dir, const std::vector<std::u
 			MakeObjectOnlyAttack(patched.data(), static_cast<std::uint16_t>(k == 5 ? d.breakerObjAttack : d.explosionObjAttack), d.breakerHitsCharacters);
 			CHECK(ObjectOnly(patched.data()));
 		}
+	}
+	// The muzzle flash: the Fire Pot's fireball without its attack, its sparks or anything after it, cut with its short life.
+	if (const auto* t = row(d.explosionTemplate[7])) {
+		std::array<std::uint8_t, params::kBullet.rowSize> copy;
+		std::memcpy(copy.data(), t, copy.size());
+		MakeCarrier(copy.data(), d.explosionSfx[7], false);
+		MakeFlash(copy.data(), d.muzzleLife);
+		CHECK(!Harmful(copy.data()) && FlightSfx(copy.data()) == 300122 && At<std::int32_t>(copy.data(), params::bullet::kHitBulletId) <= 0 &&
+		      At<std::int8_t>(copy.data(), params::bullet::kSfxDeleteByLifeDead) == 1 && At<float>(copy.data(), params::bullet::kLife) < 0.1f);
+		CHECK(WalkChain(copy.data(), row).ids.empty());
+	} else {
+		CHECK(!"muzzle template missing");
 	}
 	// The fire pot's children (18 sparks, then small ground flames) carry no attack: they stay.
 	const auto* fire = row(10030001);
@@ -1127,6 +1143,15 @@ static void TestShippedIni(const wchar_t* a_path)
 	      s.explosionCarrier == d.explosionCarrier && s.explosionMaxBursts == d.explosionMaxBursts && s.explosionPerSecond == d.explosionPerSecond &&
 	      s.explosionCloudRepeat == d.explosionCloudRepeat && s.explosionGround == d.explosionGround);
 	CHECK(s.hitHook == d.hitHook && s.killOnGuestDeath == d.killOnGuestDeath && s.mirrorLife == d.mirrorLife);
+	// [Decoys] states the built-in defaults, and those are the rules' own.
+	CHECK(s.decoys == d.decoys && s.decoyRange == d.decoyRange && s.decoyActiveRange == d.decoyActiveRange && s.decoyCone == d.decoyCone &&
+	      s.decoyStare == d.decoyStare && s.decoyCooldown == d.decoyCooldown && s.decoyPopDistance == d.decoyPopDistance &&
+	      s.decoySnakeClose == d.decoySnakeClose && s.decoyShockRadius == d.decoyShockRadius && s.decoyHeight == d.decoyHeight && s.decoyTurn == d.decoyTurn);
+	{
+		const decoy::Rules dr;
+		CHECK(dr.range == d.decoyRange && dr.activeRange == d.decoyActiveRange && dr.coneDeg == d.decoyCone && dr.popDistance == d.decoyPopDistance &&
+		      dr.snakeClose == d.decoySnakeClose && !d.decoyTurn);
+	}
 	// The defaults the rules code assumes.
 	const HitRules r;
 	CHECK(r.scaling.unitsPerLife == d.unitsPerLife && r.scaling.bigFrom == d.bigFrom && r.scaling.bossFrom == d.bossFrom &&
@@ -1211,6 +1236,9 @@ static void TestProgression(const std::string& a_dir)
 	std::printf("weapon levels: %d regular (+25) and %d somber (+10) base weapons\n", regular, somber);
 }
 
+#include "test_host_cqc.inc"  // CQC holds and throws (er/CqcLogic.h)
+#include "test_host_projectiles.inc"
+
 int main(int argc, char** argv)
 {
 	phantom::Log::Init(L"test_host_combat.log", "test");
@@ -1220,13 +1248,18 @@ int main(int argc, char** argv)
 	TestHurtAndFlame();
 	TestExplosionLogic();
 	TestThrowLogic();
+	TestDecoyLogic();
 	TestStealthAndRounds();
+	TestCqcSelection();
+	TestCqcResponses();
 	TestDamageLadder();
 	TestNativeDamage();
+	TestProjectiles();
 	TestParams(argc >= 3 ? argv[2] : "er_params");
 	TestProgression(argc >= 3 ? argv[2] : "er_params");
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
+		TestCqcIni(phantom::Widen(argv[1]).c_str());
 	}
 	std::printf("%s (%d failures)\n", g_failures ? "FAILED" : "OK", g_failures);
 	return g_failures ? 1 : 0;

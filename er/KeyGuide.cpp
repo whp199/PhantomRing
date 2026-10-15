@@ -2,6 +2,7 @@
 
 #include "Addresses.h"
 #include "Config.h"
+#include "Kbm.h"
 #include "Log.h"
 #include "Mem.h"
 
@@ -20,7 +21,7 @@ namespace phantom::er::KeyGuide
 
 	void Tick(bool a_puppeting)
 	{
-		const int want = Cfg().padGlyphDevice;
+		const int want = Kbm::GlyphDevice(Cfg().padGlyphDevice);  // keyboard glyphs ("E: Rest") while the keyboard plays Snake
 		if (!a_puppeting || want < 0) {
 			return;
 		}

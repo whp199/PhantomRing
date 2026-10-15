@@ -6,11 +6,13 @@
 #include "Calibration.h"
 #include "CameraDriver.h"
 #include "Combat.h"
+#include "Cqc.h"
 #include "Config.h"
 #include "ConsoleExpr.h"
 #include "DebugDraw.h"
 #include "Explosion.h"
 #include "Fulton.h"
+#include "TimeSkip.h"
 #include "Game.h"
 #include "HitHook.h"
 #include "Hud.h"
@@ -18,9 +20,11 @@
 #include "InputBridge.h"
 #include "Link.h"
 #include "Log.h"
+#include "Marking.h"
 #include "Mem.h"
 #include "MemDiff.h"
 #include "MenuWatch.h"
+#include "Decoys.h"
 #include "Mines.h"
 #include "Pacing.h"
 #include "PacingProbe.h"
@@ -394,11 +398,80 @@ namespace phantom::er::Console
 			if (what == "ray") {
 				const auto v = nums(2, 6);
 				if (!v) {
-					return c.Fail("usage: call ray x y z dx dy dz");
+					return c.Fail("usage: call ray x y z dx dy dz [filter]   (filter: ray_filter, or e.g. 0x2000016 = [Puppet] ground_filter)");
+				}
+				// An optional 8th word: the cast_ray filter to try (docs/HOST.md "Collision filters"), else [Puppet] ray_filter.
+				std::uint32_t filter = Cfg().rayFilter;
+				if (w.size() > 8) {
+					const auto f = ParseNumber(w[8]);
+					if (!f || *f < 0 || *f > 4294967295.0) {
+						return c.Fail("call ray: the filter is a number (e.g. 0x2000016)");
+					}
+					filter = static_cast<std::uint32_t>(*f);
 				}
 				Vec3       hit;
-				const bool ok = game::CastRay({ (*v)[0], (*v)[1], (*v)[2] }, { (*v)[3], (*v)[4], (*v)[5] }, hit, p.chr, Cfg().rayFilter);
-				return ok ? std::format("hit ({:.3f}, {:.3f}, {:.3f})", hit.x, hit.y, hit.z) : std::string("no hit");
+				const bool ok = game::CastRay({ (*v)[0], (*v)[1], (*v)[2] }, { (*v)[3], (*v)[4], (*v)[5] }, hit, p.chr, filter);
+				return ok ? std::format("hit ({:.3f}, {:.3f}, {:.3f}) [filter {:#x}]", hit.x, hit.y, hit.z, filter)
+				          : std::format("no hit [filter {:#x}]", filter);
+			}
+			if (what == "rayall" || what == "raykeep") {
+				// rayall: every hit along the ray with its material (what the game's collector drops: class 2 and 5); raykeep: the
+				// closest hit with material classes kept (a 9th word: the class bits, default [Puppet] ground_keep).
+				const auto v = nums(2, 6);
+				if (!v) {
+					return c.Fail(std::format("usage: call {} x y z dx dy dz [filter]{} [layers]", what, what == "raykeep" ? " [keep bits]" : ""));
+				}
+				std::uint32_t filter = Cfg().rayFilter;
+				if (w.size() > 8) {
+					const auto f = ParseNumber(w[8]);
+					if (!f || *f < 0 || *f > 4294967295.0) {
+						return c.Fail("the filter is a number (e.g. 0x2000016)");
+					}
+					filter = static_cast<std::uint32_t>(*f);
+				}
+				const Vec3 from{ (*v)[0], (*v)[1], (*v)[2] }, delta{ (*v)[3], (*v)[4], (*v)[5] };
+				// The broad-phase layers to look in (cast_ray: 0xFB): raykeep's 10th word, rayall's 9th.
+				const std::size_t layersAt = what == "raykeep" ? 10 : 9;
+				std::uint8_t      layers = what == "raykeep" ? static_cast<std::uint8_t>(Cfg().groundLayers) : game::kCastRayLayers;
+				if (w.size() > layersAt) {
+					const auto l = ParseNumber(w[layersAt]);
+					if (!l || *l < 0 || *l > 255) {
+						return c.Fail("the broad-phase layers are a byte (cast_ray: 0xFB; all: 0xFF)");
+					}
+					layers = static_cast<std::uint8_t>(*l);
+				}
+				if (what == "raykeep") {
+					std::uint32_t keep = Cfg().groundKeep;
+					if (w.size() > 9) {
+						const auto k = ParseNumber(w[9]);
+						if (!k || *k < 0 || *k > 4294967295.0) {
+							return c.Fail("the keep bits are a number (0x24 = classes 2 and 5)");
+						}
+						keep = static_cast<std::uint32_t>(*k);
+					}
+					if (!game::CanCastRayKeep()) {
+						return c.Fail("Snake's own ray query is off (an address failed: see the log)");
+					}
+					Vec3       hit;
+					const bool ok = game::CastRayKeep(from, delta, hit, p.chr, filter, keep, layers);
+					return ok ? std::format("hit ({:.3f}, {:.3f}, {:.3f}) [filter {:#x}, keep {:#x}, layers {:#04x}]", hit.x, hit.y, hit.z, filter, keep, layers)
+					          : std::format("no hit [filter {:#x}, keep {:#x}, layers {:#04x}]", filter, keep, layers);
+				}
+				game::RayHit hits[24];
+				const int    n = game::CastRayAll(from, delta, p.chr, filter, hits, static_cast<int>(std::size(hits)), layers);
+				if (n < 0) {
+					return c.Fail("Snake's own ray query is off (an address failed: see the log)");
+				}
+				std::string out = std::format("{} hit(s) [filter {:#x}, layers {:#04x}; broad-phase layer masks {}]", n, filter, layers, game::BroadPhaseLayers());
+				for (int i = 0; i < std::min<int>(n, static_cast<int>(std::size(hits))); ++i) {
+					const auto& h = hits[i];
+					out += std::format("\n  {:5.3f} ({:.3f}, {:.3f}, {:.3f}) n ({:.2f}, {:.2f}, {:.2f}) body {:#x} layer {:#x} (filter info {:#x}) "
+									   "hkmat {} key {:#x} material {}{}",
+						h.fraction, h.pos.x, h.pos.y, h.pos.z, h.normal.x, h.normal.y, h.normal.z, h.body, h.shapeFilter & 0x7F, h.shapeFilter,
+						h.hkMaterial, h.shapeKey, h.material,
+						h.material >= 0 && (h.material / 100 == 2 || h.material / 100 == 5) ? " (dropped by the game's collector)" : "");
+				}
+				return out;
 			}
 			if (what == "kill") {
 				if (w.size() < 3 || w[2] != "yes" || !p) {
@@ -408,7 +481,7 @@ namespace phantom::er::Console
 				Log::Info("console: ChrIns::Kill");
 				return "ChrIns::Kill called";
 			}
-			return c.Fail("call: setpos x y z | setyaw rad | ray x y z dx dy dz | kill yes");
+			return c.Fail("call: setpos x y z | setyaw rad | ray|rayall|raykeep x y z dx dy dz [filter] | kill yes");
 		}
 
 		struct FlagDef
@@ -564,15 +637,19 @@ namespace phantom::er::Console
 			"combat shoot <rifle|handgun|sniper|buck|stun|tranq|rocket|grenade|flame> x y z [share] | strike x y z | aimat x y z | self <id> [off]\n"
 			"boom [status | lethal|stun|sleep|smoke|flame|breaker|shrapnel [radius] | mode auto|bullet|sfx|off|ini | restore | pool]   ER explosion 5 m ahead\n"
 			"boom look <kind> <bullet> [sfx] | set <key> <value> | raw <bullet> x y z   looks, breaker tuning, an unmodified ER bullet\n"
-			"throw [status | arc on|off|auto|ini]   Snake's thrown grenades we fly (er/Throw.h); arc on = draw it without MGSV aiming\n"
+			"throw [status | arc on|off|auto|ini | meshes on|off]   Snake's thrown grenades we fly (er/Throw.h); arc on = draw it without MGSV aiming\n"
 			"mines [detonate <id>]                   Snake's placed explosives (er/Mines.h)\n"
+			"decoys [add [m] [plain|active|shock] | pop <id>]  Snake's decoys (er/Decoys.h)\n"
 			"stealth [hide on|off | speffect <id>]   Snake in MGSV's cardboard box (er/Stealth.h)\n"
+			"cqc [status | grab | throw | choke | interrogate | release | on | off | set <key> <v>]   CQC holds and throws on Elden Ring enemies (er/Cqc.h)\n"
 			"fulton [status | nearest [fail] | 0x<handle> [fail] | forget]   MGSV's Fulton on an Elden Ring enemy, as kGEvFulton (er/Fulton.h)\n"
+			"mark [status | binoculars on|off|auto | nearest | clear]   binocular marks over Elden Ring characters (er/Marking.h)\n"
+			"timeskip [status | <minutes> | clear]   MGSV's Phantom Cigar on Elden Ring's clock, as kGEvTimeSkip (er/TimeSkip.h)\n"
 			"geom [learn [use] | near|all [radius] | ladders [radius] | dump <ins>]   map assets around the player (er/GeomProbe.h)\n"
 			"progression [off|level|weapon|both]   the Tarnished's level and right-hand armament, Snake's damage factor ([Progression]; switch live)\n"
-			"call setpos x y z | setyaw rad | ray x y z dx dy dz | kill yes\n"
+			"call setpos x y z | setyaw rad | ray x y z dx dy dz [filter] | rayall|raykeep (every hit + material | kept classes) | kill yes\n"
 			"flag [name [on|off]]         render nodead nodamage nohit noattack nomove nogravity\n"
-			"puppet auto|off | motion kinematic|root_motion   menu auto|open|closed   debug on|off\n"
+			"puppet auto|off | motion kinematic|root_motion | hop on|off | set <key> <value>   menu auto|open|closed   debug on|off\n"
 			"tarnished [on|off|toggle]    Tarnished mode (what View + Start held 1 s toggles): the Tarnished plays, Snake parks\n"
 			"render [status | keys | set <key> <value> | probe]   phase 2 renderer\n"
 			"hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value>]   overlay (MGSV HUD layer, reticle, corner text)\n"
@@ -580,7 +657,7 @@ namespace phantom::er::Console
 			"snap reset|take <label>|diff <a> <b> [max]|clear   bytes that follow a state you switch (live RE)\n"
 			"pacing [set smooth|draws on|off | set delay auto|<steps> | set extrapolate <steps> | set motion <frames>]   frame pacing (MGSV's frames blended)\n"
 			"pacing probe start [frames] | stop | dump [file]   per-frame pacing measurements -> CSV next to the DLL\n"
-			"input key <vk> | mouse <dx> <dy>   SendInput inside Elden Ring's Wine desktop\n"
+			"input key|keydown|keyup <vk> | mouse <dx> <dy> | wheel <n> | mbutton left|right|middle down|up   SendInput inside Elden Ring's Wine desktop; input kbm [on|off|sens <v>]: keyboard + mouse as Snake's pad\n"
 			"findq <expr> [max]           qwords equal to expr in writable memory (e.g. instances by vtable: findq base+0x33BC768)\n"
 			"expressions: + - * ( ) and [x] = read u64 at x; e.g. peek [[wcm]+0x1E508]+0x190 ptr\n";
 	}
@@ -679,8 +756,14 @@ namespace phantom::er::Console
 		if (cmd == "mines") {
 			return Mines::Console(w, a_f);
 		}
+		if (cmd == "decoys") {
+			return Decoys::Console(w, a_f);
+		}
 		if (cmd == "stealth") {
 			return Stealth::Console(w, a_f);
+		}
+		if (cmd == "cqc") {
+			return Cqc::Console(w, a_f);
 		}
 		if (cmd == "fulton") {
 			std::string rest;
@@ -688,6 +771,20 @@ namespace phantom::er::Console
 				rest += (i > 1 ? " " : "") + std::string(w[i]);
 			}
 			return Fulton::Command(a_f, rest);
+		}
+		if (cmd == "mark") {
+			std::string rest;
+			for (std::size_t i = 1; i < w.size(); ++i) {
+				rest += (i > 1 ? " " : "") + std::string(w[i]);
+			}
+			return Marking::Command(a_f, rest);
+		}
+		if (cmd == "timeskip") {
+			std::string rest;
+			for (std::size_t i = 1; i < w.size(); ++i) {
+				rest += (i > 1 ? " " : "") + std::string(w[i]);
+			}
+			return TimeSkip::Command(rest);
 		}
 		if (cmd == "geom") {
 			return GeomProbe::Command(w, a_f);
@@ -749,6 +846,57 @@ namespace phantom::er::Console
 		}
 		if (cmd == "puppet" && w.size() > 2 && w[1] == "motion") {
 			return Puppet::SetMotion(w[2], a_f);
+		}
+		if (cmd == "puppet" && w.size() > 1 && w[1] == "hop") {
+			// Dive = hop (roadmap 2.9) switched live: puppet hop on|off ([Puppet] hop).
+			if (w.size() > 2) {
+				Cfg().hop = w[2] == "on" || w[2] == "1" || w[2] == "true";
+			}
+			return std::format("hop = {} (height {:.2f} m, length {:.2f} m, step {:.2f} m)", Cfg().hop ? "on" : "off", Cfg().hopHeight, Cfg().hopLength,
+				Cfg().hopStep);
+		}
+		if (cmd == "puppet" && w.size() > 1 && w[1] == "set") {
+			// Live tuning of Snake's body (the [Puppet] keys of the same names; not saved): puppet set <key> <value>.
+			auto&      cfg = Cfg();
+			const auto v = w.size() > 3 ? ParseNumber(w[3]) : std::nullopt;
+			const std::string key = w.size() > 2 ? w[2] : "";
+			const auto u32 = [&](std::uint32_t& a_field) { a_field = static_cast<std::uint32_t>(std::clamp(*v, 0.0, 4294967295.0)); };
+			if (!v) {
+				return c.Fail("usage: puppet set ground_keep|ground_layers|ground_filter|wall_filter|wall_filter_also|ground_probes|step_up|snap_down|radius|"
+				              "jump_apex|jump_air_step|jump_air_control <value>");
+			}
+			if (key == "ground_keep") {
+				u32(cfg.groundKeep);
+			} else if (key == "ground_layers") {
+				u32(cfg.groundLayers);
+			} else if (key == "ground_filter") {
+				u32(cfg.groundFilter);
+			} else if (key == "wall_filter") {
+				u32(cfg.wallFilter);
+			} else if (key == "wall_filter_also") {
+				u32(cfg.wallFilterAlso);
+			} else if (key == "ground_probes") {
+				cfg.groundProbes = *v != 0.0;
+			} else if (key == "step_up") {
+				cfg.stepUp = static_cast<float>(*v);
+			} else if (key == "snap_down") {
+				cfg.snapDown = static_cast<float>(*v);
+			} else if (key == "radius") {
+				cfg.radius = static_cast<float>(*v);
+			} else if (key == "jump_apex") {
+				cfg.jumpApex = static_cast<float>(*v);
+			} else if (key == "jump_air_step") {
+				cfg.jumpAirStep = static_cast<float>(*v);
+			} else if (key == "jump_air_control") {
+				cfg.jumpAirControl = static_cast<float>(*v);
+			} else {
+				return c.Fail(std::format("puppet set: unknown key '{}'", key));
+			}
+			Log::Info("console: [Puppet] {} = {}", key, w[3]);
+			return std::format("[Puppet] {} = {} (ground_filter {:#x} keep {:#x} layers {:#x}, wall_filter {:#x} + {:#x}, probes {}, step_up {:.2f}, snap_down {:.2f}, "
+			                   "radius {:.2f}, jump_apex {:.2f}, jump_air_step {:.2f})",
+				key, w[3], cfg.groundFilter, cfg.groundKeep, cfg.groundLayers, cfg.wallFilter, cfg.wallFilterAlso, cfg.groundProbes, cfg.stepUp, cfg.snapDown, cfg.radius,
+				cfg.jumpApex, cfg.jumpAirStep);
 		}
 		if (cmd == "puppet" && w.size() > 1) {
 			Puppet::SetOverride(w[1] == "off" ? Puppet::Override::kOff : Puppet::Override::kAuto);

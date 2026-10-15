@@ -150,6 +150,10 @@ namespace phantom::er::render
 	// a_from -> a_to now (into a_pre) and back afterwards (into a_post); nothing when equal.
 	void Move(std::vector<D3D12_RESOURCE_BARRIER>& a_pre, std::vector<D3D12_RESOURCE_BARRIER>& a_post, ID3D12Resource* a_res, D3D12_RESOURCE_STATES a_from,
 		D3D12_RESOURCE_STATES a_to, UINT a_sub = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES);
-	// Shaders::kSh* flags for a draw.
-	std::uint32_t DrawFlags(const proto::DrawRecord& a_d, const RenderAssets::Mesh& a_mesh, const RenderAssets::Texture* a_albedo, const RenderAssets::Texture* a_normal);
+	// Shaders::kSh* flags for a draw. a_layer: texture 4 (the box poster, D-Walker's camo mask).
+	std::uint32_t DrawFlags(const proto::DrawRecord& a_d, const RenderAssets::Mesh& a_mesh, const RenderAssets::Texture* a_albedo, const RenderAssets::Texture* a_normal,
+		const RenderAssets::Texture* a_layer = nullptr);
+	// [Render] role_guard: may this texture be bound in slot a_slot? Records the role group it is first drawn in (er/MaterialRoles.h);
+	// off and log always say yes (log notes what on would refuse, once per texture).
+	bool RoleFits(RenderAssets::Texture& a_tex, unsigned a_slot, std::uint32_t a_material);
 }

@@ -5,6 +5,7 @@
 #include "Game.h"
 #include "Host.h"
 #include "Log.h"
+#include "Decoys.h"
 #include "Mines.h"
 #include "Puppet.h"
 #include "Rounds.h"
@@ -54,6 +55,7 @@ namespace phantom::er::WorldShift
 			}
 			Throw::OnWorldShift(*d);
 			Mines::OnWorldShift(*d);
+			Decoys::OnWorldShift(*d);
 			Rounds::OnWorldShift(*d);
 			Puppet::OnWorldShift(*d);
 			Explosion::OnWorldShift(*d);

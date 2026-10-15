@@ -8,6 +8,8 @@
 // MGSV keeps its frame rate while a new outfit/weapon streams in. Every resource we copy is AddRef'd
 // for as long as we keep it, so its address can't be reused by another resource under our cache key.
 
+#include "CaptureKeys.h"
+
 #include <d3d11.h>
 
 #include <cstdint>
@@ -27,11 +29,17 @@ namespace phantom::guest::capture::assets
 	std::shared_ptr<const std::vector<std::uint8_t>> Buffer(ID3D11Buffer* a_buffer);
 	std::shared_ptr<const TextureBytes>              Texture(ID3D11Texture2D* a_texture);
 	bool                                             Failed(ID3D11Resource* a_resource);
+	// Any thread. Which copy of a_resource this is: a number never reused, given when the resource is first seen, 0 when it isn't
+	// known (never asked for, or evicted). Callers that key anything by the game's pointer compare it each use: once the copy
+	// is evicted our reference is gone and MGSV may create another resource at the same address (Capture.cpp). a_touch keeps
+	// the copy from being evicted while it is in use.
+	std::uint64_t                                    Serial(ID3D11Resource* a_resource, bool a_touch);
+	using keys::Stale;  // CaptureKeys.h
 
 	// Present thread (owns the immediate context): finish copies the GPU completed, start new ones.
 	void Pump(ID3D11Device* a_device, ID3D11DeviceContext* a_immediate);
 
-	// Releases resources nobody asked for in a while (Present thread, cheap).
+	// Releases resources nobody asked for (Buffer/Texture/Serial with a_touch) in a minute (Present thread, cheap).
 	void Evict(std::uint64_t a_present);
 
 	std::string Describe();

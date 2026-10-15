@@ -9,6 +9,7 @@
 #include "Log.h"
 #include "Pacing.h"
 #include "PacingProbe.h"
+#include "Projectiles.h"
 #include "Puppet.h"
 
 #include <algorithm>
@@ -139,7 +140,7 @@ namespace phantom::er::RenderScene
 					continue;
 				}
 				if ((d.owner == proto::kOwnerPlayer && !rc.drawPlayer) || (d.owner == proto::kOwnerBuddy && !buddyOut) ||
-					(d.owner >= proto::kOwnerVehicle && !rc.drawOther)) {
+					(d.owner >= proto::kOwnerVehicle && d.owner != proto::kOwnerProjectile && !rc.drawOther)) {  // projectiles: Projectiles::Apply
 					continue;
 				}
 				a_s.draws.push_back(d);
@@ -209,6 +210,9 @@ namespace phantom::er::RenderScene
 			s->riding = (a_f.guest.flags & proto::kGuestOnVehicle) != 0;
 			s->firstPerson = (a_f.guest.flags & proto::kGuestFirstPerson) != 0;
 			s->draw = CopyDrawList(*s, a_f);
+			// MGSV's projectile draws out, the flown grenades / rockets in (roadmap 5.4) -- also without a list from MGSV this
+			// frame: Throw / Rounds leave their ball out for a copy placed here, which must not vanish while MGSV stalls.
+			s->draw = Projectiles::Apply(*s);
 			if (s->draw) {
 				GroundBuddy(*s, a_f.dt);
 			}

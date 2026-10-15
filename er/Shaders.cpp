@@ -128,8 +128,47 @@ struct MarkerOut
 	float4 shape : TEXCOORD1;
 	float  viewZ : TEXCOORD2;
 };
+// Signed distances (corner units, < 0 inside) of the binocular marks' shapes (er/Marking.h): MGSV's triangle pointing down,
+// and seven-segment glyphs for the distance (bits a b c d e f g = 1..64 clockwise from the top, 128 the lower middle
+// stroke that makes 'm').
+float MarkerBox(float2 p, float2 c, float2 h)
+{
+	float2 q = abs(p - c) - h;
+	return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+float MarkerTriangleDown(float2 p, float r)
+{
+	const float k = 1.7320508;
+	p.y = -p.y;
+	p.x = abs(p.x) - r;
+	p.y = p.y + r / k;
+	if (p.x + k * p.y > 0.0) {
+		p = float2(p.x - k * p.y, -k * p.x - p.y) * 0.5;
+	}
+	p.x -= clamp(p.x, -2.0 * r, 0.0);
+	return -length(p) * sign(p.y);
+}
+static const uint kMarkerSegments[11] = { 0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F, 0xD4 };
+float MarkerGlyph(float2 p, uint g)
+{
+	uint m = kMarkerSegments[min(g, 10u)];
+	const float w = 0.42, h = 0.74, t = 0.11;
+	float d = 9.0;
+	if (m & 1u) d = min(d, MarkerBox(p, float2(0, h), float2(w, t)));
+	if (m & 2u) d = min(d, MarkerBox(p, float2(w, h * 0.5), float2(t, h * 0.5)));
+	if (m & 4u) d = min(d, MarkerBox(p, float2(w, -h * 0.5), float2(t, h * 0.5)));
+	if (m & 8u) d = min(d, MarkerBox(p, float2(0, -h), float2(w, t)));
+	if (m & 16u) d = min(d, MarkerBox(p, float2(-w, -h * 0.5), float2(t, h * 0.5)));
+	if (m & 32u) d = min(d, MarkerBox(p, float2(-w, h * 0.5), float2(t, h * 0.5)));
+	if (m & 64u) d = min(d, MarkerBox(p, float2(0, 0), float2(w, t)));
+	if (m & 128u) d = min(d, MarkerBox(p, float2(0, -h * 0.5), float2(t, h * 0.5)));
+	return d;
+}
 float4 PSMarker(MarkerOut i) : SV_Target
 {
+	// Corner units per pixel, taken before any discard (the edges of the triangle and glyphs are a pixel soft).
+	float2 cw = fwidth(i.corner);
+	float aa = max(max(cw.x, cw.y), 1e-4);
 	if (gDepth.x > 0.5) {
 		float d = tSceneDepth.Load(int3(int2(i.pos.xy * gDepth.zw), 0)).r;
 		float n = gDepth.y;
@@ -160,13 +199,21 @@ float4 PSMarker(MarkerOut i) : SV_Target
 		float spec = pow(saturate(dot(reflect(-l, nrm), float3(0, 0, 1))), 24.0) * 0.35;
 		rgb = rgb * (0.3 + 0.7 * diff) + spec;
 		a *= saturate((1.0 - r) * 6.0);
-	} else {
+	} else if (i.shape.x < 2.5) {
 		// Ring: between the inner share and the edge, soft on both sides.
 		float inner = i.shape.y;
 		float w = max(1.0 - inner, 0.05);
 		float t = (r - inner) / w;
 		if (r > 1.0 || t < 0.0) discard;
 		a *= saturate(t * 4.0) * saturate((1.0 - r) * 12.0);
+	} else {
+		// Triangle (3) or glyph (4): the colour inside a dark edge, readable over sky and snow alike.
+		float d = i.shape.x < 3.5 ? MarkerTriangleDown(i.corner, 0.78) : MarkerGlyph(i.corner, (uint)(i.shape.y + 0.5));
+		float fill = saturate(0.5 - d / aa);
+		float edge = saturate(0.5 - (d - 0.13) / aa);
+		if (edge <= 0.0) discard;
+		rgb = lerp(float3(0.015, 0.015, 0.015), rgb, fill);
+		a *= edge;
 	}
 	return Encode(rgb * a, a);
 }

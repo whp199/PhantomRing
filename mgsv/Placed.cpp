@@ -2,6 +2,8 @@
 
 #include "Addresses.h"
 #include "Blast.h"
+#include "C4.h"
+#include "C4Logic.h"
 #include "Config.h"
 #include "Hook.h"
 #include "Link.h"
@@ -35,6 +37,7 @@ namespace phantom::guest::placed
 			std::uint32_t        announcedGen{ ~0u };  // the host session it was announced to (~0u: never announced)
 			std::uint32_t        announcedStart{ 0 };  // ... and the host's puppet start it was announced to
 			bool                 setOff{ false };
+			bool                 popped{ false };       // a decoy Elden Ring popped (kHEvDetonate): gone for the host, never announced again
 			bool                 preexisting{ false };  // in the vars when the sandbox became ready: MGSV's world (an old save's), never announced
 		};
 		struct Gone
@@ -50,7 +53,7 @@ namespace phantom::guest::placed
 		std::array<Gone, 16>      g_gone{};
 		std::size_t               g_goneNext{ 0 };
 		std::uint64_t             g_frame{ 0 };
-		std::uint64_t             g_placedEvents{ 0 }, g_goneEvents{ 0 }, g_detonations{ 0 }, g_refused{ 0 }, g_ownExplosions{ 0 }, g_matched{ 0 };
+		std::uint64_t             g_placedEvents{ 0 }, g_goneEvents{ 0 }, g_detonations{ 0 }, g_refused{ 0 }, g_ownExplosions{ 0 }, g_matched{ 0 }, g_pops{ 0 };
 		std::string               g_lastRefusal;
 		std::atomic<std::uint32_t> g_requested{ 0 };  // console detonation for the next Update
 		bool                       g_seenReady{ false };  // the first ready Update is behind us (what lies in the vars then is the save's)
@@ -65,6 +68,7 @@ namespace phantom::guest::placed
 		SetOffFn                    g_setOff{ nullptr };
 		std::atomic<std::uint64_t>  g_refusedSetOffs{ 0 };
 		std::atomic<std::uint32_t>  g_lastRefusedObject{ ~0u };
+		std::atomic<std::uint64_t>  g_mgsvC4SetOffs{ 0 };  // Snake's C4 that MGSV's own SetOff set off (C4.cpp)
 
 		bool SetOffDetour(std::uint8_t* a_system, std::uint16_t a_setter, std::uint32_t a_object)
 		{
@@ -83,7 +87,42 @@ namespace phantom::guest::placed
 				}
 				return false;
 			}
-			return g_setOff(a_system, a_setter, a_object);
+			const bool done = g_setOff(a_system, a_setter, a_object);
+			// Snake's own C4 set off by MGSV: its detonator (DetonateOwn; C4.cpp), the blast is the player's -- Elden Ring's, put
+			// where the host's copy lies (MGSV's own one skipped with [Combat] MgsvBlasts off, as for a mine of ours).
+			if (done && first != ~0u && a_object >= first && equip && c4::IsC4(*equip) && Cfg().c4Detonator) {
+				const bool detonator = __builtin_return_address(0) == reinterpret_cast<void*>(addr::kPlacedDetonateOwnReturn);
+				std::uint32_t id = 0, other = 0;
+				bool          preexisting = false;
+				{
+					std::scoped_lock lock(g_lock);
+					const auto slot = a_object - first;
+					if (slot < kSlots && g_slots[slot].id && g_slots[slot].equip == *equip) {
+						auto& s = g_slots[slot];
+						preexisting = s.preexisting;
+						other = s.id;
+						// Only one that reached Elden Ring and wasn't on its way yet: an old save's C4 (DetonateOwn takes the
+						// oldest, and that one is older than any the player placed) is MGSV's world -- not an answer to the press.
+						if (!s.preexisting && !s.setOff) {
+							s.setOff = true;
+							id = s.id;
+						}
+					}
+				}
+				if (!id) {
+					// Review: counted as the answer, the player's own C4 in Elden Ring stayed put and MGSV's blast was taken
+					// for ours. PlayerDetonate's detour now sees nothing of ours went off and sets the oldest of them off.
+					Log::Info("placed #{}: C4 (object {}, equip {}) set off by MGSV{} -- {}: MGSV's world, not the player's answer", other, a_object, *equip,
+						detonator ? "'s detonator (DetonateOwn)" : " (not its detonator)",
+						preexisting ? "an old save's" : other ? "already on its way" : "never sent to Elden Ring");
+					return done;
+				}
+				g_mgsvC4SetOffs.fetch_add(1, std::memory_order_acq_rel);
+				Log::Info("placed #{}: C4 (object {}, equip {}) set off by MGSV{}", id, a_object, *equip,
+					detonator ? "'s detonator (DetonateOwn)" : " (not its detonator: the sensor or the update)");
+				c4::NoteMgsvSetOff(detonator, *equip);
+			}
+			return done;
 		}
 
 		// A blast belongs to a placed explosive this close: the claymore's sits 2.5 m in front of it (its capsule).
@@ -122,9 +161,9 @@ namespace phantom::guest::placed
 			e.b = a_id;
 			e.frame = static_cast<std::uint32_t>(g_frame);
 			if (a_type == proto::kGEvPlaced) {
-				// MGSV's own blast direction for a claymore is its rotation applied to +Z (0x140FC2680).
+				// MGSV's own blast direction for a claymore is its rotation applied to +Z (0x140FC2680); a decoy's facing.
 				const Vec3 facing = logic::RotateByQuat(a_s.rot.data(), { 0.0f, 0.0f, 1.0f });
-				e.a = blast::ProtoKind(a_s.ex.kind);
+				e.a = a_s.ex.use == logic::ExplosiveUse::kDecoy ? proto::kAmmoDecoy : blast::ProtoKind(a_s.ex.kind);
 				e.v0[0] = a_s.pos.x, e.v0[1] = a_s.pos.y, e.v0[2] = a_s.pos.z;
 				e.v1[0] = facing.x, e.v1[1] = facing.y, e.v1[2] = facing.z;
 				// (v9) Announced before: MGSV's point is where it was placed relative to an earlier anchor, not where it lies in Elden
@@ -140,7 +179,7 @@ namespace phantom::guest::placed
 			if (!a_s.id) {
 				return;
 			}
-			if (a_s.announcedGen != ~0u) {
+			if (a_s.announcedGen != ~0u && !a_s.popped) {  // a popped decoy's kGEvPlacedGone went out when it popped
 				Push(proto::kGEvPlacedGone, a_s, a_s.id);
 				++g_goneEvents;
 			}
@@ -176,6 +215,25 @@ namespace phantom::guest::placed
 			__atomic_fetch_or(reinterpret_cast<std::uint8_t*>(flags + std::uintptr_t(index) * 3), std::uint8_t(4), __ATOMIC_SEQ_CST);
 			return true;
 		}
+
+		// kHEvDetonate for a decoy: an Elden Ring enemy walked into it (er/Decoys.h) and it popped there, or the host dropped it (set
+		// before a load, unknown to this host). The guest is the one that remembers: kGEvPlacedGone now, never announced again (a
+		// restarted puppet would otherwise get it back). In MGSV it
+		// stays where Snake set it unless [Combat] DecoyPopInMgsv sets its "set off" bit too (UNVERIFIED what MGSV's decoy
+		// views do with that bit: deflate, shock, or nothing).
+		void PopDecoy(Slot& a_s, std::uint32_t a_slot)
+		{
+			a_s.popped = true;
+			++g_pops;
+			if (a_s.announcedGen != ~0u) {
+				Push(proto::kGEvPlacedGone, a_s, a_s.id);
+				++g_goneEvents;
+			}
+			std::string why = "off";
+			const bool  mgsv = Cfg().decoyPopInMgsv && SetOff(a_s, a_slot, why);
+			Log::Info("placed #{}: decoy (equip {}) popped (or dropped) in Elden Ring -> kGEvPlacedGone; in MGSV {}", a_s.id, a_s.equip,
+				mgsv ? "its set-off bit is set" : Cfg().decoyPopInMgsv ? "left standing (" + why + ")" : std::string("left standing (DecoyPopInMgsv = false)"));
+		}
 	}
 
 	void Init()
@@ -191,6 +249,7 @@ namespace phantom::guest::placed
 		if (g_systemOk && Matches(addr::kPlacedSetOff, "placed set-off") && Matches(addr::kPlacedSensorCall, "placed sensor call") &&
 			Hooks::Create("placed set-off", reinterpret_cast<void*>(addr::kPlacedSetOff.va), &SetOffDetour, &g_setOff)) {
 			Log::Info("placed: MGSV's own set-off refused for Snake's mines (C4 stays the player's)");
+			c4::Init();  // C4's detonator watches that same set-off
 		}
 		Log::Info("placed: {}{}", g_varsOk ? "placed explosives -> kGEvPlaced/kGEvPlacedGone" : "vars mirror differs -- no placed events",
 			g_varsOk ? (g_systemOk ? ", kHEvDetonate sets them off in MGSV" : ", Placed System differs: kHEvDetonate refused") : "");
@@ -229,7 +288,8 @@ namespace phantom::guest::placed
 			const auto  w = weapons[i];
 			const Vec3  p{ pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2] };
 			const auto  ex = logic::ExplosiveOf(w);
-			const bool  ours = w != 0 && ex.use == logic::ExplosiveUse::kPlaced && p.Finite() && (p - a_root).Length() <= kMaxDistance;
+			const bool  kind = ex.use == logic::ExplosiveUse::kPlaced || (ex.use == logic::ExplosiveUse::kDecoy && Cfg().decoys);
+			const bool  ours = w != 0 && kind && p.Finite() && (p - a_root).Length() <= kMaxDistance;
 			if (s.id && (!ours || w != s.equip || (p - s.pos).Length() > 0.5f)) {
 				Retire(s, w == 0 ? "removed" : "replaced");
 			}
@@ -243,11 +303,12 @@ namespace phantom::guest::placed
 				s.pos = p;
 				s.preexisting = !g_seenReady;
 				std::copy_n(rot.begin() + i * 4, 4, s.rot.begin());
-				Log::Info("placed #{}: equip {} ({}) at {:.2f},{:.2f},{:.2f} rot {:.3f},{:.3f},{:.3f},{:.3f} (vars slot {}){}", s.id, w, logic::BlastKindName(ex.kind),
+				Log::Info("placed #{}: equip {} ({}) at {:.2f},{:.2f},{:.2f} rot {:.3f},{:.3f},{:.3f},{:.3f} (vars slot {}){}", s.id, w,
+					ex.use == logic::ExplosiveUse::kDecoy ? "decoy" : logic::BlastKindName(ex.kind),
 					p.x, p.y, p.z, s.rot[0], s.rot[1], s.rot[2], s.rot[3], i,
 					s.preexisting ? " -- already in the save when the sandbox loaded: MGSV's world, never sent to Elden Ring" : "");
 			}
-			if (s.preexisting) {
+			if (s.preexisting || s.popped) {
 				continue;
 			}
 			// New, a new host session that never heard of it, or a new start of the host's puppet (it forgot it). Only while
@@ -274,8 +335,12 @@ namespace phantom::guest::placed
 			if (s.id != a_id) {
 				continue;
 			}
-			if (s.setOff) {
+			if (s.setOff || s.popped) {
 				return;  // already on its way (the host repeats while an enemy stands in the radius)
+			}
+			if (s.ex.use == logic::ExplosiveUse::kDecoy) {
+				PopDecoy(s, i);
+				return;
 			}
 			std::string why;
 			if (!SetOff(s, i, why)) {
@@ -308,6 +373,56 @@ namespace phantom::guest::placed
 		Log::Info("placed: kHEvDetonate for unknown id {} (gone already?)", a_id);
 	}
 
+	std::uint32_t SetOffC4(std::uint16_t a_inHand, bool a_all, const char* a_why)
+	{
+		std::scoped_lock lock(g_lock);
+		std::uint32_t n = 0;
+		// Refused this call (review): skipped only here, as kHEvDetonate's Detonate does -- a refusal can be momentary (the
+		// system pointer, the live bit not set yet), and a C4 marked set off for good could never go off again.
+		std::array<bool, kSlots> tried{};
+		for (;;) {
+			std::array<c4::Candidate, kSlots> all{};
+			for (std::uint32_t i = 0; i < kSlots; ++i) {
+				const auto& s = g_slots[i];
+				// MGSV's world (an old save's) never reached Elden Ring: it isn't the player's to set off there.
+				all[i] = { s.preexisting ? 0u : s.id, s.equip, s.setOff || tried[i] };
+			}
+			const int i = c4::PickOldest(all, a_inHand);
+			if (i < 0) {
+				return n;
+			}
+			auto&       s = g_slots[i];
+			std::string why;
+			if (!SetOff(s, static_cast<std::uint32_t>(i), why)) {
+				++g_refused;
+				g_lastRefusal = why;
+				Log::Warn("placed #{}: C4 detonation ({}) refused: {}", s.id, a_why, why);
+				tried[i] = true;  // the next C4 for this press; this one stays live for the next
+				continue;
+			}
+			s.setOff = true;
+			++g_detonations;
+			++n;
+			Log::Info("placed #{}: C4 set off by the guest ({}; equip {}, vars slot {})", s.id, a_why, s.equip, i);
+			if (!a_all) {
+				return n;
+			}
+		}
+	}
+
+	bool HaveLiveC4()
+	{
+		std::scoped_lock lock(g_lock);
+		for (const auto& s : g_slots) {
+			if (s.id && !s.preexisting && !s.setOff && c4::IsC4(s.equip)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	std::uint64_t MgsvC4SetOffs() { return g_mgsvC4SetOffs.load(std::memory_order_acquire); }
+
 	std::uint32_t MatchBlast(const Vec3& a_centre, logic::BlastKind a_kind, bool* a_setOff)
 	{
 		std::scoped_lock lock(g_lock);
@@ -315,7 +430,7 @@ namespace phantom::guest::placed
 		bool          bestSetOff = false;
 		float         bestD = kMatchRadius;
 		for (const auto& s : g_slots) {
-			if (s.id && s.ex.kind == a_kind && (s.pos - a_centre).Length() <= bestD) {
+			if (s.id && s.ex.use != logic::ExplosiveUse::kDecoy && s.ex.kind == a_kind && (s.pos - a_centre).Length() <= bestD) {
 				bestD = (s.pos - a_centre).Length();
 				best = s.id;
 				bestSetOff = s.setOff;
@@ -348,11 +463,12 @@ namespace phantom::guest::placed
 		for (std::uint32_t i = 0; i < kSlots; ++i) {
 			const auto& s = g_slots[i];
 			if (s.id) {
-				live += std::format(" #{}={}@{:.1f},{:.1f},{:.1f}{}", s.id, s.equip, s.pos.x, s.pos.y, s.pos.z, s.setOff ? "(set off)" : "");
+				live += std::format(" #{}={}@{:.1f},{:.1f},{:.1f}{}", s.id, s.equip, s.pos.x, s.pos.y, s.pos.z, s.setOff ? "(set off)" : s.popped ? "(popped)" : "");
 			}
 		}
-		return std::format("placed: {} placed / {} gone events, detonations {} ({} refused{}), own explosions {}, blasts matched {}, MGSV set-offs refused {}, system {}; live:{}",
-			g_placedEvents, g_goneEvents, g_detonations, g_refused, g_lastRefusal.empty() ? "" : ": " + g_lastRefusal, g_ownExplosions, g_matched, g_refusedSetOffs.load(),
-			g_systemOk ? (System() ? "ok" : "not found") : "off", live.empty() ? " none" : live);
+		return std::format("placed: {} placed / {} gone events, detonations {} ({} refused{}), decoys popped {}, own explosions {}, blasts matched {}, MGSV set-offs refused {}, "
+		                   "system {}; live:{}",
+			g_placedEvents, g_goneEvents, g_detonations, g_refused, g_lastRefusal.empty() ? "" : ": " + g_lastRefusal, g_pops, g_ownExplosions, g_matched, g_refusedSetOffs.load(),
+			g_systemOk ? (System() ? "ok" : "not found") : "off", live.empty() ? " none" : live) + "\n" + c4::Describe();
 	}
 }

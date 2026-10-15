@@ -26,10 +26,11 @@ from ctypes import c_char, c_double, c_float, c_int16, c_int32, c_int64, c_uint8
 
 # ---- constants (namespace phantom::proto) ---------------------------------------------------------
 MAGIC = 0x47524850  # "PHRG"
-VERSION = 12  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
+VERSION = 14  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
 				# v6: GuestState aimThrowPos/Vel/Kind (0xA8..0xC4) + GuestFlags.ThrowAim; v7: GuestEventType.BuddyOrder; v8: GuestFlags.InBox/BoxPoster, Fire pad[1] = damage share;
 				# v9: PLACED_AGAIN (Placed pad[0]: an announcement repeated); v10: GuestFlags.Nvg, HostEventType.Rested/Tarnished;
 				# v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100: plugin versions, readable on a mismatch); v12: GuestEventType.Fulton
+				# v13: GuestFlags.Binoculars/Diving, GuestEventType.TimeSkip/Cqc, CqcAction, AmmoKind.Decoy, DrawOwner.Projectile; v14: GuestFlags.Jumping
 DEFAULT_PATH = "/dev/shm/phantomring_v1"
 DEFAULT_MAPPING_WIN = "file:Z:\\dev\\shm\\phantomring_v1"
 
@@ -131,6 +132,9 @@ class GuestFlags(enum.IntFlag):
 	InBox = 1 << 14  # v8: Snake is inside a cardboard box
 	BoxPoster = 1 << 15  # v8: ...a box with a poster (distracts soldiers in MGSV)
 	Nvg = 1 << 16  # v10: night-vision goggles on
+	Binoculars = 1 << 17  # v13: looking through binoculars (host marks ER characters)
+	Diving = 1 << 18  # v13: in MGSV's dive (host may carry the puppet over gaps)
+	Jumping = 1 << 19  # v14: Snake jumps (host: Elden Ring-like jump on the rising edge)
 
 
 class GuestBuddyFlags(enum.IntFlag):
@@ -159,6 +163,17 @@ class GuestEventType(enum.IntEnum):
 	PlacedGone = 10  # v5: b placed id
 	BuddyOrder = 11  # v7: the player's call-menu order: a MGSV buddy command (20 whistle, 21 Normal, 24 Stealth, 25 Search, 26 Intercept), b BuddyType
 	Fulton = 12  # v12: pad[0]|pad[1]<<32 ER character handle the proxy stood for, v0 proxy position, a 1 success / 0 failed
+	TimeSkip = 13  # v13: a = MGSV game minutes advanced (Phantom Cigar)
+	Cqc = 14  # v13: a CqcAction, v0 Snake, v1 facing, b range mm, pad[0] raw id, pad[1] proxy ER handle low
+
+
+class CqcAction(enum.IntEnum):  # v13: GuestEventType.Cqc a
+	Grab = 0
+	Hold = 1
+	Throw = 2
+	Choke = 3
+	Interrogate = 4
+	Release = 5
 
 
 class AmmoKind(enum.IntEnum):
@@ -166,6 +181,7 @@ class AmmoKind(enum.IntEnum):
 	Tranq = 1
 	Stun = 2
 	Smoke = 3  # v4: kGEvExplosion only (smoke / flare: no damage)
+	Decoy = 4  # v13: kGEvPlaced only: a decoy
 
 
 class MeleeKind(enum.IntEnum):
@@ -214,6 +230,7 @@ class DrawOwner(enum.IntEnum):
 	Buddy = 1
 	Vehicle = 2
 	Other = 3
+	Projectile = 4  # v13
 
 
 class RenType(enum.IntEnum):
@@ -585,6 +602,7 @@ ALL_ENUMS = {
 	GuestEventType: ("", "kGEv"),
 	AmmoKind: ("", "kAmmo"),
 	MeleeKind: ("", "kMelee"),
+	CqcAction: ("", "kCqc"),
 	HostEventType: ("", "kHEv"),
 	HurtKind: ("", "kHurt"),
 	ActorFlags: ("", "kActor"),

@@ -71,6 +71,9 @@ namespace phantom::er::Explosion
 		combat::RateLimiter                     g_limiter{ 40.0f, 20.0f };
 		combat::RateLimiter                     g_breakLimiter{ 20.0f, 10.0f };
 		combat::RateLimiter                     g_flameLimiter{ 6.0f, 3.0f };
+		combat::RateLimiter                     g_muzzleLimiter{ 10.0f, 3.0f };
+		std::uint64_t                           g_muzzles{ 0 }, g_muzzleDropped{ 0 };
+		float                                   g_muzzleLife{ -1.0f };  // the life the muzzle carrier was written with
 		std::string                             g_modeOverride;  // console: "" = ini
 		std::string                             g_lastOffReason;
 		ULONGLONG                               g_lastSpawn{ 0 };
@@ -271,10 +274,14 @@ namespace phantom::er::Explosion
 				explosion::MakeBreaker(carrier.data(), static_cast<std::int32_t>(atk->id), c.breakerRadius, std::clamp(reach / speed, 0.03f, 1.0f), speed);
 			} else {
 				// The children (sparks, ground flames) stay only if none of them can hurt anyone either.
-				p.chainKept = chain.harmless && chain.complete;
+				// A muzzle flash keeps none (the Fire Pot's 18 sparks and ground flames at every shot would be a fire show).
+				p.chainKept = chain.harmless && chain.complete && a_k != Kind::kMuzzle;
 				explosion::MakeCarrier(carrier.data(), p.sfx, p.chainKept);
 				if (a_k == Kind::kFlame) {
 					explosion::MakeSingleShot(carrier.data(), c.flameSpeed);
+				}
+				if (a_k == Kind::kMuzzle) {
+					explosion::MakeFlash(carrier.data(), c.muzzleLife);
 				}
 				if ((a_k == Kind::kSleep || a_k == Kind::kSmoke) && c.explosionCloudLife > 0.0f) {
 					const float life = std::clamp(c.explosionCloudLife, 0.5f, 30.0f);
@@ -511,6 +518,45 @@ namespace phantom::er::Explosion
 		}
 	}
 
+	void Muzzle(const Frame& a_f, const Vec3& a_muzzle, const Vec3& a_dir, bool a_tranq)
+	{
+		const auto& c = Cfg();
+		if (!c.muzzleFlash || (a_tranq && !c.muzzleTranq) || !Finite(a_muzzle) || !Finite(a_dir) || Length(a_dir) < 0.5f || !Ready(a_f)) {
+			return;
+		}
+		g_muzzleLimiter.Configure(std::max(0.5f, c.muzzlePerSecond), std::max(1.0f, c.muzzlePerSecond / 4.0f));
+		if (!g_muzzleLimiter.Allow(static_cast<double>(::GetTickCount64()))) {
+			++g_muzzleDropped;  // automatic fire: one flash every few rounds still reads as a flashing muzzle
+			return;
+		}
+		const auto k = static_cast<std::size_t>(Kind::kMuzzle);
+		if (g_muzzleLife != c.muzzleLife) {
+			g_prep[k].ok = false;  // muzzle_life changed (console / ini): the carrier is rewritten
+			g_muzzleLife = c.muzzleLife;
+		}
+		if (!Prepare(Kind::kMuzzle) || Room(a_f) <= 0) {
+			return;
+		}
+		const Vec3 dir = Normalize(a_dir);
+		const Vec3 at = a_muzzle + dir * std::clamp(c.muzzleAhead, 0.0f, 1.0f);
+		// Never in the camera's face: MGSV's shot origin is UNVERIFIED as the barrel's end (it might be the aim point near the
+		// camera in first person / over the shoulder).
+		if (const auto* cam = game::PersCam1()) {
+			const auto* t = reinterpret_cast<const float*>(cam + game::kCamMatrix + 0x30);
+			if (Length(at - Vec3{ t[0], t[1], t[2] }) < 0.6f) {
+				++g_muzzleDropped;
+				return;
+			}
+		}
+		if (SpawnOne(a_f, g_prep[k].carrier, at, dir)) {
+			++g_muzzles;
+			g_maxLife = std::max(g_maxLife, g_prep[k].life);
+			if (g_muzzles == 1) {
+				Log::Info("explosion: muzzle flashes drawn with Bullet {} cut after {:.2f} s (carrier {})", c.explosionTemplate[k], g_prep[k].life, c.explosionCarrier[k]);
+			}
+		}
+	}
+
 	void Break(const Frame& a_f, const Vec3& a_at, const Vec3& a_dir, std::string_view a_what)
 	{
 		const auto& c = Cfg();
@@ -595,9 +641,10 @@ namespace phantom::er::Explosion
 		const auto  mode = Effective(why);
 		std::string out = std::format("explosion_fx {} -> {}{}: {} blasts ({} lethal, {} stun, {} sleep, {} smoke), {} bursts, {} flames, {} breaks, {} refused "
 		                              "({} in a row now), {} cloud repeats skipped, {} cloud refreshes held back after a refusal, {} over the live cap ({}), {} while "
-		                              "off, {} rate-dropped",
+		                              "off, {} rate-dropped; muzzle flashes {} ({} shown, {} over muzzle_per_second)",
 			Configured(), explosion::Name(mode), mode == Mode::kOff ? " (" + why + ")" : "", g_blasts, g_byKind[0], g_byKind[1], g_byKind[2], g_byKind[3], g_bursts,
-			g_flames, g_breaks, g_refused, g_refusedRun, g_gated, g_backedOff, g_capped, Cfg().explosionMaxLive, g_off, g_limiter.Dropped());
+			g_flames, g_breaks, g_refused, g_refusedRun, g_gated, g_backedOff, g_capped, Cfg().explosionMaxLive, g_off, g_limiter.Dropped(),
+			Cfg().muzzleFlash ? "on" : "off", g_muzzles, g_muzzleDropped);
 		const auto& c = Cfg();
 		for (std::size_t k = 0; k < explosion::kKinds; ++k) {
 			const auto& p = g_prep[k];
@@ -659,8 +706,10 @@ namespace phantom::er::Explosion
 				c.explosionObjAttack = static_cast<int>(v);
 			} else if (a_w[2] == "hits_characters") {
 				c.breakerHitsCharacters = a_w[3] == "on";
+			} else if (a_w[2] == "muzzle_flash") {
+				c.muzzleFlash = a_w[3] == "on";  // [Combat] muzzle_flash live
 			} else {
-				return "boom set breaker_speed|breaker_radius|breaker_lead|breaker_obj|explosion_obj <v> | hits_characters on|off";
+				return "boom set breaker_speed|breaker_radius|breaker_lead|breaker_obj|explosion_obj <v> | hits_characters|muzzle_flash on|off";
 			}
 			g_objAtk = {};
 			for (auto& p : g_prep) {
@@ -716,7 +765,7 @@ namespace phantom::er::Explosion
 		}
 		const auto kind = explosion::FromName(sub);
 		if (!kind) {
-			return "boom [status] | boom <lethal|stun|sleep|smoke|flame|breaker|shrapnel> [radius m] | boom pool | boom set ... | boom look <kind> <bullet> "
+			return "boom [status] | boom <lethal|stun|sleep|smoke|flame|breaker|shrapnel|muzzle> [radius m] | boom pool | boom set ... | boom look <kind> <bullet> "
 			       "[sfx] | boom mode auto|bullet|sfx|off|ini | boom restore";
 		}
 		if (!a_f.player) {
@@ -730,6 +779,15 @@ namespace phantom::er::Explosion
 		if (*kind == Kind::kFlame) {
 			g_flameLimiter = combat::RateLimiter{ 6.0f, 3.0f };
 			Flame(a_f, feet + Vec3{ 0, 1.5f, 0 } + fwd * 0.5f, fwd);
+			return Describe();
+		}
+		if (*kind == Kind::kMuzzle) {
+			// A flash 1.5 m in front of the Tarnished's chest, along his facing (whatever muzzle_flash says).
+			const bool was = Cfg().muzzleFlash;
+			Cfg().muzzleFlash = true;
+			g_muzzleLimiter = combat::RateLimiter{ 10.0f, 3.0f };
+			Muzzle(a_f, feet + Vec3{ 0, 1.4f, 0 } + fwd * 1.5f, fwd, false);
+			Cfg().muzzleFlash = was;
 			return Describe();
 		}
 		if (*kind == Kind::kBreaker) {

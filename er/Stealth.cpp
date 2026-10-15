@@ -4,6 +4,7 @@
 #include "Calibration.h"
 #include "Combat.h"
 #include "Config.h"
+#include "Cqc.h"
 #include "Game.h"
 #include "Log.h"
 #include "Mem.h"
@@ -130,6 +131,9 @@ namespace phantom::er::Stealth
 			for (const auto& foe : Combat::HostilesNear(a_f, a_box, c.boxPosterRange)) {
 				if (std::ranges::any_of(g_starers, [&](const Starer& s) { return s.handle == foe.handle; })) {
 					continue;
+				}
+				if (Cqc::IsHeld(foe.handle)) {
+					continue;  // CQC owns his no-attack / no-move bits: a stare's end must not let him go
 				}
 				if (auto it = g_cooldown.find(foe.handle); it != g_cooldown.end() && now < it->second) {
 					continue;

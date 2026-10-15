@@ -1196,6 +1196,7 @@ namespace phantom::er::Renderer
 			Cfg().render.stage, g_width, g_height, d3d::Name(g_bbFormat), g_outputMode, g_psos.size(), g_badPsos.size(), g_depthFrames.load(), g_sceneFrames.load(),
 			g_gbufFrames.load(), g_fallbackFrames.load(), g_stageWhy.empty() ? "" : " (stage C: " + g_stageWhy + ")", Gbuffer::Describe(), D3D12Hooks::Describe(),
 			RenderAssets::Describe(), RenderScene::Describe(), RenderDepth::Describe() + "\n  " + RenderProbe::Describe() + "\n  " + RenderPso::Describe());
+		s += "\n  " + MaterialRoles::Describe();
 		s += std::format("\n  {}: {} frames before the HUD, {} at Present{}", RenderMarkers::Describe(), g_markerFrames.load(), g_markerPresentFrames.load(),
 			g_markerFailed ? " (marker pipeline FAILED)" : "");
 		s += std::format("\n  {} ({} submissions)", RenderNvg::Describe(), g_nvgFrames.load());
@@ -1232,7 +1233,7 @@ namespace phantom::er::Renderer
 			return "render set <key> <value>: stage (gbuffer|post|present) debug_view (0 lit,1 albedo,2 normals,3 uv,4 facing,5 bones,6 srm; stage C: 1 grey albedo, 2 no normal map, 6 srm as albedo) "
 				   "latency_frames cull (back|front|none) front_ccw flip_x xray (0..1 opacity) er_depth er_depth_bias er_depth_near day_night exposure light_intensity "
 				   "draw_player draw_buddy albedo_srgb normal_xy (auto|rg|ag) enabled gbuffer_depth (finite|infinite) gbuffer_stencil gbuffer_point (0 last, k = k-th) gbuffer_light_set gbuffer_ao "
-				   "gbuffer_translucency albedo_scale gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b) "
+				   "gbuffer_translucency albedo_scale gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref role_guard (off|log|on) poster_check (off|log|on) velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b) "
 				   "nvg nvg_gain nvg_curve nvg_floor nvg_tint (r,g,b) nvg_grain nvg_vignette nvg_scanlines nvg_fade_ms";
 		}
 		if (verb != "set" || key.empty()) {
@@ -1290,6 +1291,8 @@ namespace phantom::er::Renderer
 		else if (key == "metal_scale") r.metalScale = f();
 		else if (key == "alpha_test") r.alphaTest = value;
 		else if (key == "alpha_ref") r.alphaRef = f();
+		else if (key == "role_guard") r.roleGuard = value;
+		else if (key == "poster_check") r.posterCheck = value;
 		else if (key == "velocity") r.velocity = b();
 		else if (key == "view_constants") r.viewConstants = b();
 		else if (key == "shadows") r.shadows = b();

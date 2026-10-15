@@ -80,6 +80,13 @@ def main() -> int:
 		check(r.returncode == 0 and r.stdout.strip() == "50050", "`pr lua` round trip", (r.stdout + r.stderr).strip())
 		r = pr(path, "lua", "!status")
 		check(r.returncode == 0 and "WALKER_GEAR" in r.stdout, "`pr lua '!status'` guest worker command", r.stdout.strip())
+		# v13: the binoculars flag the host marks Elden Ring's characters with (er/Marking.h)
+		r = pr(path, "lua", "!binoculars on")
+		time.sleep(0.2)
+		gs = link.guest_state()
+		check(r.returncode == 0 and gs is not None and gs.flags & proto.GuestFlags.Binoculars and gs.flags & proto.GuestFlags.FirstPerson,
+			"`!binoculars on` sets GuestFlags.Binoculars", (r.stdout + r.stderr).strip())
+		pr(path, "lua", "!binoculars off")
 		r = pr(path, "er", "ping")
 		check(r.returncode == 0 and "pong" in r.stdout, "`pr er` round trip", (r.stdout + r.stderr).strip())
 		r = pr(path, "er", "frobnicate")

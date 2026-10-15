@@ -295,6 +295,10 @@ class FakeHost:
 				if ev.a == 1:
 					self.fultoned.add(handle)  # the real host lifts him out of Elden Ring's world: gone from the table
 				self.log(f"fulton: Elden Ring character {handle:#x} {'fultoned' if ev.a == 1 else 'NOT fultoned'} at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f})")
+			elif ev.type == GuestEventType.TimeSkip:
+				# v13: MGSV's Phantom Cigar; the real host moves Elden Ring's clock by as much (er/TimeSkip.h)
+				self.time_skip_min = getattr(self, "time_skip_min", 0) + ev.a
+				self.log(f"time skip: +{ev.a} min of MGSV game time (Phantom Cigar; {self.time_skip_min} min this session)")
 
 		if self.draw.acquire():
 			hdr, dl, draws, mats = link.read_draw_slot(self.draw.front)

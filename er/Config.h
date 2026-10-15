@@ -3,6 +3,8 @@
 // PhantomRingHost.ini (next to the DLL). Every key is documented in er/PhantomRingHost.ini; missing
 // keys take the defaults below.
 
+#include "KbmMap.h"
+
 #include <array>
 #include <cstdint>
 #include <string>
@@ -28,6 +30,9 @@ namespace phantom::er
 		float       ambientDown[3]{ 0.2f, 0.18f, 0.15f };
 		float       exposure{ 1.0f };
 		bool        dayNight{ true };        // follow Elden Ring's clock: sun arc by day, dim blue moonlight by night
+		// (roadmap 5.4) Snake's flown grenades / rockets drawn with MGSV's own meshes (er/Projectiles.h); UNVERIFIED live: off
+		bool        projectileMeshes{ false };
+		float       projectileSpin{ 9.0f };  // rad/s a thrown one tumbles about its flight while it flies
 		bool        albedoSrgb{ true };      // UNORM albedo textures hold sRGB values
 		std::string normalXy{ "auto" };      // auto | rg | ag (normal map channels)
 		float       hdrPaperWhite{ 200.0f };  // nits of 1.0 on an HDR swap chain
@@ -60,6 +65,8 @@ namespace phantom::er
 		float       alphaRef{ 0.5f };
 		std::vector<std::uint32_t> camoMaterials{ 0x5216a6bb };  // guest material ids painted with t3 (camo) where t4 (mask) is set
 		std::vector<std::uint32_t> posterMaterials{ 0xc94150c9 };  // guest material ids with MGSV's box poster: t4 on the second UV set
+		std::string roleGuard{ "log" };          // off | log | on: diffuse / normal map / SRM keep apart by key, no normal map as a diffuse (er/MaterialRoles.h)
+		std::string posterCheck{ "log" };        // off | log | on: poster_materials only where texture 4 is a poster by its content
 		bool        velocity{ true };            // write Snake's motion vectors after ER's velocity pass
 		bool        smoothDraws{ true };         // blend Snake's and the buddy's matrices between MGSV's draw lists (er/Pacing.h; needs [Camera] smooth)
 		bool        viewConstants{ true };       // project with Elden Ring's own view constants (er/RenderView.h) once they match its camera
@@ -127,6 +134,29 @@ namespace phantom::er
 		float       hudNotifyOffset[2]{ 0.0f, 0.0f };
 
 		bool operator==(const OverlayConfig&) const = default;
+	};
+
+	// [Marking] (protocol v13 kGuestBinoculars; er/Marking.h): Elden Ring characters Snake looks at through MGSV's binoculars
+	// are marked the MGSV way. Reads and ray casts only, no writes to the game: on by default.
+	struct MarkingConfig
+	{
+		bool        enabled{ true };
+		std::string targets{ "all" };      // all (every character but the Tarnished) | hostile (kActorHostile's rule)
+		float       range{ 150.0f };       // m from the camera
+		float       cone{ 0.12f };         // the view centre: share of the camera's half vertical FOV (narrows as they zoom)
+		float       minConeDeg{ 1.0f };
+		float       dwell{ 0.5f };         // s of looking that marks
+		bool        lineOfSight{ true };   // Elden Ring's ray cast from the camera: nothing marked through walls
+		bool        renderedOnly{ true };  // skip characters Elden Ring doesn't render (ChrIns+0x1C5 bit3) or with no HP (dummies)
+		float       fade{ 1.0f };          // s a dead one's mark fades
+		int         maxMarked{ 64 };
+		int         maxCharacters{ 64 };   // characters looked through per frame (nearest first)
+		std::string distance{ "always" };  // always | centre (only marks near the view centre) | off
+		float       size{ 0.012f };        // the triangle's half height, share of the screen height
+		float       textSize{ 0.75f };     // a digit's half height, share of the triangle's
+		float       height{ 2.2f };        // m over a character's feet where the mark's tip is
+
+		bool operator==(const MarkingConfig&) const = default;
 	};
 
 	struct Config
@@ -209,7 +239,43 @@ namespace phantom::er
 		float snapDown{ 0.6f };
 		float chestHeight{ 1.3f };
 		float gravity{ 9.81f };
-		std::uint32_t rayFilter{ 0x2000058 };  // cs_phys_world_cast_ray filter (the only in-game caller uses this)
+		std::uint32_t rayFilter{ 0x2000058 };  // cs_phys_world_cast_ray filter (the only in-game caller uses this: an aim/sight ray, layer 0x58)
+		// Snake's body against the world (kinematic; docs/HOST.md "Collision filters"): vertical rays (ground, landing, head room)
+		// through groundFilter, horizontal ones (walls) through wallFilter; 0 = rayFilter. Layer 0x16 is what a character's capsule
+		// (layer 3) collides with, characters left out: the character-only floors and ramps layer 0x58 misses (RE'd, UNVERIFIED live).
+		std::uint32_t groundFilter{ 0x2000016 };
+		std::uint32_t wallFilter{ 0 };
+		// Walls are cast through this filter too, the nearer hit kept (0 = none): the characters' own walls (layer 0x16) beside
+		// wall_filter's enemies' hit capsules -- a scaffold whose floor only ground_filter sees has its railings there too (review
+		// 2026-10-14). UNVERIFIED live.
+		std::uint32_t wallFilterAlso{ 0x2000016 };
+		// Snake's own ray query for the ground_filter and wall_filter_also rays (game::CastRayKeep; docs/HOST.md "Collision filters"):
+		// material classes the game's ray collector drops that they keep (bit c = class c, material id / 100: the collector drops 2
+		// and 5) and the hknp broad-phase layers they look in (a byte ANDed with each layer's mask; cast_ray: 0xFB, which leaves out
+		// the layer whose mask is 0x04). Live 2026-10-14 at Stormveil's cliffside scaffold neither mattered (no class 2/5 material,
+		// nothing in that broad-phase layer: the floors the old filter missed are layer 0x39, which ground_filter 0x2000016 sees), so
+		// both stay the game's: 0 / 0xFB = cast_ray itself. The way to try where Snake still falls through something the Tarnished
+		// stands on: `call rayall` there, then `puppet set ground_keep 0x24` / `puppet set ground_layers 0xff`.
+		std::uint32_t groundKeep{ 0 };
+		std::uint32_t groundLayers{ 0xFB };
+		bool          groundProbes{ true };  // the ground under the whole body (centre + 4 probes), not one ray (er/Kinematic.h BodyGround)
+		// [Puppet] hop (roadmap 2.9, er/Kinematic.h KinematicHop): MGSV's dive (kGuestDiving) lifts the kinematic puppet in a
+		// parabola hop_height high, hop_length long, over short gaps and onto low ledges. On since the live pass of 2026-10-14
+		// (three running dives hopped 0.6 m and landed without damage; none in a jump).
+		bool  hop{ true };
+		float hopHeight{ 0.6f };
+		float hopLength{ 2.5f };
+		float hopStep{ 0.15f };      // in the air, a ledge top this far above the feet is landed on
+		float hopMinRise{ 0.15f };   // less room than this above his head: no hop
+		int   hopWaitMs{ 300 };      // the dive's first move must come this soon after kGuestDiving (no move: no hop)
+		// Snake jumps (protocol v14 kGuestJumping: the guest's [Jump] button; er/Kinematic.h KinematicJump; kinematic motion only)
+		bool  jump{ true };
+		float jumpApex{ 1.2f };        // m the feet rise (less under a ceiling)
+		float jumpMinRoom{ 0.15f };    // m over his head needed to jump at all
+		float jumpAirControl{ 3.0f };  // m/s^2: how fast Snake's own motion steers the jump in the air (Elden Ring-like: a little)
+		float jumpAirStep{ 0.3f };     // m: a ledge's top this far above the feet in the air is landed on (the capsule catching an edge)
+		bool  jumpCameraHold{ true };  // the camera's height over Snake stays as before the jump while he is in the air (MGSV's own lift
+		                               // and fall of Snake, the guest's, never bob it)
 
 		// [Axes] (UNVERIFIED conventions; confirmed live and pinned here)
 		float mirrorX{ -1 };         // Fox and Havok differ in handedness (verified live 2026-10-12)
@@ -321,9 +387,10 @@ namespace phantom::er
 		// Order: lethal, stun, sleep, smoke, flame (D-Walker's flamethrower: the Dragonfire incantation's flames), breaker and shrapnel
 		// (no look: the flying Fire Pot's bullet carrying an object-only attack, light / heavy: they break Elden Ring's destructible
 		// assets).
-		std::array<std::uint32_t, 7> explosionTemplate{ 10030001, 10035001, 10064001, 10033001, 10700000, 10030000, 10030000 };  // BulletParam rows
-		std::array<std::int32_t, 7>  explosionSfx{ -1, -1, -1, 300192, -1, -1, -1 };  // flight effect instead of the row's own (-1 = its own)
-		std::array<std::uint32_t, 7> explosionCarrier{ 10048000, 10048001, 10302000, 10302001, 10302002, 10302003, 10302004 };  // cut-content rows
+		// ... and muzzle (the Fire Pot's fireball cut after muzzle_life s: a short flash).
+		std::array<std::uint32_t, 8> explosionTemplate{ 10030001, 10035001, 10064001, 10033001, 10700000, 10030000, 10030000, 10030001 };  // BulletParam rows
+		std::array<std::int32_t, 8>  explosionSfx{ -1, -1, -1, 300192, -1, -1, -1, -1 };  // flight effect instead of the row's own (-1 = its own)
+		std::array<std::uint32_t, 8> explosionCarrier{ 10048000, 10048001, 10302000, 10302001, 10302002, 10302003, 10302004, 10302005 };  // cut-content rows
 		int                          explosionMaxBursts{ 7 };       // per blast (centre + a ring)
 		float                        explosionPerSecond{ 40.0f };   // bursts per second, all kinds
 		float                        explosionCloudRepeat{ 2.5f };  // s between two bursts of one lingering cloud
@@ -356,6 +423,13 @@ namespace phantom::er
 		bool          flameFx{ true };              // D-Walker's flamethrower drawn with Elden Ring flames
 		float         flamePerSecond{ 6.0f };
 		float         flameSpeed{ 14.0f };          // m/s the flames fly (0 = the template's own)
+		// (roadmap 5.4) A muzzle flash at each of Snake's (and the buddy's) shots: explosion_muzzle's effect cut short
+		// (er/Explosion.h Muzzle); UNVERIFIED live: off
+		bool          muzzleFlash{ false };
+		float         muzzlePerSecond{ 10.0f };     // flashes per second at most (automatic fire)
+		float         muzzleLife{ 0.06f };          // s the flash lasts (its effect is cut with the bullet)
+		float         muzzleAhead{ 0.1f };          // m in front of MGSV's muzzle point
+		bool          muzzleTranq{ false };         // also for tranquilizer rounds (MGSV's are suppressed: no flash)
 
 		// [Stealth] Snake in MGSV's cardboard box (protocol v8 kGuestInBox, er/Stealth.h)
 		bool          boxHide{ true };
@@ -368,6 +442,24 @@ namespace phantom::er
 		float         boxPosterRange{ 15.0f };
 		float         boxPosterStare{ 4.0f };      // s
 		float         boxPosterCooldown{ 12.0f };  // s before the same enemy stares again
+
+		// [Cqc] CQC holds and throws on Elden Ring enemies (ROADMAP 2.2 tier 1, protocol v13 kGEvCqc, er/Cqc.h). Live pass B: on.
+		bool        cqc{ true };
+		float       cqcRange{ 1.6f };           // m from Snake's chest
+		float       cqcArcDeg{ 70.0f };         // half angle in front of him
+		float       cqcBossBigness{ 0.5f };     // combat::Bigness from which an enemy is a boss (stagger only)
+		float       cqcHoldSeconds{ 6.0f };
+		float       cqcLeaveDistance{ 3.0f };   // m: Snake this far from the held one lets go
+		float       cqcGrabPoise{ 15.0f };
+		float       cqcThrowPoise{ 120.0f };
+		int         cqcThrowDmgLevel{ 4 };      // AtkParam dmgLevel of the throw
+		float       cqcStaggerPoise{ 40.0f };
+		bool        cqcInterrogate{ true };     // interrogate: a corner line
+		int         cqcBossHp{ 2000 };          // max HP from which an enemy is a boss whatever the Tarnished's (0 = off)
+		float       cqcHoldCooldown{ 8.0f };    // s after a hold ends before he can be held again (a re-grab: a flinch)
+		int         cqcHitCorrection{ 10 };     // AtkParam correction (%) of the flinch/knockdown/stagger, + a token 1 HP (0 = damage-free)
+		int         cqcSettleMs{ 150 };         // a CQC hit waits this long (MGSV's punch of the same press takes the bullet row first)...
+		int         cqcRetryMs{ 450 };          // ...then for no bullet in flight, at most this long
 
 		// [Throw] Snake's thrown explosives flown through Elden Ring's collision (er/Throw.h)
 		bool        throwSim{ true };            // fly our own copy of each kGEvThrow and blast where it is
@@ -393,6 +485,19 @@ namespace phantom::er
 		float mineBodyRadius{ 0.07f };
 		float mineLightRadius{ 0.035f };
 
+		// [Decoys] Snake's decoys (protocol v13 kGEvPlaced a = kAmmoDecoy, er/Decoys.h; roadmap 2.8). UNVERIFIED live.
+		bool  decoys{ true };              // track them, draw them, enemies who see one stare at it, one walked into pops
+		float decoyRange{ 15.0f };         // m: seen from this far (in front of the enemy, a clear line from its eyes)
+		float decoyActiveRange{ 25.0f };   // m: an active decoy (it calls out) is heard from this far, anywhere around
+		float decoyCone{ 70.0f };          // deg, half angle of an enemy's sight
+		float decoyStare{ 6.0f };          // s an enemy stares (no attack / no move, the box poster's flags)
+		float decoyCooldown{ 15.0f };      // s before the same enemy stares again
+		float decoyPopDistance{ 1.0f };    // m: an enemy this close to it knocks it over (pop -> kHEvDetonate)
+		float decoySnakeClose{ 4.0f };     // m: an enemy this close to Snake (and nearer him than the decoy) ignores it
+		float decoyShockRadius{ 2.5f };    // m: a shock decoy popping is a stun blast this big (0 = none)
+		float decoyHeight{ 1.75f };        // m, the drawn soldier
+		bool  decoyTurn{ false };          // also turn a staring enemy to face it (ChrIns::SetYaw on an enemy: UNVERIFIED)
+
 		// [Progression] (docs/COMBAT.md "Progression"): Elden Ring's progression scales Snake's damage. Off by default.
 		std::string progression{ "off" };     // off | level | weapon | both
 		float       levelReference{ 20.0f };  // the Tarnished's rune level at which Snake deals MGSV's own damage (x1)
@@ -401,8 +506,15 @@ namespace phantom::er
 		float       progressionMin{ 0.5f };   // the factor is kept within these
 		float       progressionMax{ 3.0f };
 
+		// [TimeSkip] (er/TimeSkip.h, roadmap 2.7): MGSV's Phantom Cigar moves Elden Ring's clock by the same game time (kGEvTimeSkip).
+		bool        timeSkip{ true };          // enabled
+		int         timeSkipSmoothMs{ 1000 };  // smooth_ms: each skip spread over about this long (Elden Ring's sky moves, no jump)
+		int         timeSkipStepMs{ 100 };     // step_ms: one clock write at most this often
+
 		RenderConfig  render;
+		Kbm::Params   keyboard;  // [Keyboard] keyboard and mouse play Snake (er/Kbm.h; off by default)
 		OverlayConfig overlay;
+		MarkingConfig marking;  // [Marking]
 
 		bool Load(const std::wstring& a_path);
 	};

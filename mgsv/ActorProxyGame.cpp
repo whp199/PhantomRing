@@ -4,7 +4,10 @@
 // a soldier *enabled* (SetEnabled true) is realized and gets a location object of the same Fox class as Snake's (vtable
 // 0x1424C8EF0; disabled soldiers have none, are not drawn and not targeted), `SetPuppet{enabled=true}` a few updates later makes
 // him stand inert (no AI: 20 s 5 m in front of Snake, playerPhase 0), and that location's own setter (vf 0x68, as Hold's) moves
-// him: drawn there, and MGSV's aim assist puts its reticle on him. So a proxy is an enabled puppet whose location object is found
+// him: drawn there, and MGSV's aim assist puts its reticle on him.
+// Inert full proxies (20.6, [Proxies] Enabled only): SetRestrictNotice + SetPuppet go out before and right after the enable (the
+// flags live in TppSoldier2's per-instance table, which SetEnabled leaves alone) and are refreshed; proxies stand on the sandbox
+// ground (Height = ground) with Snake's rounds turned to the real height (CorrectShot); MGSV's alert phase is held at 0 (PhaseGuard). So a proxy is an enabled puppet whose location object is found
 // by its position (the ~30 location objects are pooled per realized character; a scan of MGSV's writable memory lists them),
 // and a free soldier is simply disabled again (out of the world).
 // An Elden Ring character flagged asleep gets an asleep proxy (ChangeLifeState 3, refreshed): MGSV offers its own Fulton next to
@@ -80,6 +83,9 @@ namespace phantom::guest::proxy
 			std::uint64_t  sleptAt{ 0 };
 			std::uint64_t  polledAt{ 0 };
 			int            liftSeen{ 0 };
+			std::uint64_t  inertAt{ 0 };   // last SetRestrictNotice/SetPuppet refresh (inert full proxies)
+			std::uint64_t  ownedAt{ 0 };   // last location ownership check
+			int            ownMiss{ 0 };   // consecutive checks the soldier's position cache was away from his location object
 			std::uint32_t  recFlags{ 0 };  // the ActorTable flags of the character it stands for (game thread)
 			// placement
 			Vec3           pos;
@@ -108,6 +114,15 @@ namespace phantom::guest::proxy
 		std::uint64_t                   g_writes{ 0 }, g_writeFails{ 0 };
 		bool                            g_warnedNoHold{ false };
 		int                             g_sites{ -1 };
+		int                             g_inertSites{ -1 };
+		// MGSV's alert phase while full proxies are (or were, this session) in the world (Lua thread).
+		plan::PhaseGuard                g_phase;
+		std::uint64_t                   g_phaseAt{ 0 };
+		int                             g_lastPhase{ 0 };
+		bool                            g_fullRan{ false };
+		bool                            g_fullWasOn{ false };  // Cfg().proxies at the last LuaStep: an off -> on starts a fresh guard
+		std::uint32_t                   g_calms{ 0 }, g_sweeps{ 0 }, g_ownLost{ 0 };
+		std::atomic<std::uint64_t>      g_shotsTurned{ 0 };  // game thread (ShotSolver), read by the console
 
 		// The location objects and the soldier system, from a scan of MGSV's writable memory (background thread).
 		std::mutex                  g_scanLock;
@@ -132,6 +147,23 @@ namespace phantom::guest::proxy
 				}
 			}
 			return g_sites == 1;
+		}
+
+		// The Lua commands of the inert full proxies exist in this exe (20.6). Logged only: an unknown SendCommand id does nothing.
+		bool InertSitesOk()
+		{
+			if (g_inertSites < 0) {
+				g_inertSites = Matches(addr::kSoldierRestrictNoticeCase, "TppSoldier2 SetRestrictNotice") &&
+				                       Matches(addr::kSoldierRestrictNoticeBody, "TppSoldier2 SetRestrictNotice (flag)") &&
+				                       Matches(addr::kSoldierSetPuppetCase, "TppSoldier2 SetPuppet") && Matches(addr::kCpSetPhaseCase, "TppCommandPost2 SetPhase") &&
+				                       Matches(addr::kCpSetPhaseAll, "TppCommandPost2 SetPhase (every post)")
+				                   ? 1
+				                   : 0;
+				if (!g_inertSites) {
+					Log::Warn("proxy: SetRestrictNotice / SetPuppet / SetPhase not where this build has them -- inert proxies and the phase lock may do nothing");
+				}
+			}
+			return g_inertSites == 1;
 		}
 
 		// Every 8-byte aligned qword equal to the location vtable or the soldier system's in MGSV's committed private writable
@@ -260,6 +292,9 @@ namespace phantom::guest::proxy
 		std::mutex                 g_exclLock;
 		std::array<Vec3, kMaxExcl> g_excl{};
 		std::size_t                g_exclCount{ 0 };
+		// CorrectShot's view (game thread, under g_exclLock): placed proxies' feet and their characters' real feet.
+		std::array<plan::Body, kMaxExcl> g_bodies{};
+		std::size_t                      g_bodyCount{ 0 };
 
 		plan::Settings Settings()
 		{
@@ -271,6 +306,8 @@ namespace phantom::guest::proxy
 			s.buddyClearance = c.proxyBuddyClearance;
 			s.parkDepth = c.proxyParkDepth;
 			s.tableLagMs = c.proxyTableLagMs;
+			// Flattened only for full proxies: the Fulton-only path (live with the real host) keeps the enemy's height.
+			s.height = c.proxies ? plan::ParseHeight(c.proxyHeight, plan::Height::kGround) : plan::Height::kEnemy;
 			return s;
 		}
 
@@ -416,8 +453,9 @@ namespace phantom::guest::proxy
 		}
 		plan::Assign(g_slots, targets, a_root, a_buddy, a_centre, s);
 
-		std::array<Vec3, kMaxExcl> excl{};
-		std::size_t                exclCount = 0;
+		std::array<Vec3, kMaxExcl>       excl{};
+		std::array<plan::Body, kMaxExcl> bodies{};
+		std::size_t                      exclCount = 0;
 		for (std::size_t i = 0; i < g_slots.size(); ++i) {
 			const auto& slot = g_slots[i];
 			auto&       rt = g_rt[i];
@@ -446,6 +484,7 @@ namespace phantom::guest::proxy
 				}
 			}
 			if (exclCount < kMaxExcl) {
+				bodies[exclCount] = { slot.pos, slot.real };
 				excl[exclCount++] = slot.pos;
 			}
 		}
@@ -456,7 +495,10 @@ namespace phantom::guest::proxy
 				auto& rt = g_rt[i];
 				if (g_slots[i].proxy) {
 					const auto at = rt.life == Life::kActive ? LocationFeet(rt.loc) : std::nullopt;
-					rt.readBack = rt.ok && at && (*at - rt.pos).Length() < 1.0f;
+					// On the ground (Height = ground) MGSV's own ground under a far proxy may sit a step off the centre's: y gets
+					// HeightTolerance (20.6); at the enemy's height the old 1 m sphere.
+					const float yTol = s.height == plan::Height::kGround ? Cfg().proxyHeightTolerance : 1.0f;
+					rt.readBack = rt.ok && at && plan::ReadBackOk(rt.pos, *at, 1.0f, yTol) && (s.height == plan::Height::kGround || (*at - rt.pos).Length() < 1.0f);
 				} else {
 					rt.readBack = rt.life == Life::kDisabled || rt.life == Life::kSpent;
 				}
@@ -472,14 +514,90 @@ namespace phantom::guest::proxy
 			std::scoped_lock el(g_exclLock);
 			g_excl = excl;
 			g_exclCount = exclCount;
+			g_bodies = bodies;
+			g_bodyCount = exclCount;
+		}
+		if (Cfg().proxies && exclCount) {
+			g_fullRan = true;
 		}
 		g_active.store(true, std::memory_order_relaxed);
 	}
 
 	void Suspend() { g_active.store(false, std::memory_order_relaxed); }
 
+	namespace
+	{
+		// MGSV's alert phase held at 0 while full proxies are (or were, this session) in the world (20.6). Lua thread, g_lock held.
+		void PhaseLock(std::uint64_t a_nowMs, const std::function<std::string(const std::string&)>& a_call)
+		{
+			const auto& c = Cfg();
+			if (!c.proxyPhaseLock || !(c.proxies || g_fullRan) || a_nowMs - g_phaseAt < 500) {
+				return;
+			}
+			g_phaseAt = a_nowMs;
+			int        phase = -1;
+			const auto text = a_call("return PhantomRing.ProxyPhase()");
+			if (std::sscanf(text.c_str(), "%d", &phase) != 1) {
+				phase = -1;
+			}
+			plan::PhaseSettings ps;
+			ps.giveUpMs = static_cast<std::uint64_t>(c.proxyAlertGiveUpSec * 1000.0f);
+			const auto step = g_phase.Update(phase, a_nowMs, ps);
+			if (phase >= 0 && phase != g_lastPhase) {
+				if (phase > 0 && g_lastPhase == 0) {
+					Log::Warn("proxy: MGSV's alert phase 0 -> {} with proxies in the world -- phase lock: soldiers outside the slots disabled, command "
+					          "posts to sneak",
+						phase);
+				} else {
+					Log::Info("proxy: MGSV's alert phase {} -> {}", g_lastPhase, phase);
+				}
+				g_lastPhase = phase;
+			}
+			if (step.sweep) {
+				// Every soldier and hostage out of the world but the slot soldiers in it (a reinforcement, a soldier the mission
+				// enabled again: 2026-10-14's riot-shield soldier was neither a slot soldier nor disabled).
+				std::string keep;
+				for (std::size_t i = 0; i < g_slots.size(); ++i) {
+					if (g_rt[i].life != Life::kDisabled && g_rt[i].life != Life::kSpent) {
+						keep += std::format("{}{}", keep.empty() ? "" : ",", g_slots[i].id);
+					}
+				}
+				++g_sweeps;
+				const auto r = a_call(std::format("return PhantomRing.ProxySweep('{}')", keep));
+				if (g_sweeps <= 20 || g_sweeps % 30 == 0) {
+					Log::Info("proxy: phase lock: sweep (keeping {}): {} (#{})", keep.empty() ? "none" : keep, r, g_sweeps);
+				}
+			}
+			if (step.calm) {
+				++g_calms;
+				const auto r = a_call("return PhantomRing.ProxyCalm()");
+				if (g_calms <= 20 || g_calms % 30 == 0) {
+					Log::Info("proxy: phase lock: {} (#{})", r, g_calms);
+				}
+			}
+			if (step.giveUp && c.proxies) {
+				// LuaStep stops before this lock once nothing runs proxies any more: it only keeps going with [Fulton] Method = proxy.
+				Log::Warn("proxy: MGSV's alert phase still {} after {:.0f} s of phase lock -- full proxies OFF (`!proxy on` tries again; {})", phase,
+					c.proxyAlertGiveUpSec,
+					c.FultonProxies() ? "the Fulton-only proxies stay and the lock keeps calming" : "the phase lock stops with them");
+				MutableCfg().proxies = false;
+			}
+		}
+	}
+
 	void LuaStep(std::uint64_t a_nowMs, const std::function<std::string(const std::string&)>& a_call)
 	{
+		if (Cfg().proxies != g_fullWasOn) {
+			// Full proxies (back) on (`!proxy on` after a give-up or a `!proxy off`): a fresh phase guard, so a later alert that
+			// MGSV can't calm gives up again, a phase still up sweeps at once, and `!proxy` stops saying it gave up.
+			std::scoped_lock lock(g_lock);
+			g_fullWasOn = Cfg().proxies;
+			if (g_fullWasOn) {
+				g_phase.Reset();
+				g_lastPhase = 0;
+				g_phaseAt = 0;
+			}
+		}
 		if (!Cfg().ProxiesRun()) {
 			// Turned off in session (`!proxy off`): the slot soldiers in the world go out of it once.
 			std::scoped_lock lock(g_lock);
@@ -503,6 +621,13 @@ namespace phantom::guest::proxy
 			return;
 		}
 		std::scoped_lock            lock(g_lock);
+		const auto&                 cfg = Cfg();
+		// Inert full proxies (20.6): only with [Proxies] Enabled -- the Fulton-only proxies keep the sequence that is live.
+		const bool                  inert = cfg.proxies && cfg.proxyInert;
+		if (inert || (cfg.proxies && cfg.proxyPhaseLock)) {
+			InertSitesOk();
+		}
+		PhaseLock(a_nowMs, a_call);
 		std::vector<std::uintptr_t> taken;
 		for (const auto& rt : g_rt) {
 			if (rt.loc) {
@@ -543,12 +668,22 @@ namespace phantom::guest::proxy
 			}
 			switch (rt.life) {
 			case Life::kDisabled:
-				a_call(std::format("return PhantomRing.FultonEnable({})", slot.id));
+				if (inert) {
+					// Puppet and restrict-notice before the enable (they are in TppSoldier2's per-instance table, which SetEnabled
+					// leaves alone) and again right after: no update of live AI at his post (the likely start of the 2026-10-14 alert).
+					a_call(std::format("return PhantomRing.ProxyEnable({}, {})", slot.id, cfg.proxyNoAssignRoute ? "true" : "false"));
+					rt.inertAt = a_nowMs;
+				} else {
+					a_call(std::format("return PhantomRing.FultonEnable({})", slot.id));
+				}
 				enter(Life::kEnabling);
 				break;
 			case Life::kEnabling:
 				if (in >= 150) {
 					a_call(std::format("return PhantomRing.ProxyPuppet({})", slot.id));
+					if (inert) {
+						a_call(std::format("return PhantomRing.ProxyInert({}, true)", slot.id));
+					}
 					enter(Life::kPuppet);
 				}
 				break;
@@ -576,6 +711,13 @@ namespace phantom::guest::proxy
 					rt.loc = loc;
 					taken.push_back(loc);
 					rt.frame = 0;
+					rt.ownMiss = 0;
+					rt.ownedAt = a_nowMs;
+					if (inert) {
+						// (Re)realized: the flags are the instance's, but say them again before he is moved.
+						a_call(std::format("return PhantomRing.ProxyInert({}, {})", slot.id, rt.asleep ? "false" : "true"));
+						rt.inertAt = a_nowMs;
+					}
 					enter(Life::kActive);
 					Log::Info("proxy: soldier {:#x} realized (location object {:#x} at {:.1f},{:.1f},{:.1f}) -- standing in for {:#x}", slot.id, loc, cache->x, cache->y,
 						cache->z, slot.handle);
@@ -602,6 +744,28 @@ namespace phantom::guest::proxy
 					enter(Life::kLocating);  // unrealized under us: find it again
 					break;
 				}
+				if (cfg.proxies && !rt.asleep && a_nowMs - rt.ownedAt >= 1000) {
+					// The pooled location object still carries him (20.6): else a reinforcement realized into it would be moved. Not
+					// while asleep: MGSV's balloon carries him away from both, and losing the object would lose the fulton's yank.
+					rt.ownedAt = a_nowMs;
+					const auto cache = SoldierCache(slot.id);
+					const auto feet = LocationFeet(rt.loc);
+					rt.ownMiss = cache && feet && !plan::OwnsLocation(*cache, *feet, 5.0f) ? rt.ownMiss + 1 : 0;
+					if (rt.ownMiss >= 3) {
+						++g_ownLost;
+						Log::Warn("proxy: soldier {:#x}'s position cache {:.1f},{:.1f},{:.1f} is {:.1f} m from his location object {:#x} for 3 s -- found again",
+							slot.id, cache->x, cache->y, cache->z, (*cache - *feet).LengthXZ(), rt.loc);
+						release();
+						enter(Life::kLocating);
+						break;
+					}
+				}
+				if (inert && a_nowMs - rt.inertAt >= 2000) {
+					// Refreshed (each is one flag bit in the instance table: idempotent). An asleep proxy keeps only restrict-notice:
+					// a puppet ignores ChangeLifeState (ProxySleep lifted it).
+					a_call(std::format("return PhantomRing.ProxyInert({}, {})", slot.id, rt.asleep ? "false" : "true"));
+					rt.inertAt = a_nowMs;
+				}
 				const bool wantAsleep = (rt.recFlags & proto::kActorAsleep) != 0;
 				if (wantAsleep && (!rt.asleep || a_nowMs - rt.sleptAt > 8000)) {
 					a_call(std::format("return PhantomRing.{}({})", rt.asleep ? "FultonSleep" : "ProxySleep", slot.id));
@@ -625,7 +789,7 @@ namespace phantom::guest::proxy
 					const bool parsed = std::sscanf(text.c_str(), "%f,%f,%f,%d,%d,%d", &x, &y, &z, &life, &st, &act) == 6;
 					rt.liftSeen = parsed && st == 0 && act == 1 ? rt.liftSeen + 1 : 0;
 					if (rt.liftSeen >= 2) {
-						SendFulton(slot.handle, true, "MGSV's own Fulton on its proxy", slot.pos, "its proxy");
+						SendFulton(slot.handle, true, "MGSV's own Fulton on its proxy", slot.real, "its proxy");
 						Log::Info("proxy: MGSV's balloon took soldier {:#x} ({}) -- his slot gets a fresh soldier", slot.id, text);
 						g_spentIds.push_back(slot.id);
 						release();
@@ -649,7 +813,7 @@ namespace phantom::guest::proxy
 		const char*         from = "Snake's root";
 		for (const auto& slot : g_slots) {
 			if (slot.handle == a_handle && slot.proxy) {
-				at = slot.pos;
+				at = slot.real;  // the character's own place (the proxy may stand on the sandbox ground: Height = ground)
 				from = "its proxy";
 			}
 		}
@@ -714,12 +878,53 @@ namespace phantom::guest::proxy
 			g_readOk, g_readBad, g_scans.load(), locs, sys, g_fultonEvents);
 		const auto k = g_k.Latest();
 		out += std::format("treadmill offset k {:.2f},{:.2f},{:.2f}\n", k.x, k.y, k.z);
+		const auto& c = Cfg();
+		out += std::format("inert {} (sites {}), height {} (y tolerance {:.1f}), aim height fix {} ({} rounds turned), phase lock {}: phase {}, {} alerts, {} calms, "
+		                   "{} sweeps{}, location objects lost {}\n",
+			c.proxies && c.proxyInert, g_inertSites < 0 ? "unchecked" : g_inertSites ? "ok" : "MISMATCH", c.proxies ? c.proxyHeight : std::string("enemy (Fulton-only)"),
+			c.proxyHeightTolerance, c.proxyAimHeightFix, g_shotsTurned.load(), c.proxyPhaseLock, g_lastPhase, g_phase.Alerts(), g_calms, g_sweeps,
+			g_phase.GaveUp() ? " (gave up: full proxies off)" : "", g_ownLost);
 		for (std::size_t i = 0; i < g_slots.size(); ++i) {
 			const auto& s = g_slots[i];
 			const auto& r = g_rt[i];
-			out += std::format("  {:#06x} {} {:#x} at {:.2f},{:.2f},{:.2f} yaw {:.0f} -- {}{}{} loc {:#x}{}\n", s.id, s.proxy ? "proxy" : "free", s.handle, s.pos.x,
-				s.pos.y, s.pos.z, s.yaw * 57.2958f, LifeName(r.life), r.asleep ? " asleep" : "", r.ok ? " placed" : "", r.loc, r.readBack ? " (where it should be)" : "");
+			out += std::format("  {:#06x} {} {:#x} at {:.2f},{:.2f},{:.2f} (enemy y {:.2f}) yaw {:.0f} -- {}{}{} loc {:#x}{}\n", s.id, s.proxy ? "proxy" : "free",
+				s.handle, s.pos.x, s.pos.y, s.pos.z, s.real.y, s.yaw * 57.2958f, LifeName(r.life), r.asleep ? " asleep" : "", r.ok ? " placed" : "", r.loc,
+				r.readBack ? " (where it should be)" : "");
 		}
 		return out;
+	}
+
+	void CorrectShot(const float a_origin[3], float a_dir[3])
+	{
+		const auto& c = Cfg();
+		if (!c.proxies || !c.proxyAimHeightFix || !g_active.load(std::memory_order_relaxed)) {
+			return;
+		}
+		std::array<plan::Body, kMaxExcl> bodies{};
+		std::size_t                      n = 0;
+		{
+			std::scoped_lock el(g_exclLock);
+			bodies = g_bodies;
+			n = g_bodyCount;
+		}
+		const Vec3 origin{ a_origin[0], a_origin[1], a_origin[2] };
+		Vec3       dir{ a_dir[0], a_dir[1], a_dir[2] };
+		// 0.9 m around a soldier's axis, 2 m tall: aim assist puts the reticle on his chest; the radius takes a near miss too.
+		const int i = plan::CorrectShot(origin, dir, bodies.data(), n, 0.9f, 2.0f, c.proxyMaxDistance + 20.0f);
+		if (i < 0) {
+			return;
+		}
+		const auto& b = bodies[static_cast<std::size_t>(i)];
+		if ((b.real - b.placed).Length() < 0.05f) {
+			return;  // at the enemy's height already (Height = enemy, or level ground): nothing to turn
+		}
+		const auto turned = g_shotsTurned.fetch_add(1) + 1;
+		if (turned <= 24) {
+			Log::Info("proxy: round aimed at a proxy turned to its enemy's height ({:+.2f} m): dir {:.3f},{:.3f},{:.3f} -> {:.3f},{:.3f},{:.3f}", b.real.y - b.placed.y,
+				a_dir[0], a_dir[1], a_dir[2], dir.x, dir.y, dir.z);
+		}
+		a_dir[0] = dir.x;
+		a_dir[1] = dir.y;
+		a_dir[2] = dir.z;
 	}
 }

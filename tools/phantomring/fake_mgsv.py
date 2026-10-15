@@ -22,6 +22,8 @@ Combat by hand (docs/COMBAT.md), through the guest console (`tools/pr lua '!<cmd
     !autofire on|off    the periodic fire/buddy-fire events
     !fire <kind> [n] [yaw_deg] [pitch_deg] [share]   kind: lethal|handgun|rifle|sniper|buck|tranq|stun|explosive|rocket|grenade
     !cqc <punch|kick|throw|choke>            a strike 1 m in front of Snake
+    !grab <grab|hold|throw|choke|interrogate|release>   (v13) kGEvCqc: a CQC hold/throw as the guest reads it from MGSV's pad
+                                             (Snake's feet and facing; the host picks the Elden Ring enemy in reach)
     !blast [radius_m]                        a kGEvExplosion 4 m in front of Snake
     !die                                     life 1 + kGEvDied (Elden Ring should run YOU DIED)
     !life <n> [regen]                        set Snake's life (of 6000) and the regeneration per second (default 300)
@@ -59,6 +61,8 @@ Overlay tests (er/Overlay.h):
     !fail [text]        status Failed with that text; !ready to recover
     !menu on|off        kGuestInMenu (MGSV's iDroid/pause owns the pad: the host must give MGSV the whole pad, ER nothing)
     !nvg on|off         (v10) GuestFlags.Nvg: Snake's night-vision goggles (the host recreates them on Elden Ring's frame)
+    !binoculars on|off  (v13) GuestFlags.Binoculars + FirstPerson: Snake looks through his binoculars (the host marks the
+                        Elden Ring characters near the view centre, er/Marking.h)
 
 Protocol v10 host events are logged: kHEvRested (a = 0 grace rest, 1 respawn) refills ammo (30+120) and life;
 kHEvTarnished a = 1 parks Snake (no walking, no autofire) until a = 0.
@@ -224,6 +228,7 @@ class FakeGuest:
 		self.flame_until = 0.0
 		self.next_flame = 0.0
 		self.nvg = False          # v10: !nvg on|off -> GuestFlags.Nvg
+		self.binoculars = False   # v13: !binoculars on|off -> GuestFlags.Binoculars
 		self.parked = False       # v10: kHEvTarnished a=1 -> Snake parks (no walking, no autofire) until a=0
 		self.buddy = "walker"     # --buddy / !buddy walker|horse
 		self.stick_mode = "world"  # !stick world|camera: the left stick along MGSV x/z (+3 m/s), or relative to the camera like MGSV
@@ -438,6 +443,8 @@ class FakeGuest:
 			flags |= GuestFlags.FirstPerson
 		if self.nvg:
 			flags |= GuestFlags.Nvg
+		if self.binoculars:
+			flags |= GuestFlags.Binoculars | GuestFlags.FirstPerson  # MGSV's BINOCLE status is first person too (mgsv/Frame.cpp)
 		if self.aim_throw and self.ready():
 			flags |= GuestFlags.ThrowAim
 			hand, vel = self.release(*self.aim_throw[:2])
@@ -538,11 +545,14 @@ class FakeGuest:
 
 	def combat_command(self, w: list[str]) -> tuple[int, str]:
 		usage = ("fake guest commands: !status !walk on|off !autofire on|off !fire <kind> [n] [yaw] [pitch] [share] !share <s> !move <speed> [yaw] "
-			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !blast [r] [kind] !die "
+			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !grab <action> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
-			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off")
+			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off !binoculars on|off")
 		if not w:
 			return 0, usage
+		if w[0] == "binoculars" and len(w) > 1:
+			self.binoculars = w[1] == "on"
+			return 0, f"binoculars {'on' if self.binoculars else 'off'} (GuestFlags.Binoculars)"
 		if w[0] == "nvg" and len(w) > 1:
 			self.nvg = w[1] == "on"
 			return 0, f"night-vision goggles {'on' if self.nvg else 'off'} (GuestFlags.Nvg)"
@@ -673,6 +683,13 @@ class FakeGuest:
 			centre = (self.root[0] + fwd[0], 1.1, self.root[2] + fwd[2])
 			self.push_event(GuestEventType.Melee, a=int(kind), b=900, v0=centre, v1=fwd, pad0=7 if kind == proto.MeleeKind.Kick else 1)
 			return 0, f"cqc {kind.name} at ({centre[0]:.2f}, {centre[1]:.2f}, {centre[2]:.2f})"
+		if w[0] == "grab":
+			actions = {a.name.lower(): a for a in proto.CqcAction}
+			action = actions.get(w[1] if len(w) > 1 else "grab")
+			if action is None:
+				return 1, f"actions: {' '.join(actions)}"
+			self.push_event(GuestEventType.Cqc, a=int(action), b=1400, v0=tuple(self.root), v1=fwd, pad0=0, pad1=0)
+			return 0, f"kGEvCqc {action.name} at ({self.root[0]:.2f}, {self.root[1]:.2f}, {self.root[2]:.2f})"
 		if w[0] == "blast":
 			radius = float(w[1]) if len(w) > 1 else 4.0
 			kind = BLAST_KINDS.get(w[2] if len(w) > 2 else "lethal", proto.AmmoKind.Lethal)

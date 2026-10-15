@@ -91,6 +91,11 @@ namespace phantom::guest
 		// HorseFollowDistance (m) from Snake on foot, at most every HorseWhistleEveryMs: it gallops over. 0 = never.
 		float       buddyHorseFollowDistance{ 15.0f };
 		int         buddyHorseWhistleEveryMs{ 6000 };
+		// D-Horse treadmill (Horse.cpp, GUEST.md 8.1a; live pass B 2026-10-15: on): the treadmill moves D-Horse through its own location
+		// object -- with Snake on foot by the same jump (no whistle), and *as* the jump while he rides it (no airport limit).
+		bool        buddyHorseTreadmill{ true };
+		// ... and while riding, Snake is also placed by the same jump in the same frame (in case the saddle doesn't carry him).
+		bool        buddyHorseMoveRider{ false };
 
 		// [Motion]
 		HoldMode holdMode{ HoldMode::kNativeTreadmill };  // the Lua Warp turns MGSV's camera behind Snake (GUEST.md 19)
@@ -102,6 +107,18 @@ namespace phantom::guest
 		bool     treadmillMovesBuddy{ true };
 		float    velocitySmoothing{ 0.2f };  // EMA factor per frame
 		float    warpLift{ 0.8f };           // added to the height Snake is warped/placed at (Warp lands that much low)
+		bool     diveFlag{ true };           // publish MGSV's dive as kGuestDiving (Dive.h; the host's [Puppet] hop decides what it does)
+		int      diveConfirmMs{ 600 };       // a sign of the dive must come this soon after X (Dive.h Tunables::confirmMs)
+
+		// [Jump] Snake jumps (protocol v14 kGuestJumping; MGSV has no jump): the button's press lifts Snake in MGSV (the native
+		// placement, Lift m up: MGSV plays its own fall and landing) and the host jumps the puppet through Elden Ring's world.
+		bool          jump{ true };
+		std::uint16_t jumpButton{ 0x0080 };    // XInput bits: R3 (the right stick's click). L3 is MGSV's DASH (sprint), taken
+		std::uint16_t jumpPassWith{ 0x030F };  // held at the press, the button is MGSV's own: LB (call menu: R3 selects), RB (binoculars), the
+		                                         // D-pad (its weapon / item wheels: R3 = Use, the Phantom Cigar's only way; live pass B 2026-10-15)
+		bool          jumpPassAiming{ true };   // ... and LT (aiming: R3 changes the shoulder)
+		float         jumpLift{ 1.0f };         // m (0.2-1.5: a small lift, MGSV's fall damage never starts)
+		int           jumpMaxAirMs{ 2000 };     // the flag goes down by then at the latest (no landing seen)
 
 		// [Pacing] (FramePace.h)
 		int  jobSleepUs{ 500 };  // MGSV's own Sleep(1) (its job system's poll) as a delay of this many us; 0 = 1 ms as MGSV asks
@@ -144,10 +161,18 @@ namespace phantom::guest
 		bool                       blasts{ true };  // thrown/placed explosives -> kGEvExplosion (Blast.cpp)
 		bool                       throws{ true };  // thrown explosives -> kGEvThrow, the aim arc -> GuestState (Throw.cpp)
 		bool                       placed{ true };  // placed explosives -> kGEvPlaced/kGEvPlacedGone, kHEvDetonate sets them off (Placed.cpp)
+		bool                       decoys{ true };          // (with placed) decoys -> kGEvPlaced a = kAmmoDecoy (roadmap 2.8, UNVERIFIED live)
+		bool                       decoyPopInMgsv{ false };  // a decoy Elden Ring popped also gets MGSV's set-off bit (UNVERIFIED what it does)
 		// Snake's own thrown explosives, the mines Elden Ring's enemies set off and his gun-fired rounds also blast in MGSV's sandbox
 		// (Blast.cpp): there they can only hit D-Walker (Snake's MGSV damage is off) next to him; mines always lie within the
 		// treadmill's disc, and a rocket fired with the walker in MGSV's line of fire destroyed it (live).
 		bool                       mgsvBlasts{ false };
+		// ---- C4's detonator (C4.cpp, docs/GUEST.md 18.8a) ----
+		bool          c4Detonator{ true };    // MGSV's own detonator watched (its blast Elden Ring's); a press it refuses is the guest's
+		bool          c4Backup{ true };       // a tap MGSV never answers is the guest's (live: MGSV's own detonator answered 0 of 5)
+		std::uint32_t c4Buttons{ 0x20 };      // PlayerPad bits of the detonator (0x20 = ACTION: MGSV's own, Y by default)
+		std::int64_t  c4GraceMs{ 250 };       // how long MGSV has to answer a tap before the backup sets one off
+		bool          c4DetonateAll{ false }; // every live C4 per press (MGSV's own: the oldest only)
 
 		// [Saves]
 		bool         blockSaves{ true };
@@ -182,10 +207,17 @@ namespace phantom::guest
 		// [Capture]
 		bool capture{ true };  // observe MGSV's D3D11 device and publish Snake's draws (phase 2)
 		bool hud{ true };      // MGSV's own HUD as a transparent layer (Hud.cpp; needs capture)
+		bool captureRevalidate{ true };  // re-key a texture/mesh whose copy was evicted (MGSV may reuse its address; Capture.cpp Stale())
 		int  hudEvery{ 1 };    // publish the HUD layer every Nth frame
+		// (v13) the grenade / rocket Snake just released published as kOwnerProjectile draws (ProjectileTag.h). UNVERIFIED live,
+		// so off: a mis-tag takes a rigid draw away from Snake / the buddy (the host strips or re-owns kOwnerProjectile draws).
+		bool projectileMeshes{ false };
 
 		// [Proxies] ActorProxy v0 (ActorProxy.h, docs/GUEST.md §20). UNVERIFIED live; off by default.
 		bool  proxies{ false };              // the sandbox's disabled soldiers stand in for the nearest hostile Elden Ring characters
+		// [Cigar] (Cigar.cpp, docs/GUEST.md 18.16): the Phantom Cigar's time-lapse moves Elden Ring's clock (kGEvTimeSkip). UNVERIFIED live; off by default.
+		bool  cigarTimeSkip{ true };         // [Cigar] TimeSkip (live pass B 2026-10-15: two smokes, 12:14 -> 18:02 -> 02:14 in Elden Ring): watch Snake smoke, send the minutes
+		float cigarClockScale{ 20.0f };      // [Cigar] ClockScale: the frozen clock's time scale while he smokes, if MGSV's own time-lapse leaves it still (FreezeClock: 0; MGSV: 20)
 		// [Fulton] (FultonAnchor.cpp, docs/GUEST.md 20.4): MGSV's own Fulton on a sleeping Elden Ring enemy (ActorTable kActorAsleep).
 		bool  fultonAnchor{ true };          // [Fulton] Enabled: MGSV's Fulton on sleeping Elden Ring enemies
 		// [Fulton] Method: proxy = an asleep proxy soldier is moved to the enemy (ActorProxy v1 for sleepers only, also with [Proxies]
@@ -208,6 +240,29 @@ namespace phantom::guest
 		bool  proxyAutoAim{ true };          // MGSV's Auto-Aim Correction on while every pool soldier is placed (saves guarded)
 		bool  proxyKeepMarkers{ true };      // no periodic TppMarker.DisableAll while proxies run (marking them is the point)
 		float proxyCaptureRadius{ 1.5f };    // Capture drops G-buffer draws this near a proxy (and nearer to it than to Snake)
+		// Inert full proxies (docs/GUEST.md 20.6; only with [Proxies] Enabled -- the Fulton-only proxies are unchanged). UNVERIFIED live.
+		bool        proxyInert{ true };            // SetRestrictNotice + SetPuppet before and right after SetEnabled, refreshed every 2 s
+		bool        proxyNoAssignRoute{ false };   // SetEnabled{noAssignRoute=true}: no route handed to a proxy when he is enabled
+		bool        proxyPhaseLock{ true };        // MGSV's alert phase held at 0: sweep + command posts to sneak, give up after AlertGiveUpSec
+		float       proxyAlertGiveUpSec{ 20.0f };  // an alert this long despite the lock: full proxies off for the session
+		std::string proxyHeight{ "ground" };       // ground: proxies on the sandbox ground (x/z the enemy's); enemy: at the enemy's height
+		float       proxyHeightTolerance{ 2.0f };  // read-back: a proxy this near the height it was put at (m) stands where it should
+		bool        proxyAimHeightFix{ true };     // a round aimed at a flattened proxy goes to its enemy's real height (kGEvFire dir)
+
+		// [Cqc] CQC holds and throws on Elden Ring enemies (ROADMAP 2.2 tier 1, Cqc.cpp / CqcLogic.h, protocol v13 kGEvCqc).
+		// Only events: the host decides whether an Elden Ring enemy is there to take them (its own [Cqc] switch).
+		bool          cqc{ true };                    // [Cqc] Enabled
+		bool          cqcMgsvHold{ false };           // MGSV's CQC status / action callback starts a grab at once (UNVERIFIED: off)
+		std::uint32_t cqcHoldMs{ 350 };
+		std::uint32_t cqcChokeMs{ 2500 };             // 0 = only ChokeButtons choke
+		std::uint32_t cqcMaxHoldMs{ 10000 };
+		std::uint32_t cqcCooldownMs{ 400 };
+		float         cqcThrowStick{ 0.6f };
+		std::uint32_t cqcButtons{ 0x8010 };           // PlayerPad FIRE | CQC
+		std::uint32_t cqcAimButtons{ 0x8 };           // PlayerPad HOLD
+		std::uint32_t cqcInterrogateButtons{ 0x200 }; // PlayerPad CALL / INTERROGATE
+		std::uint32_t cqcChokeButtons{ 0 };
+		float         cqcRange{ 1.4f };               // m, kGEvCqc b (the host's own [Cqc] range decides)
 
 		// [Lua]
 		std::wstring luaOverride{ L"phantomring.lua" };

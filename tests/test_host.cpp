@@ -8,8 +8,10 @@
 #include "Host.h"
 #include "Interaction.h"
 #include "Buddy.h"
+#include "CombatLogic.h"
 #include "Fulton.h"
 #include "Kinematic.h"
+#include "DiveHop.h"
 #include "Link.h"
 #include "Revival.h"
 #include "Log.h"
@@ -374,6 +376,14 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.maxSpeed == d.maxSpeed && shipped.maxSpeedVehicle == d.maxSpeedVehicle && shipped.teleportDrop == d.teleportDrop &&
 	      shipped.resyncDistance == d.resyncDistance && shipped.radius == d.radius && shipped.stepUp == d.stepUp && shipped.stepUpVehicle == d.stepUpVehicle &&
 	      shipped.snapDown == d.snapDown && shipped.chestHeight == d.chestHeight && shipped.gravity == d.gravity && shipped.rayFilter == d.rayFilter);
+	CHECK(shipped.groundFilter == d.groundFilter && shipped.wallFilter == d.wallFilter && shipped.wallFilterAlso == d.wallFilterAlso &&
+	      shipped.groundProbes == d.groundProbes);
+	CHECK(d.rayFilter == 0x2000058 && d.groundFilter == 0x2000016 && d.wallFilter == 0 && d.wallFilterAlso == 0x2000016 && d.groundProbes);
+	// Snake's own ray query stays the game's cast_ray by default (live pass 2026-10-14: no dropped material or skipped broad-phase
+	// layer under Stormveil's scaffold); the shipped ini says the same.
+	CHECK(shipped.groundKeep == d.groundKeep && d.groundKeep == 0 && shipped.groundLayers == d.groundLayers && d.groundLayers == 0xFB);
+	CHECK(shipped.jump == d.jump && shipped.jumpApex == d.jumpApex && shipped.jumpMinRoom == d.jumpMinRoom && shipped.jumpAirControl == d.jumpAirControl &&
+	      shipped.jumpAirStep == d.jumpAirStep && shipped.jumpCameraHold == d.jumpCameraHold);
 	CHECK(shipped.mirrorX == d.mirrorX && shipped.mgsvYawSign == d.mgsvYawSign && shipped.erForward == d.erForward && shipped.mgsvCamForward == d.mgsvCamForward &&
 	      shipped.mgsvRootOffsetY == d.mgsvRootOffsetY);
 	CHECK(shipped.cameraTaskGroup == d.cameraTaskGroup && shipped.camForwardRow == d.camForwardRow && shipped.fovScale == d.fovScale &&
@@ -383,6 +393,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.collisionRadius == d.collisionRadius && shipped.collisionEaseOut == d.collisionEaseOut && shipped.verticalSmoothing == d.verticalSmoothing);
 	CHECK(shipped.actorRadius == d.actorRadius && shipped.actorMax == d.actorMax && shipped.drawSkeleton == d.drawSkeleton && shipped.drawBuddy == d.drawBuddy &&
 	      shipped.drawTracers == d.drawTracers && shipped.tracerSeconds == d.tracerSeconds && shipped.traceRange == d.traceRange);
+	CHECK(shipped.marking == d.marking);  // [Marking]
 	CHECK(shipped.ladderPrompts == d.ladderPrompts && shipped.ladderWaitMs == d.ladderWaitMs && shipped.ladderSettleMs == d.ladderSettleMs &&
 	      shipped.ladderPressDelayMs == d.ladderPressDelayMs);
 	CHECK((d.ladderPrompts == std::vector<int>{ 5000, 5010 }));  // ActionButtonParam "Climb" / "Descend"
@@ -391,8 +402,12 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.progression == d.progression && d.progression == "off" && shipped.levelReference == d.levelReference &&
 	      shipped.levelExponent == d.levelExponent && shipped.weaponBonus == d.weaponBonus && shipped.progressionMin == d.progressionMin &&
 	      shipped.progressionMax == d.progressionMax);
+	CHECK(shipped.timeSkip == d.timeSkip && d.timeSkip && shipped.timeSkipSmoothMs == d.timeSkipSmoothMs && shipped.timeSkipStepMs == d.timeSkipStepMs);
+	CHECK(shipped.hop == d.hop && d.hop && shipped.hopHeight == d.hopHeight && shipped.hopLength == d.hopLength && shipped.hopStep == d.hopStep &&
+	      shipped.hopMinRise == d.hopMinRise && shipped.hopWaitMs == d.hopWaitMs);  // dive = hop: on since the live pass of 2026-10-14
 	CHECK(shipped.render == d.render);
 	CHECK(shipped.overlay == d.overlay);
+	CHECK(shipped.keyboard == d.keyboard);  // [Keyboard]: the shipped ini spells out the defaults
 }
 
 // An Elden Ring interaction started with the prompt button (er/Interaction.h).
@@ -629,6 +644,10 @@ static void TestMenuGroups()
 #include "test_host_pacing.inc"
 #include "test_host_chord.inc"
 #include "test_host_motion.inc"
+#include "test_host_kbm.inc"
+#include "test_host_marking.inc"
+#include "test_host_timeskip.inc"
+#include "test_host_hop.inc"
 
 // The real host link + console (er/Link.cpp, er/Console.cpp) against a live guest on a_where -- fake_mgsv.py
 // or the real guest link -- driven by tools/phantomring/test_plugins.py. Prints one "PEER {json}" line.
@@ -737,9 +756,17 @@ int main(int argc, char** argv)
 	TestLadder();
 	TestSupportedStart();
 	TestCeiling();
+	TestGround();
 	TestStall();
+	TestHop();
 	TestBuddyChange();
 	TestFulton();
+	TestKbm();
+	TestMarking();
+	TestTimeSkip();
+	TestJump();
+	TestScaffold();
+	TestJumpReview();
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

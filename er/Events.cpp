@@ -2,16 +2,20 @@
 
 #include "BuddyOrders.h"
 #include "Combat.h"
+#include "Cqc.h"
+#include "Decoys.h"
 #include "Fulton.h"
 #include "Host.h"
 #include "InputBridge.h"
 #include "Link.h"
 #include "Log.h"
+#include "Marking.h"
 #include "Mines.h"
 #include "Puppet.h"
 #include "Rounds.h"
 #include "Stealth.h"
 #include "Throw.h"
+#include "TimeSkip.h"
 
 namespace phantom::er::Events
 {
@@ -51,16 +55,27 @@ namespace phantom::er::Events
 				Throw::OnThrow(a_f, e);
 				break;
 			case proto::kGEvPlaced:
-				Mines::OnPlaced(a_f, e);
+				if (e.a == proto::kAmmoDecoy) {
+					Decoys::OnPlaced(a_f, e);  // (v13) a decoy: stared at, never set off (er/Decoys.h)
+				} else {
+					Mines::OnPlaced(a_f, e);
+				}
 				break;
 			case proto::kGEvPlacedGone:
 				Mines::OnGone(e);
+				Decoys::OnGone(e);  // ids are shared: each drops only its own
 				break;
 			case proto::kGEvBuddyOrder:
 				BuddyOrders::OnOrder(e);
 				break;
 			case proto::kGEvFulton:
 				Fulton::OnEvent(a_f, e);
+				break;
+			case proto::kGEvTimeSkip:
+				TimeSkip::OnEvent(e);  // MGSV's Phantom Cigar (er/TimeSkip.h)
+				break;
+			case proto::kGEvCqc:
+				Cqc::OnEvent(a_f, e);  // (v13) CQC holds and throws (er/Cqc.h)
 				break;
 			case proto::kGEvLog:
 				Log::Info("guest message {}", e.a);
@@ -75,7 +90,11 @@ namespace phantom::er::Events
 		Rounds::Tick(a_f);
 		Stealth::Tick(a_f);
 		Mines::Tick(a_f);
+		Decoys::Tick(a_f);
 		Fulton::Tick(a_f);
+		Marking::Tick(a_f);  // protocol v13 kGuestBinoculars
+		TimeSkip::Tick(a_f);
+		Cqc::Tick(a_f);
 	}
 
 	unsigned long long Count() { return g_count; }

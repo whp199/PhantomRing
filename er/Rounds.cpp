@@ -6,6 +6,7 @@
 #include "Explosion.h"
 #include "Game.h"
 #include "Log.h"
+#include "Projectiles.h"
 #include "Puppet.h"
 #include "RenderMarkers.h"
 
@@ -23,6 +24,7 @@ namespace phantom::er::Rounds
 	{
 		struct Round
 		{
+			std::uint32_t id{ 0 };  // launch count (er/Projectiles.h keeps each copy's pose by it)
 			std::uint32_t bulletId{ 0 };
 			Vec3          pos;
 			Vec3          dir;
@@ -79,7 +81,8 @@ namespace phantom::er::Rounds
 
 		// The round: a small dark body, a bright flame at its tail, a glowing exhaust right behind it and the grey smoke it
 		// leaves along its path (fading over 0.6 s), so it reads at 50 m too.
-		void Draw(const Round& a_r, std::vector<Marker>& a_out)
+		// a_meshed: MGSV's own mesh of it is drawn there (er/Projectiles.h): no dark body, the flame and the smoke stay.
+		void Draw(const Round& a_r, std::vector<Marker>& a_out, bool a_meshed)
 		{
 			const bool rocket = a_r.kind == Flight::kRocket;
 			Marker     body;
@@ -88,7 +91,9 @@ namespace phantom::er::Rounds
 			body.radius = rocket ? 0.08f : 0.05f;
 			body.slack = 0.1f;
 			Color(body, 0.13f, 0.13f, 0.11f, 1.0f);
-			a_out.push_back(body);
+			if (!a_meshed) {
+				a_out.push_back(body);
+			}
 			Marker flame;
 			flame.shape = Marker::Shape::kDot;
 			flame.pos = a_r.pos - a_r.dir * (body.radius * 1.5f);
@@ -174,8 +179,9 @@ namespace phantom::er::Rounds
 		r.radius = a_radius;
 		r.kind = kind;
 		r.what = std::move(a_what);
-		++g_launched;
+		r.id = static_cast<std::uint32_t>(++g_launched);
 		RoundLog("rounds: {} launched at {:.0f} m/s from ({:.2f}, {:.2f}, {:.2f})", r.what, r.speed, r.pos.x, r.pos.y, r.pos.z);
+		Projectiles::NoteRelease(Projectiles::KeyOf(Projectiles::Source::kRounds, a_bulletId), a_dir);  // MGSV's mesh of it (roadmap 5.4)
 		g_live.push_back(std::move(r));
 		return true;
 	}
@@ -183,6 +189,7 @@ namespace phantom::er::Rounds
 	void Tick(const Frame& a_f)
 	{
 		std::vector<Marker> markers;
+		std::vector<Projectiles::Flying> flying;
 		if (!g_live.empty() && Puppet::Active() && a_f.player && game::CanCastRay()) {
 			const float dt = std::clamp(a_f.dt, 0.0f, 0.1f);
 			const float range = std::max(10.0f, Cfg().traceRange);
@@ -231,11 +238,14 @@ namespace phantom::er::Rounds
 			std::erase_if(g_live, [](const Round& a_r) { return a_r.speed <= 0.0f; });
 			if (Showing(a_f)) {
 				for (const auto& r : g_live) {
-					Draw(r, markers);
+					const auto key = Projectiles::KeyOf(Projectiles::Source::kRounds, r.bulletId);
+					flying.push_back({ key, r.id, r.pos, r.dir * r.speed, r.age });
+					Draw(r, markers, Projectiles::Drawn(Projectiles::Source::kRounds, r.id, a_f.index));
 				}
 			}
 		}
 		RenderMarkers::Set(RenderMarkers::Owner::kRounds, std::move(markers));
+		Projectiles::Set(Projectiles::Source::kRounds, std::move(flying));
 	}
 
 	void OnPuppetStop()
@@ -245,6 +255,8 @@ namespace phantom::er::Rounds
 		}
 		g_live.clear();
 		RenderMarkers::Set(RenderMarkers::Owner::kRounds, {});
+		Projectiles::Set(Projectiles::Source::kRounds, {});
+		Projectiles::OnPuppetStop();
 	}
 
 	void OnWorldShift(const Vec3& a_delta)

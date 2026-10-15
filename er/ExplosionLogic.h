@@ -31,8 +31,9 @@ namespace phantom::er::explosion
 		kFlame,   // D-Walker's flamethrower stream (flames flying along it; MGSV draws its own fire only in MGSV)
 		kBreaker, // no look: a small object-only bullet that breaks Elden Ring's destructible assets it flies into (pots, crates)
 		kShrapnel,// the same with the heavy object attack (atk_obj 100), flying out of a blast
+		kMuzzle,  // a muzzle flash at a shot: a burst's effect cut short (MakeFlash)
 	};
-	inline constexpr std::size_t kKinds = 7;
+	inline constexpr std::size_t kKinds = 8;
 	inline bool IsBreaker(Kind a_kind) { return a_kind == Kind::kBreaker || a_kind == Kind::kShrapnel; }
 
 	std::string_view    Name(Kind a_kind);
@@ -133,6 +134,9 @@ namespace phantom::er::explosion
 	// long as it lives -- live, the Dragonfire copy went on shooting for minutes after one spawn), flying a_speed m/s
 	// (0 = the row's own).
 	void MakeSingleShot(std::uint8_t* a_row, float a_speed);
+	// The muzzle-flash look: one bullet that stays where it is spawned (no speed), lives a_life seconds and takes its effect
+	// with it when it dies (a pot's fireball cut after its first flash), so automatic fire never piles up lingering effects.
+	void MakeFlash(std::uint8_t* a_row, float a_life);
 	// A bullet row whose only attack is a_atk (and no SpEffects): an object-only carrier is not "harmful".
 	bool OnlyAttack(const std::uint8_t* a_row, std::int32_t a_atk);
 

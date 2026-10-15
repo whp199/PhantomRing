@@ -134,8 +134,9 @@ Controller first (the user plays on a pad). Elden Ring has OS focus and owns the
   NPC, item, grace, lever — `CSActionButtonMan+0x20`, RE E6), a fresh press of A goes to Elden Ring
   instead (until released) and MGSV gets a neutral A. Implemented in phase 1.
 - **Elden Ring menu open / loading / dead:** the guest gets a neutral pad (`kPadNeutral`).
-- Keyboard & mouse: phase 5 (MGSV reads raw input, which is empty while unfocused; we'll feed its
-  raw-input handler from the host's keyboard/mouse).
+- Keyboard & mouse: tier 1 (`[Keyboard]`, er/Kbm.h) maps them onto the pad above while Snake plays and keeps them from
+  Elden Ring's DirectInput then; tier 2 (MGSV reads raw input, which is empty while unfocused) would feed its raw-input
+  handler for native mouse aim.
 
 ## 7. Camera
 

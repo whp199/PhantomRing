@@ -6,13 +6,17 @@
 #include "Capture.h"
 #include "Hud.h"
 #include "Combat.h"
+#include "Cqc.h"
 #include "Config.h"
 #include "Death.h"
+#include "Dive.h"
 #include "Follow.h"
 #include "FultonAnchor.h"
 #include "FramePace.h"
 #include "Hold.h"
+#include "Horse.h"
 #include "Blast.h"
+#include "C4.h"
 #include "Link.h"
 #include "Menu.h"
 #include "Log.h"
@@ -89,6 +93,11 @@ namespace phantom::guest::frame
 		std::uint64_t     g_stalledPublished{ 0 };
 		std::mutex        g_describeLock;
 		std::string       g_describe{ "no player frame yet" };
+		// Snake's jumps ([Jump], protocol v14 kGuestJumping): a press lifts him in MGSV, the flag stays up until he lands there.
+		logic::JumpTracker g_jump;
+		std::uint64_t     g_jumpsLifted{ 0 };
+		std::uint64_t     g_jumpsRefused{ 0 };
+		std::uint64_t     g_jumpsTimedOut{ 0 };
 
 		std::int64_t Qpc()
 		{
@@ -372,6 +381,117 @@ namespace phantom::guest::frame
 			}
 		}
 
+		// The riding camera's orientation now, asked back right after a warp of what Snake rides (MGSV's own request: rotY = world
+		// yaw, rotX = -pitch, degrees; an interpTime of 0 is ignored, 0.02 s works). Empty if it can't be computed.
+		std::string RidingCameraKeep(const camera::Sample& a_cam)
+		{
+			const auto  fwd = logic::RotateByQuat(a_cam.quat, { 0.0f, 0.0f, 1.0f });
+			const float camYaw = std::atan2(fwd.x, fwd.z) * 180.0f / std::numbers::pi_v<float>;
+			const float camPitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f)) * 180.0f / std::numbers::pi_v<float>;
+			return std::isfinite(camYaw) && std::isfinite(camPitch) ? std::format("camrot {:.3f} {:.3f} 0.02", -camPitch, camYaw) : std::string();
+		}
+
+		// ---- jump -----------------------------------------------------------------------------------
+		// Why Snake can't jump right now (nullptr: he can): on foot, standing (walking and running are standing), not aiming,
+		// not in a menu, CQC, a fall, a box or any other action, not parked, and with the native placement to lift him.
+		const char* JumpRefusal(const vars::Snapshot& a_vars, const state::LuaView& a_lua, bool a_ready)
+		{
+			const std::uint32_t lf = a_lua.flags;
+			if (!a_ready) {
+				return "MGSV isn't ready";
+			}
+			if (state::Parked()) {
+				return "Tarnished mode";
+			}
+			if (fulton::Anchored()) {
+				return "the Fulton anchor holds him";
+			}
+			if ((lf & state::kLVehicle) || a_vars.vehicleId != kNullId || a_lua.ridden != kNullId) {
+				return "riding";
+			}
+			if ((lf & state::kLMenu) || menu::PauseOpen() || menu::Open()) {
+				return "a menu is open";
+			}
+			if (a_vars.buttons & addr::kPadHold) {
+				return "aiming";
+			}
+			if (lf & state::kLCqc) {
+				return "CQC";
+			}
+			if (lf & state::kLFall) {
+				return "falling";
+			}
+			if ((lf & (state::kLSquat | state::kLCrawl)) || !(lf & state::kLStand)) {
+				return "not standing (crouched or prone)";
+			}
+			if (lf & (state::kLDemo | state::kLDead | state::kLCarry | state::kLCbox | state::kLSubject | state::kLBinocle | state::kLHeli)) {
+				return "busy (a box, carrying, the binoculars, first person ...)";
+			}
+			if (!(lf & state::kLNormal)) {
+				return "in an action (a dive, a climb ...)";
+			}
+			if (g_warpPending) {
+				return "a treadmill warp is landing";
+			}
+			if (!(hold::Available() || hold::Init()) || !hold::Available()) {
+				return "the native placement is unavailable";
+			}
+			return nullptr;
+		}
+
+		// A [Jump] press: Snake lifted [Jump] Lift m in MGSV's own world through the treadmill's native placement (MGSV keeps his
+		// running and plays its own fall and landing; the odometer rebased: the lift is no motion), kGuestJumping until he lands.
+		void Jump(const camera::Sample& a_cam, const Vec3& a_root, const vars::Snapshot& a_vars, const state::LuaView& a_lua, bool a_ready)
+		{
+			const auto& c = Cfg();
+			// R3 is MGSV's own while he aims (MGSV's HOLD, whatever LT reads), rides, is in a menu or the binoculars: the pad thread
+			// passes it to MGSV then (the shoulder change, the call menu's select, the zoom ...), not taken for a jump it can't make.
+			const std::uint32_t lf = a_lua.flags;
+			pad::SetMgsvOwnsR3((a_vars.buttons & addr::kPadHold) || (lf & (state::kLVehicle | state::kLMenu | state::kLBinocle)) || a_vars.vehicleId != kNullId ||
+				a_lua.ridden != kNullId || menu::Open());
+			const bool  press = pad::TakeJumpPress();
+			const char* why = press && c.jump ? JumpRefusal(a_vars, a_lua, a_ready) : nullptr;
+			const auto  now = ::GetTickCount64();
+			using E = logic::JumpTracker::Event;
+			const auto ev = g_jump.Update(press && c.jump, why == nullptr, now, a_root.y, (a_lua.flags & state::kLFall) != 0, static_cast<std::uint64_t>(c.jumpMaxAirMs));
+			switch (ev) {
+			case E::kLift:
+				{
+					const Vec3 lifted = a_root + Vec3{ 0.0f, c.jumpLift, 0.0f };
+					if (hold::Place(lifted + Vec3{ 0.0f, c.warpLift, 0.0f }, logic::MatrixToQuat(a_cam.root))) {
+						g_odo.Rebase(lifted);
+						++g_jumpsLifted;
+						if (g_jumpsLifted <= 10 || g_jumpsLifted % 50 == 0) {
+							Log::Info("jump: Snake lifted {:.2f} m at {:.2f},{:.2f},{:.2f} (running {:.1f} m/s) -- kGuestJumping until he lands (jump #{})", c.jumpLift,
+								a_root.x, a_root.y, a_root.z, g_odo.Velocity().LengthXZ(), g_jumpsLifted);
+						}
+					} else {
+						g_jump.Abort();
+						Log::Warn("jump: the native placement failed -- no jump");
+					}
+					break;
+				}
+			case E::kRefused:
+				if (++g_jumpsRefused <= 10 || g_jumpsRefused % 50 == 0) {
+					Log::Info("jump: not now -- {} (refused #{})", why ? why : (g_jump.Active() ? "a jump is under way" : "just landed"), g_jumpsRefused);
+				}
+				break;
+			case E::kLanded:
+				Log::Debug("jump: landed in MGSV (rose {:.2f} m)", g_jump.Rose());
+				break;
+			case E::kTimedOut:
+				++g_jumpsTimedOut;
+				Log::Info("jump: no landing seen in MGSV within {} ms (rose {:.2f} m) -- kGuestJumping down anyway", c.jumpMaxAirMs, g_jump.Rose());
+				break;
+			case E::kNoLift:
+				++g_jumpsTimedOut;
+				Log::Warn("jump: the lift never showed in Snake's root (rose {:.2f} m in {} ms) -- over", g_jump.Rose(), logic::JumpTracker::kRiseMs);
+				break;
+			default:
+				break;
+			}
+		}
+
 		// ---- hold in place -------------------------------------------------------------------------
 		// Treadmill (Lua Warp, or the native set-position call) past the radius, or the native call every
 		// frame (re-backlog M1). The odometer has already taken this frame's motion; a native placement
@@ -407,7 +527,11 @@ namespace phantom::guest::frame
 						state::QueueCommand(std::format("owarp {} {} {} {} {}", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw));
 						follow::OnShift({ shift.x, 0.0f, shift.z });
 					} else if (a_lua.buddyActive == state::kBuddyTypeHorse) {
-						follow::OnShift({ shift.x, 0.0f, shift.z });
+						// [Buddy] HorseTreadmill: moved along (Horse.cpp); else whistled back
+						if (horse::Decide(a_lua, false) != horse::plan::Action::kMoveAlong ||
+							!horse::Shift({ shift.x, 0.0f, shift.z }, g_buddyYaw, "fulton anchor")) {
+							follow::OnShift({ shift.x, 0.0f, shift.z });
+						}
 					}
 				}
 				Log::Info("fulton: Snake {} {:.2f},{:.2f},{:.2f} ({}; {:.1f} m)", ok ? "placed at" : "NOT placed at", p->pos.x, p->pos.y, p->pos.z, p->why,
@@ -418,6 +542,9 @@ namespace phantom::guest::frame
 			const auto  centre = state::Centre();
 			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled() || state::Parked() || fulton::Anchored()) {
 				return;
+			}
+			if (g_jump.Active()) {
+				return;  // in the air from a jump: no treadmill warp, no native hold until he has landed
 			}
 			const bool onVehicle = (a_lua.flags & state::kLVehicle) || a_vars.vehicleId != kNullId || a_lua.ridden != kNullId;
 			const bool busy = (a_lua.flags & (state::kLCqc | state::kLFall | state::kLDemo | state::kLMenu | state::kLDead | state::kLCarry));
@@ -436,10 +563,18 @@ namespace phantom::guest::frame
 					g_unwarpable = kNullId;
 				}
 			}
-			if (onVehicle && riddenId != kNullId && riddenId == a_lua.buddyId && a_lua.buddyActive == state::kBuddyTypeHorse && g_unwarpable != riddenId) {
+			const bool horseRidden = onVehicle && riddenId != kNullId && riddenId == a_lua.buddyId && a_lua.buddyActive == state::kBuddyTypeHorse;
+			const auto horseAct = horse::Decide(a_lua, horseRidden);  // [Buddy] HorseTreadmill (Horse.cpp, GUEST.md 8.1a)
+			if (horseRidden && horseAct == horse::plan::Action::kNoTreadmill && g_unwarpable != riddenId) {
 				// D-Horse answers no SetPosition (Lua, native player placement and Warp while riding: all tried live 2026-10-13).
 				g_unwarpable = riddenId;
 				Log::Info("treadmill: D-Horse can't be moved -- no treadmill while Snake rides it");
+			} else if (horseRidden && horseAct == horse::plan::Action::kMoveRidden && g_unwarpable == riddenId && g_vehicleMisses < 3 &&
+			           horse::plan::RiddenJumpOk(a_root, *centre, c.radius)) {
+				// Its location object was confirmed during the ride (not 3 missed landings), and Snake is near enough for one jump
+				// (a ride that went on far without the treadmill is not thrown back in one go: the horse would land metres off).
+				g_unwarpable = kNullId;
+				Log::Info("treadmill: D-Horse can be moved now -- treadmill while Snake rides it");
 			}
 			if (onVehicle && riddenId == g_unwarpable) {
 				return;
@@ -483,6 +618,32 @@ namespace phantom::guest::frame
 			if (native && hold::Place(lifted, logic::MatrixToQuat(a_cam.root))) {
 				g_odo.Rebase(d.target);
 				placed = true;
+			} else if (horseRidden && horseAct == horse::plan::Action::kMoveRidden) {
+				// D-Horse moved natively *as* the jump (Horse.cpp), its feet onto the centre's ground; Snake comes along in the
+				// saddle, and his root's jump is taken as the warp's landing like a vehicle's -- within a few frames, or the horse is
+				// put back under him (horse::RiddenMissed). HorseMoveRider also places him by the same jump in this frame.
+				if (!horse::plan::RiddenJumpOk(a_root, *centre, c.radius)) {
+					g_unwarpable = riddenId;  // re-allowed above once he rides back near the centre
+					Log::Info("treadmill: Snake rides D-Horse {:.0f} m from the centre -- no ridden jump that long (until he is back within {:.0f} m)",
+						(a_root - *centre).LengthXZ(), horse::plan::RiddenJumpLimit(c.radius));
+					return;
+				}
+				const auto moved = horse::Shift(d.shift, warpYaw, "treadmill (ridden)", d.target.y);
+				if (!moved) {
+					return;  // nothing moved; repeated failures fall back to no treadmill while riding
+				}
+				const Vec3 rider = a_root + *moved;  // the saddle went where the horse did
+				g_warpTargetY = rider.y;
+				// The native placement lands ~0.8 m below the height it is given (WarpLift, as every other placement here).
+				if (c.buddyHorseMoveRider && hold::Place(rider + Vec3{ 0.0f, c.warpLift, 0.0f }, logic::MatrixToQuat(a_cam.root))) {
+					g_odo.Rebase(rider);
+					placed = true;
+				} else {
+					horse::NoteRiddenJump(g_frame, ::GetTickCount64(), a_root);
+				}
+				if (c.ridingCameraKeep) {
+					cmd = RidingCameraKeep(a_cam);
+				}
 			} else if (onVehicle) {
 				// Move what he rides; he comes along (IH's walker/vehicle SetPosition). By the horizontal shift
 				// from where *it* is: Snake's root is on its seat, a metre or more above the walker's feet.
@@ -497,11 +658,8 @@ namespace phantom::guest::frame
 				// its own heading). Its orientation before the warp is asked back right after it (MGSV's own request:
 				// rotY = world yaw, rotX = -pitch, degrees; an interpTime of 0 is ignored, 0.02 s works).
 				if (c.ridingCameraKeep) {
-					const auto fwd = logic::RotateByQuat(a_cam.quat, { 0.0f, 0.0f, 1.0f });
-					const float camYaw = std::atan2(fwd.x, fwd.z) * 180.0f / std::numbers::pi_v<float>;
-					const float camPitch = std::asin(std::clamp(fwd.y, -1.0f, 1.0f)) * 180.0f / std::numbers::pi_v<float>;
-					if (std::isfinite(camYaw) && std::isfinite(camPitch)) {
-						cmd += std::format(";camrot {:.3f} {:.3f} 0.02", -camPitch, camYaw);
+					if (const auto keep = RidingCameraKeep(a_cam); !keep.empty()) {
+						cmd += ";" + keep;
 					}
 				}
 			} else {
@@ -511,7 +669,11 @@ namespace phantom::guest::frame
 			// Keep the buddy where it was relative to Snake, or Elden Ring would see it jump by the radius.
 			if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId &&
 				a_lua.buddyActive == state::kBuddyTypeHorse) {
-				follow::OnShift(d.shift);  // D-Horse can't be moved (no SetPosition): it is whistled back to Snake at once
+				// D-Horse answers no SetPosition: moved by its location object in this same frame ([Buddy] HorseTreadmill, Horse.cpp),
+				// else whistled back to Snake at once.
+				if (horseAct != horse::plan::Action::kMoveAlong || !horse::Shift(d.shift, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw, "treadmill")) {
+					follow::OnShift(d.shift);
+				}
 			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId &&
 			           a_lua.buddyActive != state::kBuddyTypeDog && a_lua.buddyActive != state::kBuddyTypeQuiet) {
 				// (D-Dog and Quiet ignore SetPosition -- live 2026-10-14, D-Dog stayed put -- and its Vector3 form sends D-Walker to the
@@ -616,6 +778,10 @@ namespace phantom::guest::frame
 			g_settleUntil = g_frame + 20;
 			++g_landings;
 			g_vehicleMisses = 0;
+			horse::RiddenLanded();
+		}
+		if (horse::RiddenMissed(g_frame, ::GetTickCount64(), root)) {
+			g_warpPending = false;  // a ridden D-Horse jump Snake didn't follow: the horse is back under him (Horse.cpp), nothing landed
 		}
 		g_odo.Update(odoRoot, dt, warpWindow && g_warpPending, c.teleportJump, c.velocitySmoothing);
 		g_lastRoot = root;
@@ -655,10 +821,23 @@ namespace phantom::guest::frame
 		const auto support = v.supportIndex < v.supportWeapons.size() ? v.supportWeapons[v.supportIndex] : std::uint16_t(0);
 		const auto aim = throwing::Observe(ready, g_frame, (v.buttons & addr::kPadHold) != 0, v.inventorySlot, support);
 		placed::Update(ready, g_frame, root);
+		// C4's detonator (C4.cpp): MGSV's own button with C4 in hand, on foot, no menu.
+		c4::Update(ready, v.buttons, v.inventorySlot, support,
+			!(lua.flags & (state::kLVehicle | state::kLMenu | state::kLDead)) && v.vehicleId == kNullId && lua.ridden == kNullId && !menu::PauseOpen());
 		if (ready) {
 			const float at[3] = { root.x, root.y, root.z };
 			combat::PollMelee(at, yaw);
 		}
+		// CQC holds and throws (ROADMAP 2.2, Cqc.h): after PollMelee, which reads the CQC state it reports with.
+		cqc::Update({ .ready = ready,
+			.riding = (lua.flags & state::kLVehicle) || v.vehicleId != kNullId || lua.ridden != kNullId,
+			.luaFlags = lua.flags,
+			.buttons = v.buttons,
+			.frame = g_frame,
+			.root = { root.x, root.y, root.z },
+			.yaw = yaw });
+		horse::Update(lua, ::GetTickCount64());  // [Buddy] HorseTreadmill: D-Horse's location object, before the treadmill may move it
+		Jump(a_sample, root, v, lua, ready);
 		Hold(a_sample, root, yaw, v, lua, ready);
 
 		proto::GuestState s{};
@@ -703,6 +882,9 @@ namespace phantom::guest::frame
 		if (lf & state::kLCqc) {
 			f |= proto::kGuestCqc;
 		}
+		if (g_jump.Active()) {
+			f |= proto::kGuestJumping;  // v14: from the [Jump] press until he lands in MGSV (the host jumps the puppet on its rising edge)
+		}
 		// First person: MGSV's own SUBJECT/BINOCLE status, or riding with the camera in the cockpit (RB while riding D-Walker:
 		// MGSV sets no status for it; its camera sits ~0.6 m in front of the walker's root, ~5 m behind in third person).
 		if ((lf & (state::kLSubject | state::kLBinocle)) || (riding && RidingFirstPerson(a_sample, root))) {
@@ -721,6 +903,15 @@ namespace phantom::guest::frame
 			f |= proto::kGuestNvg;
 		}
 		capture::hud::SetNightVision((lf & state::kLNvg) != 0);
+		// v13: Snake looks through his binoculars (RB held): MGSV's PlayerStatus BINOCLE, the status kGuestFirstPerson already
+		// reads (GuestScript PR.Flags). The host marks the Elden Ring characters he looks at (er/Marking.h). UNVERIFIED live.
+		if (lf & state::kLBinocle) {
+			f |= proto::kGuestBinoculars;
+		}
+		// v13: Snake dives (X): the host may hop its puppet over a gap or onto a ledge (Dive.h, roadmap 2.9)
+		if (dive::Observe(ready, riding, lf, g_odo.Velocity().LengthXZ())) {
+			f |= proto::kGuestDiving;
+		}
 		if (aim.valid) {
 			f |= proto::kGuestThrowAim;  // v6: the arc MGSV draws, for the host's own
 			std::copy_n(aim.pos, 3, s.aimThrowPos);
@@ -840,10 +1031,12 @@ namespace phantom::guest::frame
 		if (g_frame % 30 == 0) {
 			std::scoped_lock lock(g_describeLock);
 			g_describe = std::format("frame {} ready {} flags {:#x} lua {:#x} root {:.2f},{:.2f},{:.2f} yaw {:.1f} (vars {:.1f}) odo {:.2f},{:.2f},{:.2f} epoch {} "
-			                         "teleports {} warps {} landed {} life {}/{} (regen gate {}, {} capped) fov {:.1f} focal {:.1f} pose {} pad polls {} buddy {:#x} id {} ammo {}",
+			                         "teleports {} warps {} landed {} life {}/{} (regen gate {}, {} capped) fov {:.1f} focal {:.1f} pose {} pad polls {} buddy {:#x} id {} ammo {} "
+			                         "jumps {} (refused {}, no landing seen {}){}",
 				g_frame, ready, f, lf, root.x, root.y, root.z, yaw * 57.2958f, v.rotYDeg, odo[0], odo[1], odo[2], g_odo.Epoch(), g_odo.Teleports(), g_warps, g_landings, v.life,
 				v.lifeMax, g_regenGate ? std::format("from {:.0f}, {:.1f} s", g_regenBase, static_cast<double>(::GetTickCount64() - g_regenHitAt) / 1000.0) : std::string("off"),
-				g_regenCapped, fov * 57.2958f, a_sample.focalMm, skeleton::PublishedFrames(), pad::Polls(), bf, lua.buddyId, s.buddyAmmo);
+				g_regenCapped, fov * 57.2958f, a_sample.focalMm, skeleton::PublishedFrames(), pad::Polls(), bf, lua.buddyId, s.buddyAmmo, g_jumpsLifted, g_jumpsRefused,
+				g_jumpsTimedOut, g_jump.Active() ? " -- in the air" : "");
 		}
 	}
 

@@ -4,11 +4,13 @@
 #include "BulletSpawn.h"
 #include "CombatLogic.h"
 #include "Config.h"
+#include "Cqc.h"
 #include "DebugDraw.h"
 #include "Explosion.h"
 #include "Game.h"
 #include "Log.h"
 #include "Mem.h"
+#include "Decoys.h"
 #include "Mines.h"
 #include "Params.h"
 #include "Progression.h"
@@ -851,6 +853,9 @@ namespace phantom::er::Combat
 		} else {
 			Log::Debug("{} -> {} at ({:.2f}, {:.2f}, {:.2f})", what, target ? target->Name() : (hitWorld ? "world" : "nothing"), end.x, end.y, end.z);
 		}
+		if (!flame) {
+			Explosion::Muzzle(a_f, muzzle, dir, ammo == proto::kAmmoTranq || cls == combat::RoundClass::kTranq);  // [Combat] muzzle_flash (roadmap 5.4)
+		}
 		if (cls == combat::RoundClass::kExplosive) {
 			// A rocket / grenade round flies from the muzzle and goes off where it meets the world or an enemy (er/Rounds.h);
 			// without a flight for it, at the impact point at once as before.
@@ -929,6 +934,29 @@ namespace phantom::er::Combat
 		Apply(a_f, *best, combat::MeleeEffect(a_e.a, best->maxHp, Melee(), Rules()), at, dir, snake, std::format("CQC kind {}", a_e.a));
 	}
 
+	bool HitCharacter(const Frame& a_f, std::uint64_t a_handle, const Vec3& a_from, float a_reach, const combat::HitEffect& a_e, std::string_view a_what)
+	{
+		if (!Puppet::Active() || !a_f.player || !Cfg().damage || !Finite(a_from)) {
+			return false;
+		}
+		for (const auto& t : Targets(a_f, a_from, a_reach)) {
+			if (t.handle != a_handle || combat::CapsuleDistance(t.cap, a_from) > a_reach) {
+				continue;
+			}
+			const Vec3 at = SurfacePoint(t.cap, a_from);
+			Vec3       dir = at - a_from;
+			dir = Length(dir) > 1e-3f ? Normalize(dir) : Vec3{ 0, 0, 1 };
+			Apply(a_f, t, a_e, at, dir, a_from, a_what);
+			return true;
+		}
+		return false;
+	}
+
+	bool RowBusy() { return EffectiveRoute() == "bullet" && !g_pending.empty(); }
+
+	combat::HitRules    CurrentRules() { return Rules(); }
+	combat::MeleeValues CurrentMelee() { return Melee(); }
+
 	void OnExplosion(const Frame& a_f, const proto::GuestEvent& a_e)
 	{
 		if (!Puppet::Active() || !a_f.player) {
@@ -991,7 +1019,7 @@ namespace phantom::er::Combat
 		std::vector<Foe> out;
 		for (const auto& t : Targets(a_f, a_centre, a_radius)) {
 			if (t.hostile && combat::CapsuleDistance(t.cap, a_centre) <= a_radius) {
-				out.push_back({ t.cap, t.Name(), t.chr, t.handle, t.orientation });
+				out.push_back({ t.cap, t.Name(), t.chr, t.handle, t.orientation, t.maxHp });
 			}
 		}
 		return out;
@@ -1154,9 +1182,11 @@ namespace phantom::er::Combat
 
 	void OnPuppetStop()
 	{
+		Cqc::OnPuppetStop();  // held enemies go before anything else is put back
 		Throw::OnPuppetStop();
 		Rounds::OnPuppetStop();
 		Mines::OnPuppetStop();
+		Decoys::OnPuppetStop();
 		Explosion::OnPuppetStop();
 		if (!g_patch.Empty()) {
 			RestorePatches();

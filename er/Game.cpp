@@ -6,7 +6,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
+#include <format>
+#include <string>
 
 namespace phantom::er::game
 {
@@ -188,6 +191,221 @@ namespace phantom::er::game
 		}
 		a_hit = hit.xyz();
 		return Finite(a_hit);
+	}
+
+	namespace
+	{
+		// hknpRayCastQuery as cast_ray (0xC71E00) builds it at rsp+0x40 (A::CastRayQuery / A::CastRayCalls verify the bytes):
+		// the ray's temporaries it leaves behind it (to at +0x70, from at +0x80) are copied too, so the query is byte for byte
+		// the game's.
+		struct alignas(16) HkRayQuery
+		{
+			void*         codec{ nullptr };     // +0x00 [hknpWorld+0xB00]
+			void*         filter{ nullptr };    // +0x08 [CSHavokMan+0xC0] (CS::CSCollisionFilter)
+			std::uint16_t material{ 0xFFFF };   // +0x10
+			std::uint16_t pad12{ 0 };
+			std::uint32_t filterInfo{ 0 };      // +0x14 the query's collision filter info
+			const void*   userData{ nullptr };  // +0x18 the ignored character
+			std::uint32_t v20{ 2 };             // +0x20
+			std::uint8_t  v24{ 0xFB };          // +0x24
+			std::uint8_t  pad25[11]{};
+			Vec4          origin;               // +0x30
+			Vec4          dir;                  // +0x40 (w 1)
+			Vec4          invDir;               // +0x50 (a 0 component: 3.40282e38)
+			std::uint32_t v60{ 0 };             // +0x60
+			std::uint8_t  pad64[12]{};
+			Vec4          to;                   // +0x70
+			Vec4          from;                 // +0x80
+		};
+		static_assert(sizeof(HkRayQuery) == 0x90 && offsetof(HkRayQuery, origin) == 0x30 && offsetof(HkRayQuery, v60) == 0x60);
+
+		using WorldCastRayFn = void (*)(void* a_hknpWorld, HkRayQuery* a_query, void* a_collector);
+		using CollectorFn = void (*)(void* a_collector);
+		using AddHitFn = void (*)(void* a_collector, const std::uint8_t* a_hit);
+		using HitMaterialFn = bool (*)(const std::uint32_t* a_body, std::uint32_t a_shapeKey, std::int32_t* a_out, char a_remap);
+
+		// What KeepAddHit does on this thread's cast: keep the closest hit with these material classes kept (bit c), or list
+		// every hit.
+		struct RayMode
+		{
+			std::uint32_t keep{ 0 };
+			RayHit*       all{ nullptr };
+			int           max{ 0 };
+			int           count{ 0 };
+		};
+		thread_local RayMode t_rayMode;
+
+		// The snipe collector's vtable with addHit (slot 4) replaced; [0] = its COL (vtable[-1]) for anything that reads RTTI.
+		void* g_keepVtable[7]{};
+		int   g_keepState{ 0 };  // 0 not tried, 1 ready, -1 refused
+
+		std::int32_t HitMaterial(const std::uint8_t* a_hit)
+		{
+			std::uint32_t body = 0, key = 0;
+			std::memcpy(&body, a_hit + 0x48, 4);
+			std::memcpy(&key, a_hit + 0x50, 4);
+			if ((body & 0xFFFFFF) == 0xFFFFFF) {
+				return -1;
+			}
+			std::int32_t id = -1;
+			return addr().Fn<HitMaterialFn>(A::HitMaterialClass)(&body, key, &id, 1) ? id : -1;
+		}
+
+		void KeepAddHit(void* a_collector, const std::uint8_t* a_hit)
+		{
+			auto& m = t_rayMode;
+			if (m.all) {
+				// Every hit: the collector's early-out is left alone, so the query goes on past this one.
+				if (m.count < m.max) {
+					RayHit& h = m.all[m.count];
+					Vec4    p, n;
+					std::memcpy(&p, a_hit, 16);
+					std::memcpy(&n, a_hit + 0x10, 16);
+					h.pos = p.xyz();
+					h.normal = n.xyz();
+					std::memcpy(&h.fraction, a_hit + 0x20, 4);
+					std::memcpy(&h.body, a_hit + 0x48, 4);
+					std::memcpy(&h.hkMaterial, a_hit + 0x4C, 2);
+					std::memcpy(&h.shapeKey, a_hit + 0x50, 4);
+					std::memcpy(&h.shapeFilter, a_hit + 0x54, 4);
+					h.material = HitMaterial(a_hit);
+				}
+				++m.count;
+				return;
+			}
+			const std::int32_t id = HitMaterial(a_hit);
+			const int          cls = id >= 0 ? id / 100 : -1;
+			if ((cls == 2 || cls == 5) && (m.keep >> cls & 1u)) {
+				addr().Fn<AddHitFn>(A::ClosestAddHit)(a_collector, a_hit);  // the closest, as the game's would without the drop
+				return;
+			}
+			addr().Fn<AddHitFn>(A::SnipeAddHit)(a_collector, a_hit);  // the game's own: mount skip, material drop, closest
+		}
+
+		bool KeepReady()
+		{
+			if (g_keepState == 0) {
+				g_keepState = -1;
+				const auto& a = addr();
+				if (a.HasAll(A::CastRayQuery, A::CastRayCalls, A::WorldCastRay, A::SnipeCollectorCtor, A::SnipeCollectorDtor, A::SnipeAddHit,
+						A::ClosestAddHit, A::HitMaterialClass, A::VtSnipeCollector, A::CSHavokMan)) {
+					auto* const* vt = reinterpret_cast<void* const*>(a[A::VtSnipeCollector]);
+					// The vtable's addHit must be the function checked above (the slot is the one the world cast calls).
+					if (vt[4] == a[A::SnipeAddHit]) {
+						g_keepVtable[0] = vt[-1];
+						for (int i = 0; i < 6; ++i) {
+							g_keepVtable[1 + i] = vt[i];
+						}
+						g_keepVtable[1 + 4] = reinterpret_cast<void*>(&KeepAddHit);
+						g_keepState = 1;
+					}
+				}
+			}
+			return g_keepState == 1;
+		}
+
+		// cast_ray's body with our collector vtable. Returns hits (the collector's +0xC), -1 if it couldn't cast.
+		int RunKeepQuery(const Vec3& a_from, const Vec3& a_delta, const std::uint8_t* a_ignore, std::uint32_t a_filter, Vec3* a_hit, std::uint8_t a_layers)
+		{
+			if (!KeepReady() || !Finite(a_from) || !Finite(a_delta)) {
+				return -1;
+			}
+			auto* world = PhysWorld();
+			auto* havok = addr().Instance(A::CSHavokMan);
+			auto* hknp = world ? SafePtr(world + 0x8) : nullptr;
+			const auto codec = hknp ? SafeRead<void*>(hknp + 0xB00) : std::nullopt;
+			const auto filter = havok ? SafeRead<void*>(havok + 0xC0) : std::nullopt;
+			if (!hknp || !codec || !filter || !*filter) {
+				return -1;
+			}
+			HkRayQuery q;
+			q.codec = *codec;
+			q.filter = *filter;
+			q.filterInfo = a_filter;
+			q.userData = a_ignore;
+			q.v24 = a_layers;
+			q.from = Vec4(a_from, 1.0f);
+			q.to = Vec4(a_from + a_delta, 1.0f);
+			q.origin = q.from;
+			const float d[3] = { q.to.x - q.from.x, q.to.y - q.from.y, q.to.z - q.from.z };
+			q.dir = Vec4(d[0] == 0.0f ? 0.0f : d[0], d[1] == 0.0f ? 0.0f : d[1], d[2] == 0.0f ? 0.0f : d[2], 1.0f);
+			const auto inv = [](float a_v) { return a_v == 0.0f ? 3.40282e38f : 1.0f / a_v; };
+			q.invDir = Vec4(inv(q.dir.x), inv(q.dir.y), inv(q.dir.z), 1.0f);
+			alignas(16) std::uint8_t collector[0x100]{};
+			addr().Fn<CollectorFn>(A::SnipeCollectorCtor)(collector);
+			std::memcpy(collector + 0xA0, &a_ignore, sizeof(a_ignore));  // 0xC5ABE0
+			void* const vptr = &g_keepVtable[1];
+			std::memcpy(collector, &vptr, sizeof(vptr));
+			addr().Fn<WorldCastRayFn>(A::WorldCastRay)(hknp, &q, collector);
+			std::int32_t hits = 0;
+			std::memcpy(&hits, collector + 0xC, 4);
+			if (hits != 0 && a_hit) {
+				Vec4 p;
+				std::memcpy(&p, collector + 0x30, 16);
+				*a_hit = p.xyz();
+			}
+			void* const snipe = addr()[A::VtSnipeCollector];
+			std::memcpy(collector, &snipe, sizeof(snipe));
+			addr().Fn<CollectorFn>(A::SnipeCollectorDtor)(collector);
+			return hits;
+		}
+	}
+
+	bool CanCastRayKeep() { return CanCastRay() && KeepReady(); }
+
+	bool CastRayKeep(const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit, const std::uint8_t* a_ignore, std::uint32_t a_filter, std::uint32_t a_keep,
+		std::uint8_t a_layers)
+	{
+		if ((a_keep == 0 && a_layers == kCastRayLayers) || !KeepReady()) {
+			return CastRay(a_from, a_delta, a_hit, a_ignore, a_filter);
+		}
+		const RayMode saved = t_rayMode;
+		t_rayMode = RayMode{ a_keep };
+		Vec3      hit;
+		const int hits = RunKeepQuery(a_from, a_delta, a_ignore, a_filter, &hit, a_layers);
+		t_rayMode = saved;
+		if (hits < 0) {
+			return CastRay(a_from, a_delta, a_hit, a_ignore, a_filter);
+		}
+		if (hits == 0 || !Finite(hit)) {
+			return false;
+		}
+		a_hit = hit;
+		return true;
+	}
+
+	int CastRayAll(const Vec3& a_from, const Vec3& a_delta, const std::uint8_t* a_ignore, std::uint32_t a_filter, RayHit* a_out, int a_max,
+		std::uint8_t a_layers)
+	{
+		const RayMode saved = t_rayMode;
+		t_rayMode = RayMode{ 0, a_out, std::max(0, a_max), 0 };
+		const int ran = RunKeepQuery(a_from, a_delta, a_ignore, a_filter, nullptr, a_layers);
+		const int count = t_rayMode.count;
+		t_rayMode = saved;
+		if (ran < 0) {
+			return -1;
+		}
+		std::sort(a_out, a_out + std::min(count, std::max(0, a_max)), [](const RayHit& a, const RayHit& b) { return a.fraction < b.fraction; });
+		return count;
+	}
+
+	std::string BroadPhaseLayers()
+	{
+		auto* world = PhysWorld();
+		auto* hknp = world ? SafePtr(world + 0x8) : nullptr;
+		auto* bp = hknp ? SafePtr(hknp + 0x4D8) : nullptr;
+		const auto layers = bp ? SafeRead<std::uint8_t*>(bp + 0x10) : std::nullopt;
+		const auto count = bp ? SafeRead<std::int32_t>(bp + 0x18) : std::nullopt;
+		if (!layers || !*layers || !count || *count <= 0 || *count > 32) {
+			return "unknown";
+		}
+		std::string out;
+		for (int i = 0; i < *count; ++i) {
+			auto*      layer = SafePtr(*layers + i * 8);
+			const auto mask = layer ? SafeRead<std::uint8_t>(layer + 0x19D0) : std::nullopt;
+			out += std::format("{}{}:{}", out.empty() ? "" : " ", i, mask ? std::format("{:#04x}", *mask) : std::string("?"));
+		}
+		return out;
 	}
 
 	std::uint8_t* PersCam1()

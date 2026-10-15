@@ -61,6 +61,17 @@ namespace phantom::er
 		GetTeamType,         // ChrIns::GetTeamType(chr, u8* out) (team + SpEffect overrides)
 		RemoveSpEffect,      // ChrIns::RemoveSpEffect(chr, id) (combat: re-arm a sleep build-up row)
 		KeyGuideCtor,        // the key guide object's constructor: +0 and +4 = Debug.KeyGuideDevice (proves the layout)
+		CollisionLayers,     // CS::CSCollisionFilter's layer matrix builder, where layer 0x16 gets layer 3's collisions minus the characters'
+		// Snake's own ray query (game::CastRayKeep, docs/HOST.md "Collision filters"): cast_ray's query and collector, so the
+		// hits Elden Ring's snipe collector drops (wooden planks: material class 5xx) can be kept for his ground.
+		CastRayQuery,        // cast_ray's query build (the hknpRayCastQuery layout: material 0xFFFF, +0x20 = 2, +0x24 = 0xFB)
+		CastRayCalls,        // ... its filter/codec/ignore fields and the collector ctor, set-ignore and world-cast calls
+		WorldCastRay,        // hknpWorld cast ray (0x187F7D0: [world+0x4D8] vfunc 0x80)
+		SnipeCollectorCtor,  // CS::CSClosestHitCollectorForSnipe ctor
+		SnipeCollectorDtor,
+		SnipeAddHit,         // its addHit (vfunc 4): the mount skip, then the raycast collector's (the material-class drop)
+		ClosestAddHit,       // hknpClosestHitCollector::addHit: the closest hit, no material check
+		HitMaterialClass,    // (bodyId*, shapeKey, int* out, remap) -> the hit's material id (hundreds = its class)
 		// vtables
 		VtChrIns,
 		VtPlayerIns,
@@ -91,6 +102,7 @@ namespace phantom::er
 		VtTeamTypeEnemy,
 		VtTeamTypeRival,
 		VtGameRend,          // FieldArea+0x20: its +0x18 CSPersCam is the camera ER's HUD compass reads (MoveMapStep 0xB01FC0 -> 0x7774A0)
+		VtSnipeCollector,    // CS::CSClosestHitCollectorForSnipe (game::CastRayKeep copies it, addHit replaced)
 		Count
 	};
 

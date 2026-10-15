@@ -42,6 +42,17 @@ namespace phantom::guest::pad
 	bool Sequence(std::span<const Step> a_steps);
 	[[nodiscard]] bool SequenceRunning();
 
+	// The player's own presses of a_button (one XINPUT_GAMEPAD_* bit) so far: rising edges of the host's pad as MGSV polled it,
+	// never Pulse/Sequence buttons (Death.cpp's own dive is no player's dive). Dive.h counts X.
+	[[nodiscard]] std::uint32_t Presses(std::uint16_t a_button);
+	// Snake's [Jump] button (protocol v14; logic::JumpButton): its presses since the last call (MGSV never saw them), for the
+	// game thread (Frame.cpp). RequestJump: one as if pressed (`!jump`).
+	[[nodiscard]] bool TakeJumpPress();
+	void               RequestJump();
+	// The game thread, every frame: R3 is MGSV's own now (Snake aims by MGSV's HOLD, rides, is in a menu or the binoculars):
+	// the pad thread passes it to MGSV instead of taking it for a jump (logic::MgsvOwnsR3).
+	void               SetMgsvOwnsR3(bool a_owns);
+
 	[[nodiscard]] std::uint64_t Polls();
 	// `!pad` / `!menu`: the iDroid requests ([Menu] IDroidRetryMs) so far.
 	std::string DescribeIDroid();

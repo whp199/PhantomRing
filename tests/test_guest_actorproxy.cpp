@@ -213,6 +213,158 @@ static void TestNearProxy()
 	CHECK(NearProxy({ 1.2f, 0, 0 }, snake, close, 1, 1.5f));
 }
 
+// Inert full proxies (docs/GUEST.md 20.6): flattened placement, the tolerant read-back, location ownership, the aim correction
+// and the alert phase guard.
+static void TestHeight()
+{
+	CHECK(ParseHeight("ground", Height::kEnemy) == Height::kGround);
+	CHECK(ParseHeight("enemy", Height::kGround) == Height::kEnemy);
+	CHECK(ParseHeight("sky", Height::kGround) == Height::kGround);
+	CHECK(Near(ProxyFeet({ 5, -4.5f, 7 }, -12.0f, Height::kGround), { 5, -12.0f, 7 }));
+	CHECK(Near(ProxyFeet({ 5, -4.5f, 7 }, -12.0f, Height::kEnemy), { 5, -4.5f, 7 }));
+	CHECK(Near(ProxyFeet({ 5, -4.5f, 7 }, NAN, Height::kGround), { 5, -4.5f, 7 }));  // no ground known: as v1
+
+	// Assign flattens with kGround and keeps the real place; the default (kEnemy, the Fulton-only path) is unchanged.
+	Settings s;
+	s.maxProxies = 2;
+	const Vec3          snake{ 0, -12, 0 }, centre{ 0, -12, 0 };
+	auto                slots = Slots(2);
+	std::vector<Target> targets{ { 11, { 10, -9, 0 }, 0, 10 }, { 12, { 20, -17.5f, 0 }, 0, 20 } };
+	Assign(slots, targets, snake, nullptr, centre, s);
+	CHECK(Near(slots[0].pos, { 10, -9, 0 }) && Near(slots[0].real, { 10, -9, 0 }));
+	s.height = Height::kGround;
+	Assign(slots, targets, snake, nullptr, centre, s);
+	CHECK(slots[0].proxy && Near(slots[0].pos, { 10, -12, 0 }) && Near(slots[0].real, { 10, -9, 0 }));
+	CHECK(slots[1].proxy && Near(slots[1].pos, { 20, -12, 0 }) && Near(slots[1].real, { 20, -17.5f, 0 }));
+	// Clearance still measured from where the character is (horizontal), and a parked slot's real place is its park place.
+	targets = { { 11, { 2, -6, 0 }, 0, 2 }, { 12, { 20, -17.5f, 0 }, 0, 20 } };
+	Assign(slots, targets, snake, nullptr, centre, s);
+	CHECK(!slots[0].proxy && Near(slots[0].real, slots[0].pos));
+
+	// Read-back: x/z within 1 m; y within its own tolerance (MGSV's ground under a far proxy is a kerb off the centre's).
+	CHECK(ReadBackOk({ 10, -12, 0 }, { 10.3f, -11.2f, 0.2f }, 1.0f, 2.0f));
+	CHECK(!ReadBackOk({ 10, -12, 0 }, { 10.3f, -9.5f, 0.2f }, 1.0f, 2.0f));   // pushed 2.5 m up: not where he was put
+	CHECK(!ReadBackOk({ 10, -12, 0 }, { 11.2f, -12, 0 }, 1.0f, 2.0f));         // slid 1.2 m
+	CHECK(!ReadBackOk({ 10, -12, 0 }, { NAN, -12, 0 }, 1.0f, 2.0f));
+
+	// Location ownership: the cache lags far soldiers ~1 m; 5 m apart = another character in the pooled object.
+	CHECK(OwnsLocation({ 30, -12, 0 }, { 31.1f, -12, 0.4f }, 5.0f));
+	CHECK(!OwnsLocation({ 30, -12, 0 }, { 40, -12, 0 }, 5.0f));
+	CHECK(OwnsLocation({ 30, 0, 0 }, { 30, -12, 0 }, 5.0f));  // horizontal only (the cache's y lags a flattened proxy)
+}
+
+static void TestCorrectShot()
+{
+	// Snake's muzzle at 1.4 m over the ground at the origin; a proxy on the ground 20 m ahead (+z) whose enemy stands 3 m higher.
+	const Vec3 origin{ 0, 1.4f, 0 };
+	const Body bodies[] = { { { 0, 0, 20 }, { 0, 3, 20 } }, { { 10, 0, 10 }, { 10, 0, 10 } } };
+	// Aimed at the proxy's chest (1.3 m up): turned to the same point 3 m higher.
+	Vec3       dir = Vec3{ 0, 1.3f - 1.4f, 20 } * (1.0f / Vec3{ 0, -0.1f, 20 }.Length());
+	CHECK(CorrectShot(origin, dir, bodies, 2, 0.9f, 2.0f, 80.0f) == 0);
+	const Vec3 want = Vec3{ 0, 4.3f - 1.4f, 20 } * (1.0f / Vec3{ 0, 2.9f, 20 }.Length());
+	CHECK(Near(dir, want, 2e-3f));
+	CHECK(std::fabs(dir.Length() - 1.0f) < 1e-4f);
+	// A near miss (0.6 m to the side) keeps the player's sideways offset.
+	dir = Vec3{ 0.6f, -0.1f, 20 } * (1.0f / Vec3{ 0.6f, -0.1f, 20 }.Length());
+	CHECK(CorrectShot(origin, dir, bodies, 2, 0.9f, 2.0f, 80.0f) == 0 && dir.y > 0.1f && dir.x > 0.02f);
+	// Wide of every body (3 m beside): unchanged.
+	Vec3       wide = Vec3{ 3, -0.1f, 20 } * (1.0f / Vec3{ 3, -0.1f, 20 }.Length());
+	const Vec3 wide0 = wide;
+	CHECK(CorrectShot(origin, wide, bodies, 2, 0.9f, 2.0f, 80.0f) == -1 && Near(wide, wide0, 1e-6f));
+	// Over his head (aimed 3 m above the proxy's feet, the body is 2 m): unchanged.
+	Vec3 high = Vec3{ 0, 3.5f - 1.4f, 20 } * (1.0f / Vec3{ 0, 2.1f, 20 }.Length());
+	CHECK(CorrectShot(origin, high, bodies, 2, 0.9f, 2.0f, 80.0f) == -1);
+	// Behind Snake or beyond the range: unchanged.
+	Vec3 back{ 0, 0, -1 };
+	CHECK(CorrectShot(origin, back, bodies, 2, 0.9f, 2.0f, 80.0f) == -1);
+	Vec3 ahead = Vec3{ 0, -0.1f, 20 } * (1.0f / Vec3{ 0, -0.1f, 20 }.Length());
+	CHECK(CorrectShot(origin, ahead, bodies, 2, 0.9f, 2.0f, 15.0f) == -1);
+	// A level character at 10 m in front of the raised one's stand-in: the round meets his real body, so it stays as aimed.
+	const Body inLine[] = { { { 0, 0, 20 }, { 0, 3, 20 } }, { { 0, 0, 10 }, { 0, 0, 10 } } };
+	Vec3       d2 = Vec3{ 0, -0.1f, 20 } * (1.0f / Vec3{ 0, -0.1f, 20 }.Length());
+	const Vec3 d20 = d2;
+	CHECK(CorrectShot(origin, d2, inLine, 2, 0.9f, 2.0f, 80.0f) == -1 && Near(d2, d20, 1e-6f));
+	// The nearer of two stand-ins on the ray wins: one 3 m up at 10 m (its real body well above the ray) before the one at 20 m.
+	const Body twoUp[] = { { { 0, 0, 20 }, { 0, 3, 20 } }, { { 0, 0, 10 }, { 0, 4, 10 } } };
+	d2 = d20;
+	CHECK(CorrectShot(origin, d2, twoUp, 2, 0.9f, 2.0f, 80.0f) == 1 && d2.y > 0.25f);
+	// Aimed by hand at the real chest (1.2 m over his feet) of an enemy 1 m ABOVE Snake's ground, 20 m away: the ray also passes
+	// through his flattened stand-in (2.2 m up its 2 m axis, within the radius) but must not be lifted another metre over his head.
+	const Body ledge[] = { { { 0, 0, 20 }, { 0, 1, 20 } } };
+	Vec3       chest = Vec3{ 0, 2.2f - 1.4f, 20 } * (1.0f / Vec3{ 0, 0.8f, 20 }.Length());
+	const Vec3 chest0 = chest;
+	CHECK(CorrectShot(origin, chest, ledge, 1, 0.9f, 2.0f, 80.0f) == -1 && Near(chest, chest0, 1e-6f));
+	// ... nor one 1.5 m BELOW (chest at -0.3 m): not pushed into the ground.
+	const Body dip[] = { { { 0, 0, 20 }, { 0, -1.5f, 20 } } };
+	chest = Vec3{ 0, -0.3f - 1.4f, 20 } * (1.0f / Vec3{ 0, -1.7f, 20 }.Length());
+	const Vec3 dip0 = chest;
+	CHECK(CorrectShot(origin, chest, dip, 1, 0.9f, 2.0f, 80.0f) == -1 && Near(chest, dip0, 1e-6f));
+	// Enemy A on a roof 3 m up at 15 m (stand-in on the ground there), enemy B level at 30 m: a round aimed at B's chest crosses
+	// A's stand-in first but goes to B unchanged (not up to A).
+	const Body roof[] = { { { 0, 0, 15 }, { 0, 3, 15 } }, { { 0, 0, 30 }, { 0, 0, 30 } } };
+	Vec3       atB = Vec3{ 0, 1.2f - 1.4f, 30 } * (1.0f / Vec3{ 0, -0.2f, 30 }.Length());
+	const Vec3 atB0 = atB;
+	CHECK(CorrectShot(origin, atB, roof, 2, 0.9f, 2.0f, 80.0f) == -1 && Near(atB, atB0, 1e-6f));
+	// Straight down / nothing / NaN: unchanged.
+	Vec3 down{ 0, -1, 0 };
+	CHECK(CorrectShot(origin, down, bodies, 2, 0.9f, 2.0f, 80.0f) == -1);
+	CHECK(CorrectShot(origin, dir, nullptr, 0, 0.9f, 2.0f, 80.0f) == -1);
+	Vec3 bad{ NAN, 0, 1 };
+	CHECK(CorrectShot(origin, bad, bodies, 2, 0.9f, 2.0f, 80.0f) == -1);
+}
+
+static void TestPhaseGuard()
+{
+	PhaseGuard    g;
+	PhaseSettings ps;
+	ps.calmEveryMs = 1000;
+	ps.giveUpMs = 20000;
+	auto st = g.Update(0, 1000, ps);
+	CHECK(!st.calm && !st.sweep && !st.giveUp && g.Alerts() == 0);
+	// The first alert read: sweep + calm at once.
+	st = g.Update(3, 5000, ps);
+	CHECK(st.calm && st.sweep && !st.giveUp && g.Alerts() == 1);
+	// Still up: calm again once a second; sweep again every 3 s (a reinforcement arrives some time into an alert).
+	st = g.Update(3, 5500, ps);
+	CHECK(!st.calm && !st.sweep);
+	st = g.Update(2, 6000, ps);
+	CHECK(st.calm && !st.sweep);
+	st = g.Update(3, 7000, ps);
+	CHECK(st.calm && !st.sweep);
+	st = g.Update(3, 8000, ps);
+	CHECK(st.calm && st.sweep);
+	st = g.Update(3, 9000, ps);
+	CHECK(st.calm && !st.sweep);
+	// An unknown read changes nothing.
+	st = g.Update(-1, 9500, ps);
+	CHECK(!st.calm && !st.sweep && !st.giveUp);
+	// Calmed: back to 0; a new alert later sweeps again at once.
+	st = g.Update(0, 10000, ps);
+	CHECK(!st.calm && !st.sweep);
+	st = g.Update(1, 12000, ps);
+	CHECK(st.sweep && st.calm && g.Alerts() == 2);
+	// Up 20 s without a break: give up, once; sweeps keep coming every 3 s meanwhile.
+	int sweeps = 0;
+	for (std::uint64_t t = 12500; t < 32000; t += 500) {
+		st = g.Update(3, t, ps);
+		CHECK(!st.giveUp);
+		sweeps += st.sweep;
+	}
+	CHECK(sweeps == 6);
+	st = g.Update(3, 32000, ps);
+	CHECK(st.giveUp && g.GaveUp());
+	st = g.Update(3, 43000, ps);
+	CHECK(!st.giveUp && st.calm && st.sweep);  // keeps calming after giving up
+	// Full proxies turned on again (`!proxy on`): a fresh guard -- not "gave up", an alert still up counts as a new one (sweep
+	// at once) and gives up again after another 20 s.
+	g.Reset();
+	CHECK(!g.GaveUp() && g.Alerts() == 0);
+	st = g.Update(3, 50000, ps);
+	CHECK(st.sweep && st.calm && g.Alerts() == 1);
+	st = g.Update(3, 70000, ps);
+	CHECK(st.giveUp && g.GaveUp());
+}
+
 static void TestAutoAim()
 {
 	CHECK(AutoAimWanted(true, true, true, 6, 6, 0));
@@ -256,6 +408,9 @@ int main()
 	TestParsePool();
 	TestNearProxy();
 	TestAutoAim();
+	TestHeight();
+	TestCorrectShot();
+	TestPhaseGuard();
 	if (g_failures) {
 		std::printf("test_guest_actorproxy: %d failure(s)\n", g_failures);
 		return 1;

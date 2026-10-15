@@ -163,6 +163,25 @@ namespace phantom::er
 		chestHeight = static_cast<float>(ini.GetFloat("Puppet", "chest_height", chestHeight));
 		gravity = static_cast<float>(ini.GetFloat("Puppet", "gravity", gravity));
 		rayFilter = static_cast<std::uint32_t>(ini.GetInt("Puppet", "ray_filter", rayFilter));
+		groundFilter = static_cast<std::uint32_t>(ini.GetInt("Puppet", "ground_filter", groundFilter));
+		wallFilter = static_cast<std::uint32_t>(ini.GetInt("Puppet", "wall_filter", wallFilter));
+		wallFilterAlso = static_cast<std::uint32_t>(ini.GetInt("Puppet", "wall_filter_also", wallFilterAlso));
+		groundKeep = static_cast<std::uint32_t>(ini.GetInt("Puppet", "ground_keep", groundKeep));
+		groundLayers = static_cast<std::uint32_t>(ini.GetInt("Puppet", "ground_layers", groundLayers)) & 0xFF;
+		groundProbes = ini.GetBool("Puppet", "ground_probes", groundProbes);
+		// dive = hop (roadmap 2.9)
+		hop = ini.GetBool("Puppet", "hop", hop);
+		hopHeight = static_cast<float>(ini.GetFloat("Puppet", "hop_height", hopHeight));
+		hopLength = static_cast<float>(ini.GetFloat("Puppet", "hop_length", hopLength));
+		hopStep = static_cast<float>(ini.GetFloat("Puppet", "hop_step", hopStep));
+		hopMinRise = static_cast<float>(ini.GetFloat("Puppet", "hop_min_rise", hopMinRise));
+		hopWaitMs = static_cast<int>(ini.GetInt("Puppet", "hop_wait_ms", hopWaitMs));
+		jump = ini.GetBool("Puppet", "jump", jump);
+		jumpApex = std::clamp(static_cast<float>(ini.GetFloat("Puppet", "jump_apex", jumpApex)), 0.2f, 3.0f);
+		jumpMinRoom = std::clamp(static_cast<float>(ini.GetFloat("Puppet", "jump_min_room", jumpMinRoom)), 0.05f, 1.0f);
+		jumpAirControl = std::clamp(static_cast<float>(ini.GetFloat("Puppet", "jump_air_control", jumpAirControl)), 0.0f, 50.0f);
+		jumpAirStep = std::clamp(static_cast<float>(ini.GetFloat("Puppet", "jump_air_step", jumpAirStep)), 0.05f, 0.6f);
+		jumpCameraHold = ini.GetBool("Puppet", "jump_camera_hold", jumpCameraHold);
 
 		mirrorX = Sign(ini.GetFloat("Axes", "mirror_x", mirrorX));
 		mgsvYawSign = Sign(ini.GetFloat("Axes", "mgsv_yaw_sign", mgsvYawSign));
@@ -330,7 +349,31 @@ namespace phantom::er
 		flameFx = ini.GetBool("Combat", "flame_fx", flameFx);
 		f("flame_per_second", flamePerSecond);
 		f("flame_speed", flameSpeed);
+		muzzleFlash = ini.GetBool("Combat", "muzzle_flash", muzzleFlash);
+		f("muzzle_per_second", muzzlePerSecond);
+		f("muzzle_life", muzzleLife);
+		f("muzzle_ahead", muzzleAhead);
+		muzzleTranq = ini.GetBool("Combat", "muzzle_tranq", muzzleTranq);
 
+		{
+			auto cf = [&](const char* a_key, float& a_value) { a_value = static_cast<float>(ini.GetFloat("Cqc", a_key, a_value)); };
+			cqc = ini.GetBool("Cqc", "enabled", cqc);
+			cf("range", cqcRange);
+			cf("arc_deg", cqcArcDeg);
+			cf("boss_bigness", cqcBossBigness);
+			cf("hold_seconds", cqcHoldSeconds);
+			cf("leave_distance", cqcLeaveDistance);
+			cf("grab_poise", cqcGrabPoise);
+			cf("throw_poise", cqcThrowPoise);
+			cqcThrowDmgLevel = static_cast<int>(ini.GetInt("Cqc", "throw_dmg_level", cqcThrowDmgLevel));
+			cf("stagger_poise", cqcStaggerPoise);
+			cqcInterrogate = ini.GetBool("Cqc", "interrogate", cqcInterrogate);
+			cqcBossHp = static_cast<int>(ini.GetInt("Cqc", "boss_hp", cqcBossHp));
+			cf("hold_cooldown", cqcHoldCooldown);
+			cqcHitCorrection = static_cast<int>(ini.GetInt("Cqc", "hit_correction", cqcHitCorrection));
+			cqcSettleMs = static_cast<int>(ini.GetInt("Cqc", "settle_ms", cqcSettleMs));
+			cqcRetryMs = static_cast<int>(ini.GetInt("Cqc", "retry_ms", cqcRetryMs));
+		}
 		auto sf = [&](const char* a_key, float& a_value) { a_value = static_cast<float>(ini.GetFloat("Stealth", a_key, a_value)); };
 		boxHide = ini.GetBool("Stealth", "box_hide", boxHide);
 		stealthSpEffect = static_cast<std::int32_t>(ini.GetInt("Stealth", "speffect", stealthSpEffect));
@@ -359,6 +402,11 @@ namespace phantom::er
 		pf("min_factor", progressionMin);
 		pf("max_factor", progressionMax);
 
+		// [TimeSkip] (er/TimeSkip.h)
+		timeSkip = ini.GetBool("TimeSkip", "enabled", timeSkip);
+		timeSkipSmoothMs = std::clamp(static_cast<int>(ini.GetInt("TimeSkip", "smooth_ms", timeSkipSmoothMs)), 0, 60000);
+		timeSkipStepMs = std::clamp(static_cast<int>(ini.GetInt("TimeSkip", "step_ms", timeSkipStepMs)), 16, 5000);
+
 		auto tf = [&](const char* a_key, float& a_value) { a_value = static_cast<float>(ini.GetFloat("Throw", a_key, a_value)); };
 		throwSim = ini.GetBool("Throw", "sim", throwSim);
 		tf("gravity", throwGravity);
@@ -386,11 +434,28 @@ namespace phantom::er
 		mineBodyRadius = static_cast<float>(ini.GetFloat("Mines", "body_radius", mineBodyRadius));
 		mineLightRadius = static_cast<float>(ini.GetFloat("Mines", "light_radius", mineLightRadius));
 
+		{
+			auto df = [&](const char* a_key, float& a_value) { a_value = static_cast<float>(ini.GetFloat("Decoys", a_key, a_value)); };
+			decoys = ini.GetBool("Decoys", "enabled", decoys);
+			df("range", decoyRange);
+			df("active_range", decoyActiveRange);
+			df("cone", decoyCone);
+			df("stare", decoyStare);
+			df("cooldown", decoyCooldown);
+			df("pop_distance", decoyPopDistance);
+			df("snake_close", decoySnakeClose);
+			df("shock_radius", decoyShockRadius);
+			df("height", decoyHeight);
+			decoyTurn = ini.GetBool("Decoys", "turn", decoyTurn);
+		}
+
 		auto& r = render;
 		r.enabled = ini.GetBool("Render", "enabled", r.enabled);
 		r.drawPlayer = ini.GetBool("Render", "draw_player", r.drawPlayer);
 		r.drawBuddy = ini.GetBool("Render", "draw_buddy", r.drawBuddy);
 		r.drawOther = ini.GetBool("Render", "draw_other", r.drawOther);
+		r.projectileMeshes = ini.GetBool("Render", "projectile_meshes", r.projectileMeshes);
+		r.projectileSpin = static_cast<float>(ini.GetFloat("Render", "projectile_spin", r.projectileSpin));
 		r.latencyFrames = static_cast<int>(ini.GetInt("Render", "latency_frames", r.latencyFrames));
 		r.cull = ini.Get("Render", "cull", r.cull);
 		r.frontCcw = ini.GetBool("Render", "front_ccw", r.frontCcw);
@@ -466,6 +531,8 @@ namespace phantom::er
 				}
 			}
 		}
+		r.roleGuard = ini.Get("Render", "role_guard", r.roleGuard);
+		r.posterCheck = ini.Get("Render", "poster_check", r.posterCheck);
 		r.velocity = ini.GetBool("Render", "velocity", r.velocity);
 		r.smoothDraws = ini.GetBool("Render", "smooth_draws", r.smoothDraws);
 		r.viewConstants = ini.GetBool("Render", "view_constants", r.viewConstants);
@@ -522,6 +589,33 @@ namespace phantom::er
 			Log::Warn("[Overlay] corner = {} is not top_right|top_left|bottom_right|bottom_left; using top_right", o.corner);
 			o.corner = "top_right";
 		}
+		keyboard.Load(ini);  // [Keyboard] (er/KbmMap.cpp)
+
+		// [Marking] (er/Marking.h)
+		auto& mk = marking;
+		mk.enabled = ini.GetBool("Marking", "enabled", mk.enabled);
+		mk.targets = ini.Get("Marking", "targets", mk.targets);
+		if (mk.targets != "all" && mk.targets != "hostile") {
+			Log::Warn("[Marking] targets = {} is not all|hostile; using all", mk.targets);
+			mk.targets = "all";
+		}
+		mk.range = static_cast<float>(ini.GetFloat("Marking", "range", mk.range));
+		mk.cone = static_cast<float>(ini.GetFloat("Marking", "cone", mk.cone));
+		mk.minConeDeg = static_cast<float>(ini.GetFloat("Marking", "min_cone_deg", mk.minConeDeg));
+		mk.dwell = static_cast<float>(ini.GetFloat("Marking", "dwell", mk.dwell));
+		mk.lineOfSight = ini.GetBool("Marking", "line_of_sight", mk.lineOfSight);
+		mk.renderedOnly = ini.GetBool("Marking", "rendered_only", mk.renderedOnly);
+		mk.fade = static_cast<float>(ini.GetFloat("Marking", "fade", mk.fade));
+		mk.maxMarked = static_cast<int>(ini.GetInt("Marking", "max_marked", mk.maxMarked));
+		mk.maxCharacters = static_cast<int>(ini.GetInt("Marking", "max_characters", mk.maxCharacters));
+		mk.distance = ini.Get("Marking", "distance", mk.distance);
+		if (mk.distance != "always" && mk.distance != "centre" && mk.distance != "off") {
+			Log::Warn("[Marking] distance = {} is not always|centre|off; using always", mk.distance);
+			mk.distance = "always";
+		}
+		mk.size = static_cast<float>(ini.GetFloat("Marking", "size", mk.size));
+		mk.textSize = static_cast<float>(ini.GetFloat("Marking", "text_size", mk.textSize));
+		mk.height = static_cast<float>(ini.GetFloat("Marking", "height", mk.height));
 		return found;
 	}
 }

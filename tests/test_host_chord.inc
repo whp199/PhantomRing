@@ -419,11 +419,41 @@ static void TestSupportedStart()
 {
 	KinematicParams params;
 	CHECK(!SupportedStart({ 0, 0, 5 }, params, Ray));  // ground under the centre: start there
-	const auto rim = SupportedStart({ 0, 0, 20.1f }, params, Ray);  // the pit begins at z > 20
-	CHECK(rim && rim->z <= 20.0f - params.radius && rim->z > 19.2f && Near(rim->y, 0.0f, 0.01f));  // the whole body on the ground
+	// The pit begins at z > 20. 0.1 m past its edge two of BodyGround's side probes (er/Kinematic.h) are on the rim -- enough to
+	// hold a walking body, not a start: 4 cm more toward the pit and he'd fall (review 2026-10-14). Moved onto the ground: the
+	// whole body (centre 0.35 m in), or all five probes at its level.
+	const float top = params.stepUp + 0.05f;
+	const auto  startOk = [&](const Vec3& a_at) { return StartGround(BodyGround(a_at, top, top + params.snapDown, params.radius, Ray)); };
+	CHECK(BodyGround({ 0, 0, 20.1f }, top, top + params.snapDown, params.radius, Ray).supported && !startOk({ 0, 0, 20.1f }));
+	const auto rim = SupportedStart({ 0, 0, 20.1f }, params, Ray);
+	CHECK(rim && (rim->z <= 20.0f - params.radius || (rim->z <= 19.81f && startOk(*rim))) && rim->z > 19.2f && Near(rim->y, 0.0f, 0.01f));
 	// the nearest supported point, never one through the wall at x 5..5.5
 	const auto wall = SupportedStart({ 4.9f, 0, 20.1f }, params, Ray);
 	CHECK(wall && wall->x < 5.0f && wall->z <= 20.0f);
+	// Any start with the centre over the pit (1-29 cm past the edge), whatever way the world is turned (the probes' cross is fixed
+	// in world axes): moved about 0.2 m or more in from the edge, onto start ground.
+	for (const float deg : { 0.0f, 15.0f, 30.0f, 45.0f, 60.0f, 75.0f }) {
+		const float a = deg * std::numbers::pi_v<float> / 180.0f, ca = std::cos(a), sa = std::sin(a);
+		const auto  toWorld = [=](const Vec3& v) { return Vec3{ v.x * ca - v.z * sa, v.y, v.x * sa + v.z * ca }; };
+		const auto  toBase = [=](const Vec3& v) { return Vec3{ v.x * ca + v.z * sa, v.y, -v.x * sa + v.z * ca }; };
+		const RayFn turned = [&](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
+			Vec3 h;
+			if (!Ray(toBase(a_from), toBase(a_delta), h)) {
+				return false;
+			}
+			a_hit = toWorld(h);
+			return true;
+		};
+		int bad = 0;
+		for (float d = 0.01f; d < 0.3f; d += 0.02f) {
+			const auto at = SupportedStart(toWorld({ 0, 0, 20.0f + d }), params, turned);
+			bad += at && toBase(*at).z <= 19.81f && Near(at->y, 0.0f, 0.01f) &&
+			               StartGround(BodyGround(*at, top, top + params.snapDown, params.radius, turned))
+			           ? 0
+			           : 1;
+		}
+		CHECK(bad == 0);
+	}
 	CHECK(!SupportedStart({ 0, 0, 23.0f }, params, Ray));  // deep in the pit: nothing within 1.2 m -- a real drop
 	// kinematic from that start stays up
 	KinematicState s;

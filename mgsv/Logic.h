@@ -192,13 +192,15 @@ namespace phantom::guest::logic
 
 	// ---- Snake's explosives by TppEquip equip id (docs/GUEST.md 18.8) ----------------------------------------------
 	// Thrown ones leave through the Throwing System (kGEvThrow), placed ones through the Placed System (kGEvPlaced);
-	// kind = what their blast does (the same as KindOfAttack of the attack id their blast carries). Magazines, decoys,
-	// bait, cages and wormhole devices aren't explosives (kNone).
+	// kind = what their blast does (the same as KindOfAttack of the attack id their blast carries). Magazines, bait,
+	// cages and wormhole devices aren't explosives (kNone). Decoys (inflatable, active, shock) aren't either, but Snake
+	// sets them where Elden Ring's enemies should see them: kDecoy goes out as kGEvPlaced with kAmmoDecoy (roadmap 2.8).
 	enum class ExplosiveUse
 	{
 		kNone,
 		kThrown,
 		kPlaced,
+		kDecoy,
 	};
 	struct Explosive
 	{
@@ -357,6 +359,86 @@ namespace phantom::guest::logic
 		std::uint64_t since_{ 0 };   // the current phase's start
 		int           retries_{ 0 };
 		std::uint64_t openedAfter_{ 0 };
+	};
+
+	// ---- Snake jumps (protocol v14 kGuestJumping; MGSV has no jump) -------------------------------------------------
+	// The [Jump] button on MGSV's pad (Pad.cpp): MGSV never sees it, unless one of a_passWith is held when it goes down, or
+	// a_passAiming and Snake aims (LT) -- R3 is MGSV's own then: with LB held it selects in MGSV's call menu, aiming it changes
+	// the shoulder, in the binoculars (RB) the zoom. That whole hold then goes to MGSV.
+	// a_mgsvOwns (the game thread's word, MgsvOwnsR3): Snake aims by MGSV's own reading (its HOLD), rides, is in a menu or the
+	// binoculars -- R3 is MGSV's then whatever the pad shows (and the game thread would refuse the jump anyway).
+	class JumpButton
+	{
+	public:
+		// One poll: a_buttons = the host pad's; returns what MGSV sees. a_jump: this poll's press is a jump.
+		std::uint16_t Filter(std::uint16_t a_buttons, bool a_aiming, std::uint16_t a_button, std::uint16_t a_passWith, bool a_passAiming, bool& a_jump,
+			bool a_mgsvOwns = false);
+		void          Reset() { down_ = swallow_ = false; }
+
+	private:
+		bool down_{ false };
+		bool swallow_{ false };
+	};
+
+	// LT counts as aiming past XInput's own trigger threshold (XINPUT_GAMEPAD_TRIGGER_THRESHOLD): a light pull that MGSV may
+	// already aim with is never taken for "not aiming" (it was 64 of 255: between them R3 was neither a jump -- the game thread
+	// refused it, Snake aimed -- nor MGSV's shoulder change).
+	inline constexpr std::uint8_t kAimTrigger = 30;
+	[[nodiscard]] inline bool AimingTrigger(std::uint8_t a_lt) { return a_lt > kAimTrigger; }
+	// The game thread's word for the pad thread (Frame.cpp -> Pad.cpp): R3 is MGSV's now. Stale (the game thread stopped: a
+	// load, a hitch) after kMgsvOwnsFreshMs: then the pad alone decides.
+	inline constexpr std::uint64_t kMgsvOwnsFreshMs = 250;
+	[[nodiscard]] inline bool MgsvOwnsR3(bool a_owns, std::uint64_t a_setMs, std::uint64_t a_nowMs)
+	{
+		return a_owns && a_nowMs >= a_setMs && a_nowMs - a_setMs <= kMgsvOwnsFreshMs;
+	}
+
+	// A jump in MGSV (Frame.cpp): a press while Snake may jump lifts him (the caller's native placement, a_lift metres up: MGSV
+	// plays its own fall and landing), and kGuestJumping is set from then until he has landed in MGSV: his root came down at
+	// least kFellM from the highest it rose and stood still for kStillFrames frames, or MGSV's FALL status came and went; or
+	// a_maxAirMs passed. A lift that never showed (the root never rose kRoseM within kRiseMs) ends it at once.
+	class JumpTracker
+	{
+	public:
+		enum class Event
+		{
+			kNone,
+			kLift,      // lift Snake now (then Abort() if the placement failed)
+			kRefused,   // a press while he can't jump (or one is under way)
+			kLanded,    // he landed in MGSV: the flag goes down
+			kTimedOut,  // no landing seen within a_maxAirMs: the flag goes down anyway
+			kNoLift,    // the lift never showed in his root: over
+		};
+		static constexpr float         kRoseM = 0.3f;
+		static constexpr std::uint64_t kRiseMs = 300;
+		static constexpr float         kFellM = 0.2f;
+		static constexpr int           kStillFrames = 3;
+		static constexpr float         kStillM = 0.005f;
+		static constexpr std::uint64_t kCooldownMs = 200;  // after a landing, before the next lift
+
+		Event Update(bool a_press, bool a_canJump, std::uint64_t a_nowMs, float a_rootY, bool a_fall, std::uint64_t a_maxAirMs);
+		void  Abort();
+		[[nodiscard]] bool          Active() const { return phase_ != Phase::kIdle; }
+		[[nodiscard]] std::uint64_t AirMs(std::uint64_t a_nowMs) const { return Active() ? a_nowMs - start_ : 0; }
+		[[nodiscard]] float         Rose() const { return maxY_ - startY_; }
+
+	private:
+		enum class Phase
+		{
+			kIdle,
+			kAir,
+		};
+		Phase         phase_{ Phase::kIdle };
+		std::uint64_t start_{ 0 };
+		std::uint64_t ended_{ 0 };
+		bool          everEnded_{ false };
+		float         startY_{ 0 };
+		float         maxY_{ 0 };
+		float         lastY_{ 0 };
+		bool          rose_{ false };
+		bool          fell_{ false };
+		bool          sawFall_{ false };
+		int           still_{ 0 };
 	};
 
 	// The refill's magazine sizes (Ammo.cpp): PR.Magazines() answers "equip/magazine/sub,equip/magazine/sub,equip/magazine/sub"

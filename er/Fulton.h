@@ -55,6 +55,8 @@ namespace phantom::er
 
 		void OnEvent(const Frame& a_frame, const proto::GuestEvent& a_event);  // kGEvFulton
 		void Tick(const Frame& a_frame);                                       // FrameBegin, after the events
+		// The balloon is taking a_handle up now: his ChrIns+0x538 hold bits are the lift's (CQC hands its hold over: er/Cqc.cpp).
+		bool IsLifting(std::uint64_t a_handle);
 		void OnEnemiesBack(const char* a_why);  // a rest, a respawn, a load: Elden Ring brings its enemies back -- forget ours
 		void OnWorldShift(const Vec3& a_delta);
 		std::string Describe();

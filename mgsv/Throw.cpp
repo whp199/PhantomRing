@@ -6,6 +6,7 @@
 #include "Hook.h"
 #include "Link.h"
 #include "Log.h"
+#include "ProjectileTag.h"
 #include "Verify.h"
 
 #include <windows.h>
@@ -136,6 +137,7 @@ namespace phantom::guest::throwing
 			e.v1[0] = v0->x, e.v1[1] = v0->y, e.v1[2] = v0->z;
 			e.pad[0] = std::uint32_t(*equip) | (std::uint32_t(std::lround(fuseS * 1000.0f)) << 16);
 			const bool pushed = g_ready.load(std::memory_order_relaxed) && link::PushEvent(e);
+			projectile::NoteThrow(g_frame.load(std::memory_order_relaxed), e.v0, e.v1);  // its mesh, for the host's flown copy
 			++g_throws;
 			Log::Info("throw #{}: equip {} ({}) from {:.2f},{:.2f},{:.2f} at {:.2f},{:.2f},{:.2f} m/s ({:.1f} m/s), fuse {:.2f} s, owner {:#x}{}", id, *equip,
 				logic::BlastKindName(ex.kind), p0->x, p0->y, p0->z, v0->x, v0->y, v0->z, v0->Length(), fuseS, owner.value_or(0),

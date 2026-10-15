@@ -116,6 +116,38 @@ namespace phantom::er
 			{ A::KeyGuideCtor, "key guide ctor", Kind::kFunc, 0x242790,
 				"48 89 5C 24 08 57 48 83 EC 20 48 8B F9 E8 ?? ?? ?? ?? 88 07 33 C0 66 89 47 01 88 47 03 E8 ?? ?? ?? ?? 88 47 04" },
 
+			// Collision layers (docs/HOST.md "Collision filters"): CS::CSCollisionFilter (vtable 0x2B94DF0, its slot 8 = 0xC5F1F0)
+			// builds a 128x128 layer matrix; cs_phys_world_cast_ray's filter is a query filter info whose bits 0-6 are its layer.
+			// Here (inside 0xC5F1F0) row 0x16 is made: copy layer 3's row (0xC5F160), then drop every character layer, 2-0x2D
+			// (0xC62530) -- what a character's capsule collides with, characters left out. [Puppet] ground_filter = 0x2000016 needs it.
+			{ A::CollisionLayers, "collision layer 0x16 (CSCollisionFilter)", Kind::kFunc, 0xC6004E,
+				"BA 16 00 00 00 48 8B CB 44 8D 42 ED E8 01 F1 FF FF BA 16 00 00 00 48 8B CB E8 C4 24 00 00" },
+			// Snake's own ray query (game::CastRayKeep; docs/HOST.md "Collision filters"). cast_ray (0xC71E00) builds an
+			// hknpRayCastQuery at rsp+0x40 -- codec [hknpWorld+0xB00] +0, filter [CSHavokMan+0xC0] +8, material 0xFFFF +0x10, filter
+			// info +0x14, the ignored chr +0x18, 2 at +0x20, 0xFB at +0x24, the ray at +0x30 -- and a CSClosestHitCollectorForSnipe at
+			// rbp-0x30 (ctor 0xC5A9F0, ignore at +0xA0 by 0xC5ABE0), casts with 0x187F7D0 and reads +0xC (hits) / +0x30 (position).
+			// Its addHit 0xC5ABF0 -> 0xC5A8E0 drops a hit whose material (0xC75570: per-body table, else the mesh's per-key one) is
+			// class 2 or 5 (id / 100); hknpClosestHitCollector's addHit 0x1886510 keeps the closest, no check.
+			{ A::CastRayQuery, "cast_ray query build", Kind::kFunc, 0xC71E8D,
+				"B8 FF FF 00 00 66 89 44 24 50 33 C0 89 44 24 54 48 89 44 24 58 48 89 44 24 48 48 89 44 24 40 C7 44 24 60 02 00 00 00 "
+				"C6 44 24 64 FB" },
+			{ A::CastRayCalls, "cast_ray query calls", Kind::kFunc, 0xC71F56,
+				"48 8B 80 C0 00 00 00 48 89 44 24 48 48 8B 47 08 48 8B 88 00 0B 00 00 48 89 4C 24 40 44 89 7C 24 54 48 89 74 24 58 "
+				"48 8D 4D D0 E8 6B 8A FE FF 90 48 8B D6 48 8D 4D D0 E8 4E 8C FE FF 4C 8D 45 D0 48 8D 54 24 40 48 8B 4F 08 E8 2C D8 C0 00 "
+				"83 7D DC 00" },
+			{ A::WorldCastRay, "hknpWorld cast ray", Kind::kFunc, 0x187F7D0,
+				"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B E9 49 8B F8 8B 0D ?? ?? ?? ?? 48 8B F2 FF 15" },
+			{ A::SnipeCollectorCtor, "snipe collector ctor", Kind::kFunc, 0xC5A9F0,
+				"48 89 4C 24 08 53 48 83 EC 30 48 C7 44 24 20 FE FF FF FF 48 8B D9 E8 D5 FB FF FF 90 48 8D 05 ?? ?? ?? ?? 48 89 03" },
+			{ A::SnipeCollectorDtor, "snipe collector dtor", Kind::kFunc, 0xC5AAB0,
+				"48 89 4C 24 08 48 83 EC 38 48 C7 44 24 20 FE FF FF FF 48 8D 05 ?? ?? ?? ?? 48 89 01" },
+			{ A::SnipeAddHit, "snipe collector addHit", Kind::kFunc, 0xC5ABF0,
+				"48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 20 8B 42 48 48 8B FA 25 FF FF FF 00" },
+			{ A::ClosestAddHit, "hknpClosestHitCollector addHit", Kind::kFunc, 0x1886510,
+				"F3 0F 10 42 20 4C 8D 4A 20 0F 28 C8 4C 8B C1 0F 28 41 10 0F C6 C9 00 0F 2E C1 76 3B" },
+			{ A::HitMaterialClass, "hit material id", Kind::kFunc, 0xC75570,
+				"48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 89 54 24 10 57 48 83 EC 20 8B 01 40 32 ED 25 FF FF FF 00" },
+
 			// ---- vtables (MSVC RTTI) ----
 			{ A::VtChrIns, "vt CS::ChrIns", Kind::kVtable, 0x2A310C8, nullptr, 0, 0, 0, nullptr, ".?AVChrIns@CS@@" },
 			{ A::VtPlayerIns, "vt CS::PlayerIns", Kind::kVtable, 0x2A7FBB0, nullptr, 0, 0, 0, nullptr, ".?AVPlayerIns@CS@@" },
@@ -147,6 +179,8 @@ namespace phantom::er
 			{ A::VtTeamTypeEnemy, "vt CSTeamTypeEnemy", Kind::kVtable, 0x2A4F888, nullptr, 0, 0, 0, nullptr, ".?AVCSTeamTypeEnemy@@" },
 			{ A::VtTeamTypeRival, "vt CSTemaTypeRival", Kind::kVtable, 0x2A4F898, nullptr, 0, 0, 0, nullptr, ".?AVCSTemaTypeRival@@" },
 			{ A::VtGameRend, "vt CS::GameRend", Kind::kVtable, 0x2A82338, nullptr, 0, 0, 0, nullptr, ".?AVGameRend@CS@@" },
+			{ A::VtSnipeCollector, "vt CS::CSClosestHitCollectorForSnipe", Kind::kVtable, 0x2B94678, nullptr, 0, 0, 0, nullptr,
+				".?AVCSClosestHitCollectorForSnipe@CS@@" },
 		};
 		// clang-format on
 		static_assert(std::size(kTable) == static_cast<std::size_t>(A::Count), "every A has exactly one table entry");

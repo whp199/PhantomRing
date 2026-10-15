@@ -37,6 +37,13 @@ namespace phantom::guest::pad
 		std::atomic<std::uint16_t> g_pulseButtons{ 0 };
 		std::atomic<ULONGLONG>     g_pulseUntil{ 0 };
 		std::atomic<std::uint64_t> g_polls{ 0 };
+		std::atomic<std::uint16_t> g_ownLast{ 0 };       // the player's own buttons at the last poll (Presses)
+		std::atomic<std::uint32_t> g_presses[16]{};      // ... their rising edges, per bit
+		// Snake's [Jump] button (MGSV's poll thread only) and its presses for the game thread.
+		logic::JumpButton          g_jumpButton;
+		std::atomic<std::uint32_t> g_jumpPresses{ 0 };
+		std::atomic<bool>          g_mgsvOwnsR3{ false };  // the game thread's word (SetMgsvOwnsR3) and when it last said it
+		std::atomic<std::uint64_t> g_mgsvOwnsR3At{ 0 };
 
 		// Boot automation's button sequence (Sequence()): step i holds its buttons/RT for its ms, one after the other.
 		std::mutex                       g_seqLock;
@@ -165,8 +172,30 @@ namespace phantom::guest::pad
 					fromHost = true;
 				}
 			}
+			const auto& cfg = Cfg();
+			if (fromHost && cfg.jump) {
+				bool jump = false;
+				const bool owns = logic::MgsvOwnsR3(g_mgsvOwnsR3.load(std::memory_order_acquire), g_mgsvOwnsR3At.load(std::memory_order_acquire), ::GetTickCount64());
+				pad.wButtons = g_jumpButton.Filter(pad.wButtons, logic::AimingTrigger(pad.bLeftTrigger), cfg.jumpButton, cfg.jumpPassWith, cfg.jumpPassAiming, jump,
+					owns);
+				if (jump) {
+					g_jumpPresses.fetch_add(1, std::memory_order_acq_rel);
+				}
+			} else {
+				g_jumpButton.Reset();
+			}
 			const auto now = ::GetTickCount64();
 			IDroid(now, pad, fromHost);
+			{
+				// The player's own presses (before our pulses go on top): Presses(), e.g. the dive (Dive.h).
+				const std::uint16_t own = fromHost ? pad.wButtons : 0;
+				const std::uint16_t rose = static_cast<std::uint16_t>(own & ~g_ownLast.exchange(own, std::memory_order_relaxed));
+				for (int i = 0; i < 16; ++i) {
+					if (rose & (1u << i)) {
+						g_presses[i].fetch_add(1, std::memory_order_relaxed);
+					}
+				}
+			}
 			if (now < g_pulseUntil.load(std::memory_order_acquire)) {
 				pad.wButtons |= g_pulseButtons.load(std::memory_order_relaxed);
 			}
@@ -304,7 +333,25 @@ namespace phantom::guest::pad
 		return SequenceStep(::GetTickCount64(), step);
 	}
 
+	bool TakeJumpPress() { return g_jumpPresses.exchange(0, std::memory_order_acq_rel) > 0; }
+	void RequestJump() { g_jumpPresses.fetch_add(1, std::memory_order_acq_rel); }
+	void SetMgsvOwnsR3(bool a_owns)
+	{
+		g_mgsvOwnsR3At.store(::GetTickCount64(), std::memory_order_release);
+		g_mgsvOwnsR3.store(a_owns, std::memory_order_release);
+	}
+
 	std::uint64_t Polls() { return g_polls.load(); }
+
+	std::uint32_t Presses(std::uint16_t a_button)
+	{
+		for (int i = 0; i < 16; ++i) {
+			if (a_button == (1u << i)) {
+				return g_presses[i].load(std::memory_order_relaxed);
+			}
+		}
+		return 0;
+	}
 
 	std::string DescribeIDroid()
 	{

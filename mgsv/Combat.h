@@ -28,6 +28,16 @@ namespace phantom::guest::combat
 	// Game thread: poll the CQC attack serial; a_root/a_yaw place the fallback strike volume.
 	void PollMelee(const float a_root[3], float a_yaw);
 
+	// The CQC state PollMelee read last (Cqc.cpp, protocol v13 kGEvCqc): its attack id (pad[0]) and whether its action callback
+	// (s+0x10, non-null while MGSV runs a grapple or throw: MGS5VR motion_melee.cpp) is set. valid = read this frame.
+	struct CqcProbe
+	{
+		bool          valid{ false };
+		std::uint16_t attack{ 0 };
+		bool          action{ false };
+	};
+	[[nodiscard]] CqcProbe Probe();
+
 	// MGSV bulletId (TppEquip.BL_*) -> what Elden Ring should do with it (the table lives in Logic so it is
 	// unit-tested). kNone: smoke/flare/chaff/fulton.
 	using BulletKind = logic::BulletKind;

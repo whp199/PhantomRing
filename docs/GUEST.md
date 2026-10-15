@@ -65,9 +65,11 @@ work, live with MGSV and fake_er only (no protocol change).
 | `State.*` | what the Lua thread and the frame thread share |
 | `Logic.*` | pure arithmetic (odometer, treadmill, life, ammo, transforms, blast kinds, lead point), unit-tested |
 | `Blast.*` | attack-area system vf0 detour -> kGEvExplosion for thrown/placed explosives (§18.5) |
+| `C4.*`, `C4Logic.*` | C4's detonator: MGSV's own (ACTION with C4 in hand) watched, a refused or unanswered press set off by the guest (§18.8a, `[Combat] C4Detonator`); the pure part unit-tested |
 | `Ammo.*` | kHEvRested: magazines, ammo stocks and item counts back to full through MGSV's own ammo component (§18.11) |
 | `Menu.*` | MGSV's pause menu (native) / iDroid (Lua) -> kGuestInMenu; GuestState republished while frames stall (§18.6) |
 | `Sound.*` | Wwise SetPosition/PostEvent detours, D-Walker volume experiment and `!sound` diagnostics (§18.2) |
+| `Horse.*`, `HorseLogic.*` | D-Horse treadmill (§8.1a, `[Buddy] HorseTreadmill`, off): the horse's own location object found near its skin and moved with each treadmill jump; the pure part unit-tested |
 | `Follow.*` | D-Walker follow: whistles, follow spot, steering, out-of-view catch-up (§18.3); D-Horse's whistle (§8.1); the player's buddy orders |
 | `ActorProxy.*`, `ActorProxyGame.cpp` | ActorProxy v0 (§20, `[Proxies]`, off): disabled soldiers placed at the nearest hostile ER characters, the rest parked; the pure part unit-tested |
 | `FramePace.*` | MGSV's frame rate: its Sleep(1) job polls shortened (`[Pacing] JobSleepUs`), `!pace` timings, wait probe, present experiments (§19) |
@@ -112,6 +114,8 @@ An unprotected error would hit `lua_atpanic` and end the game.
     - Cqc (CQC_HOLD/CONTINUOUS), FirstPerson (SUBJECT/BINOCLE, or riding with MGSV's cockpit camera: §18.10);
     - InBox (CBOX), BoxPoster (its item slot has a poster) (v8, §18.9);
     - Nvg: the night-vision goggles are on (v10, §18.12);
+    - Binoculars: PlayerStatus BINOCLE (RB held, not aiming; FirstPerson is set too) -- the host marks the Elden Ring characters
+      Snake looks at (v13, docs/HOST.md "Marking"; live 2026-10-14: on while RB holds the binoculars up, off on release);
   - mission/location codes;
   - `odoEpoch`, `odo`, `rootPos`/`rootYaw` (owner+0x30 matrix; yaw = atan2(fwd.x, fwd.z)), smoothed `velocity`;
   - camera pos/quat (setter source);
@@ -228,6 +232,31 @@ the sequence.
   (which should cover dives and rolls; UNVERIFIED). On a vehicle it happens only with
   `TreadmillOnVehicle`. The native modes fall back to the Lua treadmill on vehicles or when their checks
   fail.
+- **Jump** (`[Jump]`, protocol v14 `kGuestJumping`, `logic::JumpButton` / `logic::JumpTracker`; live pass B 2026-10-15: R3 in
+  MGSV's item wheel (D-pad left held) was a jump, so its Use -- the Phantom Cigar's only way -- never reached MGSV: `PassWith`
+  gained the D-pad (`lb rb lt up down left right`, 0x030F), and with the wheel open and the stick on the cigar R3 lit it; live pass A 2026-10-14:
+  `jump: Snake lifted 1.00 m at ... (running 2.9 m/s) -- kGuestJumping until he lands`, refused crouched, LB/LT + R3 stay
+  MGSV's, docs/FEATURES-1.md; the lift and land lines are logged for the first 10 jumps only). MGSV has
+  no jump, and L3 -- the button one would pick -- is MGSV's DASH (sprint; `PlayerPad` DASH, §18.10). The default `Button =
+  rs` (R3): MGSV uses the right-stick click only with LB held (its call menu's select, §18.3), aiming (the shoulder change)
+  or in the binoculars (zoom), and in its weapon / item wheels (a D-pad direction held: Use), so `PassWith = lb rb lt up down left
+  right` leaves it to MGSV when one of those is held at its press; otherwise
+  `Pad.cpp` keeps the whole hold from MGSV and counts the press. LT counts as aiming past XInput's own threshold (30 of 255,
+  `logic::AimingTrigger`; it was 64, and between them R3 was neither a jump nor the shoulder change), and the game thread tells
+  the pad thread every frame when R3 is MGSV's anyway (`pad::SetMgsvOwnsR3`, fresh for 250 ms): Snake aims by MGSV's own HOLD,
+  rides, is in a menu or the binoculars -- the press goes to MGSV then (no `jump: not now` line for it). The game thread (`Frame.cpp`, before the hold) takes it: Snake
+  must be ready, on foot, standing (walking and running are standing: `Standing throughout` while running, §17), not aiming,
+  crouched, prone, riding, in a box, a menu, CQC, a fall or another action (NORMAL_ACTION), not parked or Fulton-anchored, no
+  warp landing, and the native placement must be there (`jump: not now -- <why>` otherwise). Then he is placed `Lift` (1.0 m)
+  above his root (+ `WarpLift`, as for every placement) with his rotation, through the treadmill's native set-position call:
+  MGSV keeps his running and plays its own fall and landing (a 1 m drop: never MGSV's fall damage, which `Invincible` turns off
+  anyway). The odometer is rebased at the lifted root (the lift is no motion; the fall's height the host ignores).
+  `kGuestJumping` is up from the press until he has landed in MGSV: his root came down 0.2 m from the highest it rose and stood
+  still 3 frames, or MGSV's FALL status came and went; `MaxAirMs` (2 s) at the latest; a lift that never shows in his root
+  (not 0.3 m up within 0.3 s) ends it at once. No treadmill warp or native hold while it is up; no new lift for 0.2 s after a
+  landing. `!jump` presses it from the console. Logged: `jump: Snake lifted 1.00 m ... -- kGuestJumping until he lands`.
+  With the host's keyboard and mouse (`[Keyboard]`) the middle mouse button is R3: the jump (with Q = LB held, the call menu's
+  select). A dive (X, §18.17) in the air of a jump never hops (the host refuses it).
 
 ## 7. Combat and life
 
@@ -244,7 +273,10 @@ the sequence.
 - **Melee:** the CQC component (character+0xD8 − 0x38, all vtables checked), with this player's state
   `+0x114` serial and `+0x118` attack id. Each new serial with a non-zero id becomes one kGEvMelee. The
   sphere comes from the attack shape's geometry vfunc when the shape validates
-  (`MeleeShapeGeometry`). Otherwise it is 1 m in front of Snake at chest height, radius 1.2 m.
+  (`MeleeShapeGeometry`) and its centre lies within 2.5 m of Snake's root (horizontally; -1..+3 m up). Otherwise it is 1 m in
+  front of Snake at chest height, radius 1.2 m. Live pass B 2026-10-15: on the frame its serial moves the shape can still sit
+  where the last strike was -- a punch after an 8 m walk came out 8 m behind Snake (the host's arc still found the soldier next
+  to him, but a crate there would break 8 m back): `melee: MGSV's attack shape is N m from Snake (stale: the last strike's)`.
 - **Life:** Elden Ring damage × `LifeScale` (4) is written into the native life (`0x142C0147C`, regenerating) and
   `vars.playerLife`. The native one is written only while it agrees with vars within 400 (a frame of MGSV's ~760
   life/s regeneration; an exact compare dropped every hit taken while Snake regenerated: "write did not stick",
@@ -298,7 +330,7 @@ live with D-Walker and D-Horse).
 - **Riding:** Y next to it mounts (PlayerStatus ON_HORSE, `vars.playerVehicleGameObjectId` = the horse 0x1a00): GuestState
   `kGuestOnVehicle` (0x20), buddyFlags Present|PosValid|**Ridden** (0x7), `vehicleId` 0x1a00; Snake's root sits ~1.4 m
   above the horse's. Left stick walks it (~3-4 m/s), **X taps** speed it up: canter ~6 m/s, gallop 13-17 m/s (live
-  odometer: 180 m in ~15 s); Y dismounts. No treadmill while riding: nothing moves the horse (Lua SetPosition, the
+  odometer: 180 m in ~15 s); Y dismounts. No treadmill while riding (unless `[Buddy] HorseTreadmill`, §8.1a): nothing moves the horse (Lua SetPosition, the
   player's native placement while riding, the player's Warp while riding: all tried) -- the guest logs `D-Horse can't
   be moved -- no treadmill while Snake rides it` and leaves it alone. MGSV's own world then limits the ride: the
   airport terminal is ~40 m north of the sandbox centre, something stopped a gallop ~50 m east; south (~90 m) and then
@@ -306,6 +338,61 @@ live with D-Walker and D-Horse).
   over (in Elden Ring it jumps by that distance, then gallops back).
 - **Recording:** `horse_ride.prrec` (scratch recordings, README line): mount, walk, gallop, turn, stop, dismount,
   the whistle back; 2616 of 2895 draw lists carry 14-20 buddy-owned draws.
+
+### 8.1a D-Horse treadmill (`[Buddy] HorseTreadmill`, default true since live pass B 2026-10-15)
+
+Live pass B (2026-10-15, both games, Limgrave): `!horse shift 3 0` with it off -> `shift refused -- [Buddy] HorseTreadmill is
+off`; `!horse on` -> `location object ... stands on D-Horse's skin (30 scanned) -- confirming`, `confirmed (31 checks on the skin)`
+0.5 s later; then 307 ridden moves (`treadmill (ridden): feet ... moved by 7.39,0.00,-1.82`), every one followed by the skin, 0
+failed, no `didn't follow` warning; the odometer ran smooth (12-15 m root jumps taken out) to 1.24 km in one general direction
+in MGSV terms, far past the airport's limits; in Elden Ring a straight 299.9 m east from Gatefront in 27 s (the host's position
+integrated across 9 world shifts: Elden Ring moves its origin every ~30 m at a gallop, which reads as the horse jumping back if
+one doesn't take them out). After the ride Snake got off and D-Horse stood 3.7 m beside him for 12 s: no jump, no whistle.
+Galloping into Limgrave's ravines killed Snake three times (Elden Ring's falls, as on foot). On by default since.
+
+Goal: riding anywhere (no airport limit) and no horse jump in Elden Ring. The horse is moved the way ActorProxy v1 moves
+soldiers (20.5) -- by its own location object -- because it answers no Lua placement at all (above).
+
+- **Static RE (2026-10-14, mgsvtpp.exe 1.0.15.4, byte-checked in Addresses.h, `verify_addresses.py` ok):** the location class
+  (vtable `0x1424C8EF0`, Snake's and realized soldiers') is built by `0x141ACED60` at +0x10 of a 0x3F0-byte body (vtable
+  `0x1424C8EE0`; `kLocationCtorVtables`), allocated by `0x141AD2940`, called from `0x140B6F0B0` -- a generic character builder
+  (class hash `0x92839b779862`) reached from `0x140B6D980`, not from player or soldier code, so any realized character class can
+  own one. Its vf 0x68 (`0x141AD56D0`, `kLocationSet` / `kLocationSetSlot`) is vf 0x58 (position) + vf 0x60 (rotation), then
+  clears bit 2 of +0x1A0 and the qword +0x1F0 -- what Hold and ActorProxy already call. Whether TppHorse2 realizes one is
+  not proven statically (Fox's own reflection, no RTTI for it): the guest finds out at runtime.
+- **Finding it (Horse.cpp, game thread):** once D-Horse is out and its skin is known (8.1), a background scan lists every object
+  with that vtable in MGSV's writable memory (as ActorProxy's, ~220 ms); the one whose feet (+0x10) stand within 0.75 m
+  (horizontal) and 1 m (vertical) of the skin root -- never Snake's own object (1.4 m above it in the saddle, and excluded by
+  address) nor one near an ActorProxy soldier, never one parked at the origin -- is the candidate. It is **confirmed** after 10
+  checks on the skin over at least 0.5 s; a candidate that leaves the skin once is dropped; a confirmed one is lost after 15
+  checks in a row off the skin, or at once when its vtable changes. No candidate: scanned again 30 s later (5 s otherwise).
+- **Moving it:** the setter gets the object's own +0x20 point moved by the shift and its own +0x60 rotation (so the class's lift
+  and the horse's heading come from the object), then +0x20 is read back (0.3 m, horizontal). The skin must then catch up with
+  the object (10 checks of grace); a horse whose body doesn't follow, or a setter that doesn't take, counts a failure, and 3 in a
+  row put D-Horse back to the old way for the session (`horse: ... -- D-Horse is left to MGSV again`).
+  - **On foot:** every treadmill jump moves it by the same shift as Snake (all three axes: it keeps its height relative to him)
+    in the same frame as his native placement -- no whistle after a jump; Elden Ring sees it keep its place beside him. The
+    Fulton anchor's placement moves it horizontally, as the walker.
+  - **Riding:** the horse is moved *as* the jump (the vehicle branch, no Lua), its feet put on the centre's ground (the
+    centre's height + the object's own lift: the far point can be metres above or below the centre, and Snake's root is a
+    saddle above the feet). Snake in the saddle comes along and his root's jump is taken out as the warp's landing, as for
+    D-Walker's `owarp` (its height, the saddle's at the centre, held for 20 frames). **If his root doesn't jump within 10
+    frames and 300 ms** the saddle doesn't carry him: the horse is put back under him at once and no ridden jump is tried
+    again this session (`horse: Snake's root didn't follow the ridden jump ... D-Horse put back under him`; `!horse` says
+    `the saddle didn't carry Snake`) -- MGSV's map limits the ride again, as without the feature. A ridden jump starts only
+    within 2 x radius + 20 m (32 m) of the centre: a ride that went further without the treadmill (object not confirmed
+    yet, or lost and found again) is not thrown back in one go; it waits until Snake rides back within that, or dismounts.
+    `HorseMoveRider = true` also places Snake by the horse's jump in the same frame (+ `WarpLift`, as every native placement;
+    no landing watch then). `RidingCameraKeep` asks MGSV's riding camera back as for the walker. Gallop and the 1 s
+    `WarpCooldownMs`: Snake gets ~15 m from the centre between jumps (the airport terminal is ~40 m north).
+- Console: `!horse` (state: object, confirmed, scans, moves, followed, failures), `!horse on|off` (this session; off forgets the
+  object, `on` finds it anew), `!horse scan`, `!horse shift <dx> <dz>` (moves the horse by that much at the next frame, Snake on
+  foot, to see whether it goes; refused while off or without a confirmed object, never left queued).
+- Offline: `tests/test_guest_horse.cpp` (pick, tracker, setter arguments and ridden heights, jump limit and landing watch,
+  decisions). `TestRiddenGallop` is an odometer/treadmill **simulation under the assumption that the saddle carries Snake** (with
+  Frame.cpp's and Horse.cpp's glue copied in: tracker, decision, landing, settle height): a minute at 15 m/s up a 15 % slope,
+  60 jumps, odometer 900.2 of 900 m, the tracker confirmed throughout, the horse's feet on the ground after every jump. Its
+  second run, the saddle *not* carrying him: one jump, put back 18 frames later, no other. It proves nothing about MGSV.
 
 ### 8.2 Another buddy in session (`!buddy`, the iDroid; live 2026-10-13)
 
@@ -461,7 +548,8 @@ item); the native life write sticks (§7); the D-Walker class (`TppCommonWalkerG
   Dive/roll detection relies on NORMAL_ACTION.
 - Every Lua API not named in §18 is still used as IH/MGS5VR use it on this build, without a check of its own.
 - D-Horse with Elden Ring (§8.1): only MGSV + fake_er/recorder so far -- how the host draws and grounds the horse, the
-  jump after a far dismount, riding speeds against Elden Ring's slopes (DESIGN `max_speed_vehicle`).
+  jump after a far dismount (gone with `[Buddy] HorseTreadmill`, §8.1a: does TppHorse2 own a location object, does the saddle
+  carry Snake when it is moved?), riding speeds against Elden Ring's slopes (DESIGN `max_speed_vehicle`).
 - The regeneration curve (§18.15) against Elden Ring's real hits (fake_er's `hurt` only).
 
 ## 12. Offline verification
@@ -474,6 +562,7 @@ item); the native life write sticks (§7); the D-Walker class (`TppCommonWalkerG
 | `tests/test_guest_script.lua` (lua5.1) | the embedded script against a mock engine: Tick result order, command parser (Warp vs WarpAndWaitBlock, SetPosition), D-Walker steps, mission loading (direct/reserve/ACC), setup, console packing, the NVG flag, `refill`, `AutoAim`, an empty engine and an engine that throws |
 | `test_guest_pump` (real Lua 5.1.5) | Pump.cpp end to end: VM probe, script load and refs, Tick → frame state, the full boot sequence title → Continue → 10040 → load the sandbox mission → setup → D-Walker → centre → Ready (status texts), frame → Lua commands, the dev console over a real mapping (results, errors, syntax errors), live `phantomring.lua` override, leaving the sandbox; the engine's Lua stack is unchanged after every pump |
 | `test_guest_logic` | odometer (teleports, rebase, drift over 100k frames), treadmill (radius, direction, cooldown, height, with the odometer over 100 m), life clamp/death, ammo-counter shots, the refill's magazine sizes (§18.11), matrix→yaw/quat, quaternion rotation, focal→FOV |
+| `test_guest_horse` | the D-Horse treadmill's pure half (§8.1a): its location object picked near the skin (Snake's, origin and excluded ones never), confirmed/lost, the setter's arguments for a jump (ridden: feet on the centre's ground), the ridden jump limit and landing watch, the treadmill's choice per case, a ridden minute at 15 m/s up a slope with the frame glue copied in -- a simulation that *assumes* the saddle carries Snake (odometer exact, tracker confirmed, horse on the ground under him) -- and the run where it doesn't (one jump, put back, no more) |
 | `test_guest_link` | attach handshake on a real file mapping, version refusal, kRenClearAll, GuestState/PoseBlock/events/pad flow, `!` console, host restart (re-attach, drain, console reset), host death; the shipped ini equals the built-in defaults; ini parsing |
 | `test_guest_proxy` | a dummy exe loads the proxy (`dinput8=n,b`) and gets a working real IDirectInput8W without and with `PHANTOMRING=1` (identity refusal, log checked); the wrapper hides gamepads/joysticks, keeps keyboard/mouse, and handles refcounts and QueryInterface |
 | `mgsv/verify_addresses.py` | every signature in Addresses.h against the exe on disk |
@@ -485,6 +574,7 @@ item); the native life write sticks (§7); the D-Walker class (`TppCommonWalkerG
 - `!status` shows boot, pump, frame, the Steam guard, host and centre.
 - `!boot` restarts boot automation.
 - `!treadmill on|off`.
+- `!jump`: as if the `[Jump]` button went down (§6; the log says whether Snake jumped or why not).
 - `!centre` sets the centre to Snake's current position.
 - `!debug on|off`.
 - `!blast` (explosions sent / kept out), `!menu` (menu state), `!sound ...` (§18.2), `!whistle`, `!follow on|off|spot a s|<m> <ms>|method m|modes list` (§18.3).
@@ -492,12 +582,14 @@ item); the native life write sticks (§7); the D-Walker class (`TppCommonWalkerG
   on|off` ([Combat] RegenGate for A/B tests, §18.15), `!loc <id>` / `!placeobj <id> x y z [yaw]` (experiments: the
   player location manager's object for a GameObject id, and its set-position on the next frame; it knows only Snake), `!proxy`
   (ActorProxy: the slots, each soldier's job and life, §20.5), `!proxy on|off` (this session), `!fulton` (the anchor's state, §20.4),
-  `!fulton <handle> [fail]` (kGEvFulton by hand), `!skins [radius] [ms]` (every skinned model published), `!buddy hint` (§8.3).
+  `!fulton <handle> [fail]` (kGEvFulton by hand), `!skins [radius] [ms]` (every skinned model published), `!buddy hint` (§8.3),
+  `!horse [on|off|scan|shift dx dz]` (the D-Horse treadmill, §8.1a).
 - `!refill` (what kHEvRested does), `!ammo` (refill state, last refill), `!ammo drain` (dev: every ammo/item stock to half
   through MGSV's own setter, §18.11; queued and run on the Lua thread with the next Tick's results -- it used to call MGSV's
   component lookup and setter from the console's worker thread -- `!ammo` shows the outcome); a refill asked more than 5 s
   ago that never came back (a failed `PhantomRing.Tick` loses that update's commands) is queued again on the next request; `!capture hud skip <ps hash>` (dev: leave one UI pixel shader's draws out of the HUD
   layer, how the night-vision overlay was found, §18.12). `!status` also shows the ammo refill and Tarnished mode.
+- `!dive` (§18.17): dives seen (and the sign that confirmed the last one), X presses while standing with no dive.
 
 `phantomring.lua` next to the DLL overrides the embedded script, and is reloaded within 1 s of a change.
 `phantomring.default.lua` is written at start as a starting point.
@@ -599,6 +691,20 @@ to write). `[Capture] Enabled = true` (ini).
   `g_tex_mesh` and t8+ never. Key = `Hash64` of the mip chain seeded with format/size/mips.
 - Copies: staging `CopyResource` at Present, `Map(DO_NOT_WAIT)` on later Presents, 4 starts / 16 MB
   per Present; resources AddRef'd while cached.
+- **Stale keys** (`[Capture] Revalidate`, default true; 2026-10-14; live pass A: `stale entries restarted 0 / pruned 482 -> 713`
+  over two buddy swaps, no false colours on D-Walker/D-Dog close up). Capture keys textures by MGSV's
+  `ID3D11Texture2D*` and meshes by their buffers' pointers, and kept those keys forever; but the copy (and its AddRef) was
+  evicted a minute after it was *first* asked for (Capture never asked again once it had the bytes), so after a minute
+  nothing held MGSV's resources and MGSV could create another one at a freed address, which then went out under the old
+  key: another model's SRM, normal map or layer noise in D-Dog's or D-Walker's diffuse slot (the player's false colours;
+  session 6 shows the pattern: low-resolution textures copied first, full-size ones a moment later, the box's textures
+  copied anew 48 minutes in while only 3 of its 5 meshes were new; docs/HOST.md "Material roles"). Now every copy carries
+  a serial (`assets::Serial`, never reused); each use touches it (so a resource in use is never evicted) and compares it
+  with the one the key was made from: another one (or none) = copy and key it afresh. After each eviction entries whose
+  copies are gone are pruned (their bytes too). `!capture` shows `stale entries restarted N / pruned M`. The rules
+  (`Stale`, the eviction age, restart, prune) live in `mgsv/CaptureKeys.h`, which `test_guest_logic` runs against a fake
+  copy table: a texture drawn every frame for minutes keeps its copy and key; one let go and replaced at the same address
+  is copied, keyed and sent afresh (never under the old key); unused entries are pruned with their copies.
 - Planned DrawRecord fields: `material` = low 32 bits of the PS bytecode hash (the Fox shader
   permutation), `params[0]` = `m_useWeightCount`, `params[1..7]` = `cPSMaterial.m_materials[0].xyzw,
   [1].xyz`; `kDrawRigid` with one matrix when the VS has no `VSBones`, the weight count is 0, or the mesh
@@ -609,6 +715,38 @@ to write). `[Capture] Enabled = true` (ini).
 - `!capture`: device, Present hook, counters (draws, deferred draws, constant-buffer maps, command
   lists, contexts, layouts, shaders).
 - `!capture probe [N]`: describes the next N frames into `PhantomRingCapture.txt` next to the DLL.
+
+### 15.5 Projectile draws (protocol v13 `kOwnerProjectile`, roadmap 5.4; live pass A 2026-10-14: doesn't work yet)
+
+**Live pass A** (docs/FEATURES-1.md): 3 frag grenades thrown -> no draw tagged (`!capture`: `3 throws, 2 explosive rounds
+noted, 26 draws tagged`, all from the rockets): MGSV's grenade is not a rigid G-buffer draw within the arc's slack, or not
+there at all; 2 FB MR rockets -> the first tag 18 frames after the release 41 m out, a 4-vertex quad (`capture: mesh ...: 4
+verts, 6 indices, 0 bones (projectile)`), so the tag missed the rocket body (an exhaust sprite or decal) and the host never
+confirmed a template. Stays off; next: probe a throw's frames (`!capture probe`) for the grenade's own draw.
+
+`ProjectileTag.*` (rules: `ProjectileLogic.h`, `test_guest_logic`), `[Capture] ProjectileMeshes = false` (off by default:
+see below). Throw.cpp notes each
+thrown explosive at its `kGEvThrow` (release point, velocity, game frame); Combat.cpp each explosive round of Snake's at its
+`kGEvFire` (muzzle, direction). For 30 game frames after a release, a **rigid** G-buffer draw (weight count 0) whose
+`m_world` origin lies where the projectile must be is published as `kOwnerProjectile`, whoever it would have belonged to:
+- thrown: within `slack` = 0.45 m + two frames of its travel of `p0 + v0 t - g t^2 / 2` (g 9.8; t from the draw's game
+  frame) -- but only once that sphere is clear of the hand (|predicted| - slack >= 0.6 m: frame 8 for a 12.6 m/s throw), and
+  the draw itself at least 1.05 m from the release point and ahead of it (dot with v0 > 0). Review: in the first frames the
+  sphere is a shell around the hand that took in Snake's own rigid gear (a holstered sidearm 0.7 m below, the gun in his
+  other hand, a slung rifle behind) while the grenade itself was still inside 0.6 m, and the host learned that gear;
+- round: at least 0.6 m ahead of the muzzle on its line (never the launcher's tube), no further along it than 1.05 m +
+  120 m/s x (t + two frames) (review: a prop or the walker 40 m down the line was tagged one frame after the shot), and
+  within 0.5 m of the line plus the drop so far, capped at 0.4 m (a grenade-launcher round falls; a rocket's line doesn't
+  widen by metres).
+Proxy/Fulton-anchor exclusions apply to these too (a proxy's rifle can sit on a rocket's line; a grenade passing a proxy only
+loses that frame's tag). `!capture` adds a line: throws / rounds noted, draws tagged; the first tag is logged
+(`projectile: first thrown draw tagged ...`). The host takes a template only from two tagged lists 3+ frames apart that show
+the same meshes flying away along the release, then checks the meshes' real size (docs/HOST.md "Projectile meshes and muzzle
+flashes"). **Off by default** because a mis-tag takes that draw away from Snake or the buddy in Elden Ring's frame (a host
+with `[Render] projectile_meshes` off gives tagged draws within 2.5 m of Snake back to him, but a buddy part is lost), and
+tagged draws further out have their meshes and textures sent over the render ring. Turn it on together with the host switch.
+Unknown until a live run: whether MGSV's grenade and rocket are rigid draws in the G-buffer pass at all (if skinned, nothing
+is tagged: the host keeps its ball).
 
 ## 16. HUD layer (phase 5): MGSV's own HUD for Elden Ring
 
@@ -1112,7 +1250,8 @@ the host now flies its own copy through Elden Ring's world and Elden Ring's enem
   point/velocity, same slot). Found by polling the views from /proc/<pid>/mem while throwing.
 - **kGEvThrow** (Spawn detour, after the original): `v0` launch point, `v1` launch velocity, `a` AmmoKind, `b` id, `pad[0]` =
   equip | fuse ms << 16 (molotovs 0). Only explosives (`logic::ExplosiveOf`: frag 350-355/1536-1538, molotov 382-384, sleep
-  377-379, stun 372-375/1539-1541 + StunDarkMatter, smoke 357-361 and flares); magazines and decoys are logged once and skipped.
+  377-379, stun 372-375/1539-1541 + StunDarkMatter, smoke 357-361 and flares); magazines and decoys are logged once and skipped
+  here (a thrown decoy is expected to land in the Placed System: see the decoys below).
   Live: sleep grenade 378 `(821.02,-10.01,1179.43)` / `(14.31,8.53,0)` m/s, fuse 3.00 s; frag 354 the same aim, its blast
   (attack 180) 3.02 s later at MGSV's landing 32 m on; a running throw (stick forward) has the same velocity: MGSV doesn't add
   Snake's motion. Gas/smoke grenades: the cloud starts at the fuse, their first blast (189 / 285) comes ~5.0 s after release.
@@ -1144,6 +1283,15 @@ the host now flies its own copy through Elden Ring's world and Elden Ring's enem
   (kHEvDetonate; docs/HOST.md "Thrown and placed explosives"). Explosives already in the vars when the sandbox first
   became ready (an old save's) are MGSV's world: never announced (`-- already in the save when the sandbox loaded`). Live:
   `placed #1: announced again (the host's puppet restarted)` -> the host `mine 1 announced again -- kept where it lies`.
+- **Decoys** (protocol v13, `[Combat] Decoys`; live pass B 2026-10-15: MGSV throws them -- LT, RT -- and mirrors each into
+  `placedWeapons` as it lands, HOST.md "Decoys"): `logic::ExplosiveOf` calls the decoys (397-399, active
+  401-403, shock 405-407 / 380-381) `ExplosiveUse::kDecoy` (blast kind kIgnore: no blast is ever matched to one). Found in
+  the vars mirror they go out as `kGEvPlaced` with a = `kAmmoDecoy`, trigger 0, `v1` its facing, and gone as
+  `kGEvPlacedGone`, like a mine (UNVERIFIED that MGSV mirrors a set decoy into `placedWeapons`: the Placed System holds the
+  map's own decoys, so it is expected). A `kHEvDetonate` for a decoy means an Elden Ring enemy knocked it over there
+  (er/Decoys.h), or the host dropped it (set before a load, unknown to that host): the guest sends `kGEvPlacedGone` at once and never announces it again (`popped`); in MGSV it stays unless
+  `DecoyPopInMgsv = true` also sets its "set off" bit (UNVERIFIED what MGSV's decoy views do with it). `placed #N: equip E
+  (decoy)` is logged at each.
 - **kHEvDetonate:** the guest ORs bit 2 into that object's flag byte (atomic, after checking the system's vtables, the index
   range and that the object is the same live equip) -- MGSV's own path does the rest. Live: sleep mine placed -> `pr er
   detonate all` -> blast 209 0.67 s later with `pad[1]` = its id, the cloud's 286 with it too, kGEvPlacedGone ~3.5 s later;
@@ -1172,8 +1320,8 @@ the host now flies its own copy through Elden Ring's world and Elden Ring's enem
   and C4's remote detonation (byte-0 bit 3 on every C4, turned into bit 2 one by one every 0.05 s by `0x140FC7E10`) never
   goes through SetOff either. Second line of defence: a mine's blast (attack 202-211/451, and the clouds of a mine) is sent
   only when the guest set it off; any other is logged `a mine MGSV set off itself ... kept out` (`!blast` counts them).
-  The C4 detonator button wasn't found (RT, RB, B, X, Y, stick clicks, D-pad with C4 in hand: nothing; B next to a C4
-  picks it up -> kGEvPlacedGone); the guest never touches the C4 chain.
+  The C4 detonator button wasn't found live (RT, RB, B, X, Y, stick clicks, D-pad with C4 in hand: nothing; B next to a C4
+  picks it up -> kGEvPlacedGone). Since 18.8a: it is ACTION (Y), and the guest answers a press MGSV doesn't.
 - **Mines MGSV sets off itself stay out of Elden Ring:** MGSV's claymore answers MGSV's own characters -- D-Walker, whose
   follow spot is ahead-left of Snake, stands in its cone: live, 3 of 3 claymores placed next to a following walker went off
   0-1.7 s later in MGSV. A mine's blast (attack 202-211/451, and the clouds 284-287 of a mine) is sent only when the guest
@@ -1183,6 +1331,66 @@ the host now flies its own copy through Elden Ring's world and Elden Ring's enem
   (the detonator button wasn't found: RT, RB and B unaimed with C4 in hand did nothing).
 - Console: `!throw`, `!placed`, `!detonate <id>`; fake_er: `pr er placed`, `pr er detonate <id>|all`; its `--trace` gained the
   aim columns (flag, pos xyz, vel xyz, kind).
+
+### 18.8a C4's detonator (`C4.cpp`, `C4Logic.cpp`, `Placed.cpp`; `[Combat] C4Detonator`, `C4Backup`; live pass A 2026-10-14)
+
+**Live pass A** (docs/FEATURES-1.md): MGSV's own detonator answered **0 of 5** Y taps with C4 in hand (with and without D-Walker
+near): step 3's `c4: a tap with C4 in hand got no detonate request from MGSV in 250 ms`, PlayerDetonate never ran (no step-2
+line). With `C4Backup = true` each tap set off the oldest C4 in Elden Ring (`placed #4: C4 set off by the guest (MGSV's
+detonator didn't answer the press ...)` -> the host's `mines: mine 4 went off ... lethal r 8.0 m where it lies`, then #5);
+a Y tap at D-Walker with C4 in hand mounted it and set nothing off, and Y to dismount set nothing off either. So
+**`C4Backup` is on by default** since then; the supply-box pickup case is untested.
+
+Roadmap 5.8: C4 could be placed (kGEvPlaced, trigger 0) but never went off -- the detonator button wasn't found (18.8). The
+chain, read from the exe on disk (capstone; every site below byte-checked in Addresses.h "C4's detonator" and by
+`verify_addresses.py`):
+
+- **Who sets it off.** DetonateOwn, the Placed System interface's slot 13 (`0x140FC54F0`, vtable `0x1423A9FD0` at system+0x20):
+  `(player & 0x1FF, equip)` -> the player's live object of that equip with the lowest `+0xD8` order (the oldest) ->
+  `SetOff(system, player, object)` (`0x140FC8E50`, bit 2), so one C4 per press, returning to `0x140FC561E`. Its only caller
+  is PlayerDetonate (`0x141053270`, `call [rax+0x68]` on `[[hub+0x98]+0x208]`).
+- **PlayerDetonate(ctx, status, player)** runs from the player's action states (`0x141068A8C`, `0x14107F2D9`,
+  `0x14107F77B`, `0x14108A46B`, tail jump `0x141069061`) while status `+0x3CC` bit 19 is set. It needs status `+0x3C0` bit 0
+  and `+0x3CC` bit 25 (set by `0x141096C80` when the system's slot 10 says a placed one of the equip in hand exists); then it
+  calls DetonateOwn with the equip in hand (`+0x24C`) and sends message `0x61FE32CC`, else message `0x2A805080` (refused).
+  Both clear bit 19.
+- **The press.** The support-item input (`0x141095DF0`, per frame; equip use type `+0x27C` bits 6-8, status `+0x1B0` = the
+  item's parameters) on a placed item (type 2) with the remote flag (status `+0x280` bit 23, C4): an **ACTION edge** (pad
+  object vfunc `+0x40` bit 5 = PlayerPad.ACTION, **Y** by default: the D-Walker mount button) sets bit 19
+  (`0x141096796`; the type-3 path `0x1410968DF` too) -- when `+0x3C0` bit 18 or 19 is set and bit 26 isn't, `+0x3CC` bit 7
+  isn't, and no other action holds the item (`0x140FF3E90` on 0xC2/0xC3). FIRE (RT) in the same handler places it.
+- **Not the detonator:** byte-0 bit 3 (the "chain" queue `0x140FC7E10` turns into bit 2 every 0.05 s) is set by
+  `0x140FCDA40` for an object caught by a blast (slot 14 `0x140FC5630`, any live object within a radius) or hit
+  (`0x140FCC9B0`); online it goes out as message 6. 18.8's "MGSV's remote detonation sets bit 3" was this chain.
+- **Why Y did nothing live (18.8)** is not settled by the static RE: one of the conditions above fails in the sandbox
+  (status bits whose meaning isn't known). So the guest watches all three steps:
+  1. Placed.cpp's SetOff detour (installed for the mines) sees MGSV set off one of Snake's C4: logged
+     `placed #N: C4 (object O, equip E) set off by MGSV's detonator (DetonateOwn)` (the return address tells the detonator
+     from the sensor/update), the C4 is marked as set off by us: its blast is Elden Ring's where the host's copy lies, and
+     MGSV's own blast is skipped with `[Combat] MgsvBlasts = false` (the C4 lies in the treadmill's disc next to D-Walker).
+     Only a C4 that reached Elden Ring counts: DetonateOwn takes the oldest, so an old save's C4 (`preexisting`) goes first --
+     that one is logged `... an old save's: MGSV's world, not the player's answer`, stays MGSV's (its blast too), and step 2
+     sets the player's oldest off for that press. With `C4DetonateAll` the guest sets off the rest right after MGSV's one.
+  2. PlayerDetonate detour: a request (bit 19) with C4 in hand that set nothing off is logged with the status bits it needs
+     (`c4: MGSV's detonator refused the press (player P status +0x3C0 ... (bit 0 B) +0x3CC ... (bit 25 B) equip E) -> 1 set
+     off by the guest`) and answered at once.
+  3. A tap MGSV never answers (`PlayerVars.scannedButtonsDirect` & `C4Buttons`, rising edge, C4 391-395 in hand =
+     `vars.currentInventorySlot` 3, on foot, no menu, a live C4 of ours; released within `kHoldMs` 400 -- a hold is Fulton's
+     or carrying's) within `C4GraceMs` (250), or at its release if later: with `[Combat] C4Backup = true` (the default since
+     live pass A) `c4: the detonator press got no answer from MGSV in 250 ms -> 1 set off by the guest`; off only logged
+     `c4: a tap with C4 in hand got no detonate request from MGSV ... nothing set off`. It was off at first because MGSV's
+     ACTION is also the supply-box pickup and D-Walker's mount, which never make a request (live: a mount takes the C4 out of
+     hand within the grace, and nothing went off; the supply box is untested; the setter's own conditions, `+0x3C0` bits
+     18/19/26, `+0x3CC` bit 7, would tell them apart once their meaning is known).
+  4. MGSV's own request coming for a press the guest already answered at step 3 (within 2 s, no newer press -- e.g. if its
+     action state plays a detonator animation first) is dropped (bit 19 cleared, PlayerDetonate not run): no second C4;
+     logged `c4: MGSV's detonator came ~N ms after the press ...` -- a `C4GraceMs` above N lets MGSV's own answer instead.
+  The guest's set-off is kHEvDetonate's (byte 0 bit 2, `placed::SetOffC4`), the oldest live C4 of the grade in hand first
+  (`c4::PickOldest`; `C4DetonateAll` = every one). A press answered by MGSV earlier in the same frame (its player update can
+  run before Frame.cpp's) still counts as answered (`kRecentMs` 150). Unit-tested: `tests/test_guest_c4.cpp`.
+- A refused set-off (`placed::SetOffC4`: the system pointer, the live bit not set yet) skips that C4 for that press only.
+- `!placed` ends with the detonator's state: `c4: in hand E, presses N (answered A, fallbacks F[ -- backup off: U only
+  logged], holds H), MGSV's detonator D / other set-offs O, refused requests R (last: ...), set off by the guest G`.
 
 ### 18.9 Cardboard box and its poster (`[Loadout] BoxPoster`, `Box`; protocol v8 flags; VERIFIED live 2026-10-12)
 
@@ -1293,6 +1501,12 @@ Player report: "MGSV's night-vision goggles do nothing in ER and make everything
   left out while the goggles are on (`hud::SetNightVision` from the frame's flags) and kept otherwise; `!capture hud` counts
   the draws left out. Layer coverage now: 2.2% off, 4.1-5.4% on (notifications, the item box with its battery bar).
 - MGSV's own picture still turns green and noisy (the host never shows it); the host recreates night vision from `kGuestNvg`.
+- **The binoculars' lens** (live 2026-10-14, the same method): with RB held MGSV's picture showed around the lens in Elden
+  Ring's frame (the airport's concrete in the corners). `!capture probe 1` with them up: the one UI draw with a screen texture is
+  pixel shader `0x2f38cdb182e4da4f` (a mesh ring, idx 216; t0 `inScreenTexture` 1280x720, t1 `inNormalTexture`: the lens'
+  refraction of MGSV's own picture). Left out (`!capture hud skip 2f38cdb182e4da4f`) the binoculars' HUD and dark vignette
+  stay and MGSV's world is gone; it is not drawn at all in third person. It is now always left out (`kLensScreenPs`;
+  `!capture hud`: `lens draws of MGSV's picture left out N`). The scopes probably use it too (untested).
 - Recordings for the host: `nvg2.prrec` (goggles on t = 3.5-10.6 s and 14.7-19.8 s, a crouch-walk and a pan with them on).
 
 ### 18.13 MGSV's auto-aim off (`[Boot] AutoAim = false`, `PR.AutoAim`; live 2026-10-13)
@@ -1366,6 +1580,77 @@ standing still: MGSV never saw those hits, so the pause it takes after its own n
 - `[Combat] RegenDelaySec = 2.4`, `RegenRampSec = 6.25`, `RegenRate = 750` tune it; `RegenGate = false` restores the old
   behaviour.
 
+### 18.16 Phantom Cigar = Elden Ring time skip (`Cigar.cpp`, `[Cigar]`, protocol v13 `kGEvTimeSkip`; live pass B 2026-10-15, on by default)
+
+Roadmap 2.7. MGSV's Phantom Cigar (`EQP_IT_TimeCigarette`, equip id 451) is a time-lapse: Snake smokes, MGSV's day races
+by. Live pass B (2026-10-15): `cigar: Snake lights the Phantom Cigar (MGSV's clock 12:00:00, vars.clock 43200)`, the probe's
+`stood still 500 ms into the smoke: it runs at ClockScale x20` (it stood still: MGSV's own time-lapse takes over ~2.5 s in,
+1400-1500 game seconds per 0.4 s, after the lighting animation), `put out -- 12:00:00 -> 17:48:17: +348 min` and `17:48:17 ->
+01:05:24: +437 min` (`!cigar`: 2 smokes, 54 events, 785 min sent, 0 lost); Elden Ring followed (HOST.md). `vars.clock` stayed
+put after each smoke. The `GameStatus` flag and the mute both read true while he smoked. The player's save carried no cigar, so
+with `TimeSkip` on the boot puts one into the last free item slot (`PR.CigarItem`, `boot: phantom cigar: put into item slot 7`;
+not slot 0, a fresh load's current item). It is smoked from MGSV's item wheel: D-pad left held, the right stick on it, R3 (Use)
+while still pointing -- needs `[Jump] PassWith` to include the D-pad (§6). A tap of D-pad left puts it out. The sandbox's clock is set and frozen at boot (`[Boot] Clock = 12:00:00`, `FreezeClock`: `SetClockTimeScale(0)`).
+`[Cigar] TimeSkip = false` ships: the smoking signal is unverified and the effect lands in Elden Ring's saved time of day
+(night-only spawns), so it is not purely additive. Turn it on for the live test.
+- **Smoking** (`PR.CigarSmoking`, Lua flag `CIGAR` = `state::kLCigar`, bit 28 so it stays clear of new stance bits): MGSV's
+  game status flag `S_IS_TIME_CIGARETTE` (`TppGameStatusFlag` 0x15 -- found in the enum registration `0x14053F410`,
+  `TppGameStatus.IsSet('', ...)`), or its `Cigarette` sound mute (`CheckCurrentMuteIs` / `CheckHighestMuteIs`, the mute
+  table of §18.2). Which of the two MGSV keeps up for the whole smoke is UNVERIFIED; either counts. Related, not used:
+  `Player.SetTimeCigaretteStopTime(t)` (`0x1409DFEE0`) stores a float at `0x142C1C214` (the time the cigar stops at);
+  `CIGAR_START` / `CIGAR_END` are registered at `0x141FE8C50` / `0x141FE9B80` (a message or UI id: not traced further).
+- **The clock** (`phantom::timeskip::ClockGovernor` in `common/TimeSkipLogic.h`, driven from `cigar::Tick`; the Lua acts on
+  its word, `PR.Run('cigar lit|run|out')` -> `PR.CigarClock`). Whether MGSV's cigar sets the clock's speed itself (e.g. from
+  its `CIGAR_START` handler) or needs a running clock is UNVERIFIED, so nothing is set blindly: when the signal rises the
+  guest notes `vars.clock`; if 500 ms later it has not moved, the frozen clock runs at `[Cigar] ClockScale` (20, MGSV's own
+  speed; `SetClockTimeScale`'s cfunc is `0x1405364E0`), else MGSV's own time-lapse is left to run. When he stops it is frozen
+  again, and while he doesn't smoke `PR.CigarHold` re-freezes it every 60 Ticks (~1 s) in the loaded sandbox, whenever MGSV
+  puts its own speed back. With `FreezeClock = false` the clock is left alone. A "smoke" longer than 120 s (measured in ms:
+  `PhantomRing.Tick` runs at MGSV's frame rate, ~60 Hz, so ticks are no clock) is a stuck signal (or one that means something
+  else): the clock is frozen again and the signal ignored until it drops (`!cigar` counts them, and says which smokes MGSV's
+  clock moved by itself and which the guest ran).
+- **The minutes** (`cigar::Tick`, MGSV's Lua thread after every Tick, ~60 Hz, ~30 Hz while frames stall): MGSV's clock is
+  `vars.clock` (seconds of the day, read natively, Vars.cpp; 43200 after the boot's 12:00:00). `phantom::timeskip::Tracker`
+  (`common/TimeSkipLogic.h`, unit-tested in `tests/test_host_timeskip.inc`) counts the forward steps (round midnight) while
+  he smokes, the step just before the flag rose, and 1.5 s after it dropped; steps over 6 h (a `SetTime`, a load) are not the
+  cigar. Whole minutes go out as `kGEvTimeSkip` (a = minutes) at most every 250 ms while the time-lapse runs, so Elden Ring's
+  sky follows it; the rest is rounded at the end. A load ends a smoke (nothing counted across it).
+- **Log:** `boot: phantom cigar: watching (status check ok, mute check ok); the clock is let run at x20 unless MGSV moves it
+  itself while he smokes`; `cigar: Snake lights the Phantom Cigar (MGSV's clock 12:00:00, vars.clock 43200)`; only if the
+  clock stood still: `cigar: MGSV's clock stood still 500 ms into the smoke: it runs at [Cigar] ClockScale x20`; `cigar: put
+  out -- MGSV's clock 12:00:00 -> 18:30:00: +390 min of game time for Elden Ring`. `+0 min ... never moved, even let run`
+  means neither moved the clock: try `ClockScale`, or look at what the cigar changes (`pr lua 'return vars.clock,
+  TppClock.GetTime("string")'`). A stuck signal: `cigar: the smoking signal has been on for over 120 s: taken as stuck`.
+- `!cigar`: smoking / signal STUCK / not, MGSV's clock, smokes (moved by MGSV itself N, run by the guest N, stuck signals N),
+  events / minutes sent / implausible steps. `pr lua 'return PhantomRing.cigar.on, PhantomRing.cigar.lit,
+  PhantomRing.cigar.runs, PhantomRing.cigar.holds, PhantomRing.CigarSmoking()'` from the Lua side.
+- Offline: `tests/test_guest_script.lua` (the flag from either signal, `cigar lit` sets no speed, `run` x20, `out` frozen,
+  held frozen every 60 Ticks only while not smoking and in the sandbox), `test_host` (the tracker; the governor: MGSV's own
+  time-lapse not overridden, the probe, the stuck guard in ms, a load); fake_er logs `time skip: +N min of MGSV game time`.
+
+### 18.17 The dive as kGuestDiving (`Dive.*`, `DiveGuest.cpp`, `[Motion] DiveFlag`, protocol v13; roadmap 2.9; live pass A 2026-10-14: `dive: X -> diving (confirmed by 'left STAND' 18-19 ms after X, 4.0-4.8 m/s)`, three of three running dives; a dive ends prone, and X while prone or in a jump arms none)
+
+The host hops its kinematic puppet over a gap or onto a ledge while Snake dives (HOST.md "Dive = hop"). MGSV has **no dive
+status**: the `PlayerStatus` names in mgsvtpp.exe 1.0.15.4 (VA `0x1421961D0`..`0x142196830`, read from the exe on disk) are
+STAND SQUAT CRAWL NORMAL_ACTION PARALLEL_MOVE IDLE GUN_FIRE GUN_FIRE_SUPPRESSOR STOP WALK RUN DASH ON_HORSE ON_VEHICLE
+ON_HELICOPTER HORSE_* BINOCLE SUBJECT INTRUDE LFET_STOCK CUTIN DEAD DEAD_FRESH NEAR_DEATH NEAR_DEAD FALL CBOX CBOX_EVADE
+TRASH_BOX TRASH_BOX_HALF_OPEN INJURY_LOWER INJURY_UPPER CURE CQC_CONTINUOUS BEHIND ENABLE_TARGET_MARKER_CHECK UNCONSCIOUS
+PARTS_ACTIVE CARRY CURTAIN VOLGIN_CHASE (CBOX_EVADE is the box's own dive). So the dive is read from what it does:
+
+- **X**: the player's own press (`pad::Presses(X)`: rising edges of the host's pad as MGSV polled it -- never Death.cpp's own
+  dive pulse), while Snake **stands** and is eligible (ready, on foot, not CQC / FALL / DEAD / a menu / a cutscene / the box /
+  carrying / Tarnished mode).
+- **A sign within `DiveConfirmMs` (600 ms)**: he left STAND, went CRAWL (a dive ends prone), left NORMAL_ACTION (only if it
+  was on at X: already off then -- a reload, a weapon switch -- it says nothing about a dive), or sped up to 2 m/s from below
+  it (from a stand or a walk; already running, speed alone is no sign). Each sign is a change since X. No sign: no flag
+  (`dive: X while standing but no sign of a dive`).
+- **The flag** stays up from the sign until he comes to rest (< 0.8 m/s after 300 ms), stops being eligible, or 1.5 s.
+- Which sign MGSV gives first is the open question (above: "Is a dive NORMAL_ACTION?"): each dive logs
+  `dive: X -> diving (confirmed by '<sign>' N ms after X, S m/s) -> kGuestDiving`; console `!dive` counts dives and X presses
+  with no dive. `DiveFlag = false` never sets the flag.
+- Tests: `tests/test_guest_dive.cpp` (each sign; crouched X; no sign; already running; not eligible / cancelled; one flag per
+  dive; NORMAL_ACTION already off at X is no sign).
+
 ## 19. Frame pacing (`FramePace.cpp`, `[Pacing]`, `!pace`; live 2026-10-12, both games)
 
 Player report: "the camera is and has always been a bit jumpy". The host side (blending MGSV's frames into Elden Ring's) is
@@ -1429,14 +1714,15 @@ no writes).
 | Will that manager move a soldier? | Static analysis says maybe: 40+ engine sites do the same `+0x78 -> +0x238 -> vf 0x388(id)` lookup for other objects' ids; the location class is Fox core (vtable `0x1424C8EF0`, built by two factories `0x141ACF260` / `0x141AD2940`); its `vf 0x68` = `vf 0x58` (position: `+0x20` xyzw, `+0x10` = that minus the foot offset `+0x160`, clears flag 4 of `+0x1A0`, zeroes `+0x1F0`) + `vf 0x60` (rotation, `+0x60`). **But** `!loc` found it "knows only Snake" for D-Horse (13): it may hold the player family only. Live step 1 settles it for soldiers | Ghidra; `Addresses.h kLocationPositionRead` |
 | Reading back | Every 30 frames each pool soldier's `loc+0x20` is compared with what was written (`hold::LocationPosition`); `!proxy` and the log count them | `ActorProxyGame.cpp` |
 | Parking | Every non-proxy soldier and every hostage waits `ParkDepth` (100 m) below the sandbox centre, 2 m apart. A proxy whose character comes nearer than `SnakeClearance` (3.5 m) to Snake's root or `BuddyClearance` (5.5 m) to the buddy parks for as long as that lasts (it keeps its character). UNVERIFIED: whether a disabled soldier 100 m under the apron falls, meets a kill plane or is put back by the mission | `plan::Assign`, tested |
-| No AI, no alerts | They stay `SetEnabled false` (no AI, perception, radio); only their location changes. `vars.playerPhase` must stay 0 | setup (unchanged) |
+| No AI, no alerts | They stay `SetEnabled false` (no AI, perception, radio); only their location changes. `vars.playerPhase` must stay 0. (v1 enables puppets; full proxies since 20.6: restrict-notice + puppet before the enable, the phase lock) | setup; 20.6 |
 | Kept out of Elden Ring's draws | Capture takes a G-buffer draw as Snake's within 2.5 m of his root and as the buddy's within 4 m of it (15). The clearances keep proxies outside both, and `Capture.cpp` also drops any draw within `CaptureRadius` (1.5 m) of a placed proxy that is nearer to it than to Snake (`!capture`: `proxy draws dropped`). Skeleton.cpp's buddy-skin learning (D-Horse, 8.1) skips skins rooted within 1 m of a proxy | `plan::NearProxy`, tested |
 | MGSV's own hits don't count | Nothing reads damage on soldiers: the guest reports Snake's rounds only from `ShotSolver` (7) and melee from the CQC serial, whatever the round hits in MGSV. Proxies only change where MGSV *aims*. `SetDisableDamage` keeps a hit soldier from dying or ragdolling in MGSV (UNVERIFIED) | Combat.cpp unchanged |
 | Aim assist for proxies only | MGSV's Auto-Aim Correction (`vars.optionSelectedIndices[11]`, 18.13) has no per-target switch: its getter `0x1405301B0` (byte-checked: `table[vars + 0x131A3]`) is an option interface's slot (`0x14218D300`) with virtual callers. v0 makes "proxies only" true by construction: the option goes back ON (`PR.AutoAim(true)`) only while **every** pool soldier reads back where it was put (proxies at ER enemies, the rest parked out of reach) and the save guards are complete (as `[Boot] AutoAim`), and OFF again as soon as one doesn't (`plan::AutoAimWanted`, once a second on the Lua thread). `[Boot] AutoAim = true` keeps MGSV's setting and ActorProxy leaves it alone | `Pump.cpp`, tested |
 | Markers | `[Proxies] KeepMarkers = true` skips the periodic `TppMarker.DisableAll` (`[Boot] ClearMarkersSec`) while proxies run and every pool soldier reads back placed (else a marked soldier at his post pulls the aim, 18.13): marking an ER enemy through his proxy is the point. The HUD layer (16) carries MGSV's marker into Elden Ring | `Pump.cpp` |
 
 `[Proxies]`: `Enabled` (false), `Max` (4), `MaxDistance` (60), `SnakeClearance` (3.5), `BuddyClearance` (5.5), `ParkDepth` (100),
-`TableLagMs` (33), `AutoAim` (true), `KeepMarkers` (true), `CaptureRadius` (1.5). Byte checks (`mgsv/verify_addresses.py` and at
+`TableLagMs` (33), `AutoAim` (true), `KeepMarkers` (true), `CaptureRadius` (1.5); full proxies only (20.6): `Inert` (true),
+`NoAssignRoute` (false), `PhaseLock` (true), `AlertGiveUpSec` (20), `Height` (ground), `HeightTolerance` (2), `AimHeightFix` (true). Byte checks (`mgsv/verify_addresses.py` and at
 the first proxy frame): `kLocationPositionRead` (0x14103FB4A), `kAutoAimOptionGetter` (0x1405301B0) and its slot `0x14218D300`, plus
 Hold's Warp sites. Any mismatch: proxies off, logged. `fake_er --actors near` publishes its two actors standing still 15 m and
 27 m from where Snake started, mapped the way the host maps them (treadmill jumps move them in MGSV's world as with the real host).
@@ -1455,10 +1741,10 @@ Hold's Warp sites. Any mismatch: proxies off, logged. `fake_er --actors near` pu
 Before: saves backed up (the launcher does it), offline, `[Saves] Block = true`, `[Proxies] Enabled = false` for steps 1-3.
 
 1. **Does the location manager know a soldier?** At Ready: `pr lua "return PhantomRing.ProxyPool()"` (two ids, decimal), then
-   `pr guest '!loc <id>'` for each. A location object (vtable `0x1424c8ef0`, like Snake's) = go on. `none` = the manager holds
+   `pr lua '!loc <id>'` for each. A location object (vtable `0x1424c8ef0`, like Snake's) = go on. `none` = the manager holds
    the player family only: stop (v0 can't move soldiers; next RE: the TppSoldier2 system's own location lookup -- its Warp
    command handler -- or the soldier's own controller found through its SkinPublish model).
-2. `pr guest '!placeobj <id> <x> <y> <z> 0'` at a spot 10 m in front of Snake on the apron (his position: `!status`). In MGSV
+2. `pr lua '!placeobj <id> <x> <y> <z> 0'` at a spot 10 m in front of Snake on the apron (his position: `!status`). In MGSV
    (screenshot) and with `!loc <id>`: `+020` holds the spot? He is drawn there, not at his post? Again at y + 3 (hangs or
    falls?) and y - 100 (`!loc` after 30 s: still there? `vars.playerPhase` 0?).
 3. Aim assist at his new place: `pr lua "return PhantomRing.AutoAim(true)"` (saves blocked), aim the FB MR 10-20 deg beside
@@ -1560,6 +1846,101 @@ between realized characters (soldier 0x4B9 got the object 0x44E had). Then:
   wake after a few minutes without the 8 s refresh: a soldier woken that way went to Reflex and ALERT, live, before the refresh
   existed), and a proxy's height/size for giants (20.2).
 
+### 20.6 Inert full proxies (2026-10-14; live pass B 2026-10-15: safe for 11 minutes, no aim assist seen; only with `[Proxies] Enabled = true`, still off by default)
+
+Live pass B (2026-10-15, both games, Gatefront, `!proxy on`): `pool of 265 soldiers (4 slots, 261 in reserve)`, 4 realized and
+`4 of 4 slot soldiers where they should be`, `boot: proxies: auto-aim correction on`; `!proxy` every 20 s for 643 s: `inert true
+(sites ok), height ground ... phase lock true: phase 0, 0 alerts, 0 calms, 0 sweeps`, Snake's life never moved (no stand-in shot
+him), no alert line. A Fulton through a stand-in: `fulton ... succeeded (MGSV's own Fulton on its proxy) -- kGEvFulton a=1`, phase
+0. MGSV's analyzer read a stand-in through the binoculars. Not good enough to turn on: LT never swung the aim onto a stand-in (3
+tries, the reticle 4-11 deg off a soldier 20 m away and 7 m lower; rounds then flew where aimed, `0 rounds turned`), the fourth
+slot switched between two enemies at about the same distance every ~20 s (`soldier 0x4cb now stands in for ...1c` / `...07`),
+and `location objects lost` climbed to 4 (two Fultons and churn).
+
+Answer to 20.5's real-host run (alert phase 3 within 80 s, a riot-shield reinforcement shooting Snake, the read-back flapping on
+Elden Ring's heights). Everything here applies only to full proxies: the Fulton-only proxies (`[Fulton] Method = proxy` with
+`[Proxies] Enabled = false`, live with the real host) keep exactly the 20.5 sequence and heights.
+
+**What RE found** (static, the exe on disk; every site byte-checked in `Addresses.h`, `mgsv/verify_addresses.py`: all match).
+Command names were tested by their StrCode32 as immediates in the handlers (`tools/re/strcode32.py`'s hash; a raw imm32 search
+since capstone isn't installed):
+
+| Command | Where | What it does |
+|---|---|---|
+| `SetRestrictNotice{enabled}` | TppSoldier2's handler 0x141356170: `cmp eax,0x681B5200` at 0x14135C9A2 -> 0x14135CCA9 (one soldier); 0x141358ECC -> 0x1413591BE (sent to the type: every soldier) | sets / clears **bit 51** of the soldier's first flags qword in the system's per-instance table (`[[system+0x110]+8] + index*40`) -- the same table RequestForceFulton (bit 0 of +0x18) and SetPuppet use. By its name: the soldier may not *notice* (see, hear) Snake. Exists in no other handler. |
+| `SetPuppet{enabled}` | `cmp eax,0xD3B35172` at 0x14135FBD7 -> 0x14135FCEB | bit 27 of the second qword (+8). Nothing else. |
+| `SetEnabled{enabled, noAssignRoute}` | -> 0x1413604CB, helper 0x141368C20 | enable ORs bits 30 and 36 into +8 (disable sets bit 33 of +0, clears 30/36); **leaves bits 27 and 51 alone**. `noAssignRoute` (bool) sets bit 20 of `[[system+0xD0]+0x18] + index*20`. |
+| `SetPhase{phase}` on `TppCommandPost2` | CP handler: `cmp edx,0x924FEBFD` at 0x140D5FAE0 -> 0x140D5FB81 (type target: loops over every post, writes `phase` to +0x4C of each 96-byte entry at `[cp+0x40]`, count `[cp+0x174]`); 0x140D60A05 -> 0x140D60A81 (one post) | the command posts' phase. Siblings in that handler: `SetKeepAlert{enable}`, `SetKeepCaution{enable}`, `SetReinforceEnable`, `SetReinforcePlan`, `SetNominateList`, `SetCombatArea`, `ChangePhase` (message). No `SetMinPhase`/`SetMaxPhase`/`SetPhaseLock` exist. |
+| not in this exe | | `SetNoticeEnabled`, `SetIgnoreNotice` exist only in other handlers (0x140DD..., 0x1417...: vehicles/animals?), `SetSightCheckFlag`, `SetHearingEnabled`, `SetDisableNotice`, `SetEnableNotice`, `SetVoiceEnabled`, `SetRadioEnabled`, `SetReinforceDisable` are nowhere. |
+
+So the per-soldier switches live in a table that exists for disabled soldiers too: they can be set **before** the soldier is
+enabled and are in force from his first update -- no 150 ms of live AI at his post (20.5's likely start of the alert).
+
+**What the guest does now** (`[Proxies]` keys, all default on except `NoAssignRoute`):
+- `Inert`: `PR.ProxyEnable(id)` = SetDisableDamage, SetRestrictNotice + SetPuppet, SetEnabled, SetRestrictNotice + SetPuppet again
+  (one Lua call); 150 ms later the old ProxyPuppet; re-sent at every (re)realization and every 2 s (`PR.ProxyInert(id, puppet)`;
+  an asleep proxy keeps restrict-notice only, since a puppet ignores ChangeLifeState). `NoAssignRoute = true` adds
+  `noAssignRoute` to the enable (off: it changes what an enabled soldier is handed, untried).
+- `PhaseLock` + `AlertGiveUpSec` (20): every 0.5 s `PR.ProxyPhase()` (vars.playerPhase). On the first non-zero read: a **sweep**
+  (`PR.ProxySweep(keep)`: every TppSoldier2/TppHostage2 disabled except the slot soldiers in the world -- the reinforcement, or a
+  soldier the mission enabled again) and a **calm** (`PR.ProxyCalm()`: `SetPhase{phase=TppGameObject.PHASE_SNEAK or 0}` to the
+  type and to each post id), the calm again every second and the sweep every 3 s while it stays up (MGSV's reinforcements are
+  enabled some time into an alert, not at its first read); still up after 20 s: `[Proxies] Enabled` off (as `!proxy off`; the
+  Fulton-only proxies stay, and with `[Fulton] Method = proxy` the lock keeps calming -- with `anchor` nothing runs proxies any
+  more and the lock stops with them, so its sweep never disables the anchor's soldier). `!proxy on` afterwards starts a fresh
+  guard (it can give up again; `!proxy` no longer says `gave up`). `plan::PhaseGuard`, tested.
+- `Height = ground` + `HeightTolerance` (2): a proxy stands at his enemy's x/z on the sandbox ground (the centre's height);
+  the read-back takes x/z within 1 m and y within 2 m (MGSV's own ground under a far proxy); `Height = enemy` is 20.5.
+  `plan::ProxyFeet`, `plan::ReadBackOk`, tested.
+- `AimHeightFix`: in Combat.cpp's ShotSolver detour a round whose ray passes within 0.9 m of a flattened proxy's body (2 m tall,
+  within MaxDistance + 20 m; the nearest along the ray) is sent in kGEvFire to the same point moved by (enemy - proxy): MGSV's
+  aim assist on the stand-in, Elden Ring's hit test on the enemy at his real height. A copy: MGSV's own round is untouched.
+  A ray that meets any character's REAL body (same radius and height) is left as aimed: the camera is MGSV's, so a round aimed by
+  hand at an enemy on a ledge (or at an enemy behind another's stand-in) already goes where Elden Ring has him, and turning it
+  would lift it a second time over his head or onto the wrong character. `plan::CorrectShot`, tested (`!proxy`: rounds turned;
+  the first 24 logged).
+- kGEvFulton's v0 is the enemy's own place (`Slot::real`), not the flattened stand-in.
+- Location ownership: each second an awake proxy's position cache is compared with his location object (x/z, 5 m); 3 misses in a
+  row -> found again (`location objects lost` in `!proxy`). The ~30 objects are pooled per realized character: after an
+  unrealize the object may carry another character, who must never be moved.
+- Console: `!proxy` gains a line (inert, the five sites, height, rounds turned, phase lock: phase, alerts, calms, sweeps, gave up)
+  and each slot's enemy height.
+
+**Limits.** MGSV's marker is drawn at the stand-in (Snake's ground height), not on an enemy on a ledge; RestrictNotice's effect,
+SetPhase sticking and vars.playerPhase following it are the names' and the code's word only; a reinforcement already in the air may
+still arrive (the sweep disables it once it is a soldier).
+
+**Live test (10 minutes, both games; the player's save, Limgrave: Gatefront or the Stormhill road, enemies above and below).**
+Before: saves backed up (`pr launch` does it), offline, `[Saves] Block = true`, `[Proxies] Enabled = false` in the ini (turned on
+from the console so a bad run is one `!proxy off` away).
+1. Boot as usual. `pr lua '!proxy'` -> `proxies off (sleeping characters only ...)`. `pr lua '!proxy on'`; within 2 s the guest
+   log (`tools/pr logs` or `PhantomRingGuest.log`) shows `proxy: pool of N soldiers`, the five site checks without a
+   `not where this build has them` warning, `proxy: soldier 0x... realized ... standing in for 0x...`, `N of N slot soldiers where
+   they should be (0 not)`, `boot: proxies: auto-aim correction on`.
+2. `pr lua '!proxy'` every minute: `inert true (sites ok), height ground`, each `proxy` slot `active ... placed ... (where it
+   should be)` with `enemy y` differing from its `at` y where the enemy stands on a slope/ledge; `phase lock true: phase 0, 0 alerts`.
+   The `where they should be` log line must NOT flap (one line per real change only: an enemy dying or walking out of 60 m).
+3. MGSV's own view (`GAMESCOPE_WAYLAND_DISPLAY=gamescope-0 gamescopectl screenshot`): the stand-ins stand still on the apron,
+   weapon lowered, no other soldier drawn; no alert music, no radio. The guest log has no `alert: MGSV's alert phase 0 -> ...`.
+4. Aim assist: an Elden Ring soldier 15-25 m away on lower/higher ground -> LT with the camera 10-15 deg beside him: the camera
+   swings onto his STAND-IN (his x/z on Snake's ground), so in Elden Ring the reticle sits below him (enemy above) or above him
+   (enemy below) -- expected. Fire the AR without touching the aim: the guest log `proxy: round aimed at a proxy turned to its
+   enemy's height (+x.xx m)`, the host log one hit per `kGEvFire` on that enemy (no double hits, no misses over his head / into the
+   ground). Then aim by hand at his real chest in Elden Ring (no LT) and fire: NO `turned` line for those rounds, and still one hit
+   each. With two enemies in line (one on a ledge in front, one on the ground behind), a round aimed at the one behind hits him.
+5. Marking: aim and mark him (MGSV's marking with the scope/binoculars): MGSV's marker shows in Elden Ring's HUD layer at his feet
+   or below him (the stand-in's height: expected), and stays on him as he walks.
+6. Ten minutes of ordinary play with enemies around (no stealth needed: shoot, run past). Pass: `!proxy` still `phase 0, 0 alerts`
+   (or every alert calmed within a few seconds: `alerts N, calms M`, no `gave up`), Snake never shot by MGSV, no `location objects
+   lost` growing every minute, 0 warnings from proxy except during a real alert.
+7. If an alert happens: note the time, `!proxy` (sweeps, calms), MGSV screenshot, and whether the phase returns to 0 within ~2 s
+   after `phase lock: phase N: SetPhase 0 ...`; during a longer alert `phase lock: sweep` repeats every ~3 s. Not returning (gave
+   up after 20 s) = SetPhase doesn't stick: report it. Then `!proxy on`: `!proxy` must no longer show `gave up` and its alert count
+   restarts; if the phase is still up the log shows `alert phase 0 -> N`, a sweep at once, and a new give-up 20 s later. `!proxy off`.
+8. Fulton through a full proxy: dart an enemy asleep (host `kActorAsleep`), walk up: MGSV's Fulton prompt beside him, Y held ->
+   `kGEvFulton a=1 ... (its proxy)` with v0 at the enemy's own height, phase 0 throughout.
+Afterwards: `!proxy off`; if 1-8 pass, a one-hour stability run, then `[Proxies] Enabled = true` by default is worth discussing.
+
 ### 20.4 Fulton of a sleeping Elden Ring enemy without proxies (`[Fulton] Method = anchor`, `FultonAnchor.cpp`, protocol v12 kGEvFulton; live 2026-10-14, MGSV + fake_er)
 
 (Written before 20.5 existed. The default is now `[Fulton] Method = proxy`: a sleeping enemy gets an asleep proxy soldier at his own
@@ -1600,3 +1981,30 @@ Player wish (session 6): "FULTON extraction of sleeping Elden Ring enemies". Sin
 - Limits: each anchor soldier is spent once fultoned (270 in Africa; the next boot has them all again: saves are blocked); a soldier
   under a roof can't be fultoned (MGSV's balloon fails); MGSV's surroundings of the anchor soldier (sandbags, walls) are Snake's
   while anchored (Elden Ring doesn't have them). `!fulton <handle> [fail]` still sends kGEvFulton by hand.
+
+## 21. CQC holds and throws (`[Cqc]`, `Cqc.cpp` / `CqcLogic.h`, `!cqc`; ROADMAP 2.2 tier 1; protocol v13 kGEvCqc; live pass B 2026-10-15)
+
+Live pass B (2026-10-15, Gatefront soldiers): RT held -> `kGEvCqc grab (RT held; MGSV attack 0)` 0.36 s after the press, held
+on -> `choke` at 2.86 s, LB while holding -> `interrogate`, let go -> `release`, RT with the stick pushed -> `throw`; MGSV logged
+`CQC status 0 action callback 1` throughout (never a status 1: `MgsvHold` stays false). Host side in COMBAT.md 7a.
+
+MGSV runs its holds, throws, chokes and interrogations only on its own soldiers, so in the sandbox an RT next to an Elden Ring
+enemy is a punch and nothing more. The guest now reads the player's CQC intent every frame on the game thread (after
+`combat::PollMelee`) and sends it; the host picks the Elden Ring enemy (COMBAT §7a).
+- **Input:** MGSV's own pad bits (`PlayerVars.scannedButtonsDirect`, the same read as `kGuestAiming`): the CQC button is FIRE
+  (0x10) or CQC (0x8000) without HOLD (0x8, aiming); interrogate = CALL/INTERROGATE (0x200, LB). What MGSV saw, so Elden Ring's
+  menus (a neutral pad) never count. The left stick (0..1 past XInput's dead zone) from the host's PadState.
+- **Tracker** (`cqc::Tracker`, pure, `test_guest_cqc`): idle -> RT pressed with the stick past `ThrowStick` = `kCqcThrow`;
+  RT held `HoldMs` = `kCqcGrab`; while held: the interrogate bit's press = `kCqcInterrogate` and `ChokeButtons` or `ChokeMs` after
+  the grab = `kCqcChoke`, each once per hold; RT up, `MaxHoldMs`, or CQC impossible = `kCqcRelease`; then `CooldownMs`. A button
+  held from before the guest's first frame is no press.
+- **CQC impossible:** not ready, riding, menu / pause, cutscene, dead / down, carrying a body (RT throws it), in the box, prone,
+  falling, first person or binoculars.
+- **Event:** v0 Snake's feet, v1 his facing (MGSV world), b `Range` (1.4 m, informational), pad[0] the CQC state's attack id of
+  the moment (`combat::Probe`), pad[1] 0 (no proxy target in tier 1).
+- **Mapping it live:** while RT is down or MGSV holds someone, every change of the pad bits and of MGSV's own CQC signals
+  (PlayerStatus CQC_HOLD / CQC_CONTINUOUS = Lua flag `kLCqc`, the CQC state's action callback `s+0x10`) is logged (64 lines a
+  session): `cqc: [holding] pad bits 0x10 -> 0x210, stick 0.00, MGSV CQC status 0 action callback 0 attack 80`. With
+  `MgsvHold = true` MGSV's own hold starts the grab at once (an ActorProxy soldier really grabbed); off until a plain punch is
+  seen to set neither.
+- `!cqc`: on/off, the tracker's state, counts, the last event; `!cqc grab|hold|throw|choke|interrogate|release` sends one by hand.

@@ -768,6 +768,8 @@ namespace phantom::guest::pump
 					Log::Info("boot: setup: {}",
 						Call(a_ctx, std::format("return PhantomRing.Setup({}, {}, {}, {})", pos, c.rotYDeg, c.disableSoldiers, c.invincible)));
 					Log::Info("boot: clock: {}", Call(a_ctx, std::format("return PhantomRing.Clock('{}', {})", c.clockTime, c.freezeClock)));
+					// The Phantom Cigar's time-lapse (Cigar.cpp): after the clock, which it needs to know frozen or not.
+					Log::Info("boot: phantom cigar: {}", Call(a_ctx, std::format("return PhantomRing.Cigar({}, {})", c.cigarTimeSkip, c.cigarClockScale)));
 					Log::Info("boot: weather: {}", Call(a_ctx, std::format("return PhantomRing.Weather('{}')", c.weather)));
 					const auto onOff = [](bool a_on) { return a_on ? "on" : "off"; };
 					Log::Info("boot: audio (music {}, ambience {}, radio {}): {}", onOff(c.music == MusicMode::kKeep), onOff(c.ambience), onOff(c.radio),
@@ -831,6 +833,11 @@ namespace phantom::guest::pump
 					state::SetCentre(fr.root);
 					Log::Info("boot: sandbox centre {:.2f}, {:.2f}, {:.2f} (radius {} m)", fr.root.x, fr.root.y, fr.root.z, c.radius);
 					Log::Info("boot: audio refresh: {}", Call(a_ctx, "return PhantomRing.AudioRefresh('boot')"));
+					if (c.cigarTimeSkip) {
+						// The Phantom Cigar in an item slot, so the player can smoke it from the item wheel (live pass B
+						// 2026-10-15: the player's save carried none).
+						Log::Info("boot: phantom cigar: {}", Call(a_ctx, "return PhantomRing.CigarItem()"));
+					}
 					Enter(Boot::kReady, a_now);
 					link::SetStatus(proto::Status::kReady, readyText());
 				}

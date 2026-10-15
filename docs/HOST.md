@@ -135,7 +135,13 @@ dialog, the next screen, the grace's next screen) trust a HUD hide, so `AutoHud`
 the hides nothing explains (Snake playing in the world: no press, menu, cutscene, load or death, no prompt or interaction end
 within 1 s, not at a grace, no rest prompt): at the second it logs `Elden Ring's HUD looks set to "Auto"` and turns those
 starts off for the session (the Tarnished-mode gate then uses "at a grace" instead of the HUD); and a press-less start whose
-Tarnished walks 2 m away ends at once (no screen keeps him moving). Not seen live (the player's HUD is "On"). Live: Y at the Gatefront
+Tarnished walks 2 m away ends at once (no screen keeps him moving). Live pass B 2026-10-15 (the save's HUD is "Auto"): its fade
+doesn't touch UI state 7 (100 s idle in Tarnished mode, the HUD gone from the frame, the state still "playing"); but once, in
+Tarnished mode next to Gatefront's soldiers, the state hid with nothing on screen after a map press Elden Ring refused, and the
+chord then only woke it (Snake came back on the second try). Since then a hide counts for the Tarnished-mode gate only when one
+of Elden Ring's screens explains it as it hides (`g_hudHideScreen`: a menu, an interaction, a cutscene, a load, the grace, an
+action prompt within 2 s, the rest prompt's window); the log says `ER HUD hidden ... -- nothing on screen explains it`
+otherwise. Live: Y at the Gatefront
 grace -> its menu, B -> Snake plays on; Y at a bloodstain -> runes back; a pickup -> Snake back after 3.5 s. Until the HUD has
 hidden, Elden Ring gets only the face buttons, D-pad, Start and View (`InputBridge::SetButtonsOnly`; an Elden Ring menu
 opened meanwhile gets everything): with the whole pad the stick, bumpers and triggers walked, rolled and swung the hidden
@@ -264,12 +270,22 @@ it (`game::LadderState`, every change logged as `ER ladder state a -> b (Name)`)
   out of MGSV's pad until it is let go. Found live: holding the stick up through the end, Snake ran off the tower's landing and
   fell 19 m down the ladder's shaft (92% of his life).
 - **Snake starts on ground** (`kinematic::SupportedStart`, kinematic motion, any puppet start): Elden Ring's capsule can stand on
-  a rim with its centre over a drop, the kinematic body can't (one ray under its centre). Live, a climb's end left the Tarnished
+  a rim with its centre over a drop, the kinematic body couldn't (then one ray under its centre; now five, "Collision filters and
+  the ground under Snake" below: one probe on a rim is still no support). Live, a climb's end left the Tarnished
   on the shaft's rim -> `puppet: no ground under the Tarnished's centre at (3.06, 3.25, -1.54) (a rim, a ladder's top) -> Snake
   starts 0.60 m away on ground`; that first point was the ladder's own top, so the body's four radius points must stand on
   ground too now (unit-tested; the rim end didn't come again in three more climbs: those ended 1.5-2.7 m from the shaft).
   Holding the stick up through the end of a climb (one 6 s push): the Tarnished walked 2.7 m off the ladder, Snake took over
   and moved 0.11 m in the 4 s the stick stayed pushed (latched).
+- **Ground under a gap** (player report 2026-10-14: back to Snake at the top of a wooden scaffold the Tarnished had climbed,
+  he fell through it at once and died; likely cause: his ground was one ray at his axis, and between two boards -- Elden
+  Ring's floors have 4-10 cm seams, see `SolidHeadroom` -- it finds nothing). The jump branch's own fix (seam probes 7 cm
+  around the axis and `ground_ring` probes, ground needed on both sides) was merged into the body's five ground probes
+  (`BodyGround`, "Collision filters and the ground under Snake" below), which cover both cases: a seam and a 20 cm gap
+  under his axis hold him, standing, walking across, falling or landing from a jump (`TestScaffold`, kept; with
+  `ground_probes = false` he falls through both, 10.8 m/s, as the player died). One ground model: no `ground_ring` key. At
+  the scaffold's end he goes over once fewer than two probes are on it (his axis up to 0.8 x radius past the edge), as at any
+  edge; a start there is moved in (`SupportedStart`).
 - A press Elden Ring never turns into a climb (`ladder_wait_ms`) gives Snake the pad back (`ladder: no climb ...`); a load or a
   death on the way ends it. A ladder state while Snake plays (a press we didn't see, e.g. Elden Ring's keyboard) starts the
   hand-over too. With the ladder module not the verified one: `ladders: ... the ladder hand-over is off` (Tarnished mode climbs).
@@ -469,11 +485,215 @@ and restored when it stops (only on the same, live object).
   (again with the real MGSV, 150 m up from the Castleward Tunnel grace: `falling 3.5 s, 60 m with no landing` -> `guest:
   Snake died` -> respawn 13.0 s later, `kHEvRested 1`, life and ammo full)
   with `kHEvRested 1`; two of Elden Ring's origin shifts during the fall (-144 m, +32 m in y) moved the watch with it.
+- **Jumps** (protocol v14 `kGuestJumping`; `[Puppet] jump`, `jump_apex` 1.2, `jump_min_room` 0.15, `jump_air_control` 3,
+  `jump_air_step` 0.3, `jump_camera_hold`; `kinematic::KinematicJump`, kinematic motion only; live pass A 2026-10-14: a flat
+  jump rises 1.20 m and lands after ~1.0 s, running jumps onto 1.1-1.3 m rock steps and a plank walkway at Stormveil's
+  cliffside, refused under a walkway's edge and crouched; LB+R3 and LT+R3 stay MGSV's -- docs/FEATURES-1.md). The player:
+  "I'm having trouble getting into Stormveil castle without that". MGSV has no jump: the guest's `[Jump]` button (R3) lifts
+  Snake in MGSV and sets the flag until he lands there (docs/GUEST.md §6). On the flag's **rising edge** the puppet jumps
+  through Elden Ring's world as the Tarnished would, if he stands (stance 0, not riding) on the ground:
+  - the **room over his head** first: rays up from just above a step at his axis and 0.7 radius around it (seams bridged);
+    less than `jump_min_room` over his height (`JumpBodyHeight`: the stance's, or the head ray + 0.2 m without `ceiling`) and
+    there is no jump (`puppet: no jump -- a ceiling right over his head`); under a lower ceiling the rise is cut to what it leaves;
+  - up at sqrt(2 g apex) (a step's mean speed: the apex is the one asked for); the puppet's ground velocity (eased over a few
+    frames) carries on in the air, steered toward Snake's own motion by at most `jump_air_control` m/s² (Elden Ring-like: a
+    little; no motion from MGSV in the air never brakes it);
+  - in the air (`AirStep`, one air for the jump and the dive's hop since the merge) the knee ray drops to `jump_air_step`
+    above the feet, a ledge's top up to that far above them is landed on (rising, one above the take-off ground: the capsule
+    catching an edge): a 1.0 m ledge is reached from a run or standing at its foot, a 1.7 m one never; his head stops under a
+    ceiling (`headBump`: rays up from half his height, seams bridged) and a horizontal move that would put something lower
+    than his head over him is refused (`BodyHeadroom`, from each probe's own ground: a table top the wall rays pass under
+    and over, a beam);
+  - the **landing** is the usual one, on the whole body's ground (`LandingGround`: planks and seams under his axis hold him;
+    on side probes alone only where the ground snap keeps him), but a jump's landing counts as a fall only from the height it
+    left from (a flat jump: 0 m/s, never fall damage; off a 5 m cliff: 9.9 m/s, as walking off it; not 10.9 from the apex);
+    an origin shift in the air moves that height with the world (`KinematicShift`);
+  - the odometer's height is ignored while he is in the air (MGSV's own lift and fall of Snake never count), and
+    `jump_camera_hold` keeps the camera's height over Snake as it was before the jump while he is in the air (MGSV's camera
+    follows his lift and fall there).
+  `puppet: Snake jumps -- 1.20 m up at 5.1 m/s (jump #N)` / `puppet: no jump -- <why>`; `pr er status` counts `Snake jumped N
+  (M refused)` and says `jumping`. With `motion = root_motion` it logs once that jumps need kinematic. Tested in a synthetic world
+  (`tests/test_host_motion.inc` `TestJump`, `TestScaffold`, `TestJumpReview`): a flat jump (1.2 m, ~1 s, no fall damage), across a 2 m gap at 6 m/s (and into it
+  without the jump), onto a 1.0 m ledge (running, and standing at its foot), not onto a 1.7 m one, under a slab 0.5 m over his
+  head (the rise stops there, never on top of it), no jump under a 1.5 m ceiling (and a crouched-height body never through it),
+  off a 5 m cliff (also with an 8 m origin shift in the air), air control limited to 3 m/s². The edge is remembered on every frame
+  the guest's state was read, ready or not (`JumpEdge`): a not-ready frame mid-jump (a hitch, a stale Lua update) while the
+  guest's flag is still up never makes the same press a second jump.
 - `[Puppet] hit_hook = true` (re-backlog E2, `er/HitHook.cpp`): CSPlayerDamageModule vfunc 7
   `ReceiveDamage` (`0x44D050`) on `[ChrIns+0x190]+0x98`. While the puppet is active the original is
   skipped (no HP loss, no stagger) and the hit (amount `+0x228`, direction `-(+0x1C0)`, attacker
   distance → melee/projectile) becomes `kHEvHurt`. Not skipped once Snake has died (ER must run its
   death). Poison/fall damage still arrive through the HP-delta check.
+
+### Dive = hop (`er/DiveHop.*`, `er/Kinematic.cpp` KinematicHop, `[Puppet] hop`, protocol v13 `kGuestDiving`; roadmap 2.9; live pass A 2026-10-14)
+
+MGSV has no jump (Snake's own is R3: "Jumps" above; the hop is the dive's). While the guest says Snake dives (`kGuestDiving`,
+docs/GUEST.md 18.17), the kinematic puppet hops: a parabola `hop_height` (0.6 m) high and `hop_length` (2.5 m) long on level ground, so a gap up to ~2 m and a
+ledge up to ~`hop_height + hop_step` (~0.75 m; step_up alone walks onto 0.5 m) can be crossed. **On by default since live
+pass A** (2026-10-14, docs/FEATURES-1.md: three running dives `hop #1..3: 0.60 m up ... at 3.57 m/s`, one up a slope, landed
+without damage; X in a jump never arms a dive); `pr er "puppet hop off"` switches it off live, `hop = false` for good.
+
+- **When** (`DiveTrigger`, pure): the flag's rising edge arms it; the dive's first move (>= 0.5 m/s of odometer step in Elden
+  Ring) gives the hop its direction and starts it. No move within `hop_wait_ms` (300): no hop (`MGSV dived but Snake didn't
+  move`). One hop per dive. Not while riding, not with `motion = root_motion`.
+- **The hop** (`KinematicHop`, pure): from the ground; vy = sqrt(2 g rise), a fixed horizontal speed (length / the full hop's
+  flight time) along the dive instead of the odometer while in the air (MGSV's own dive moves ~5.7 m: what is left after the
+  landing moves him on as usual).
+- **Off a rim** (`HopParams::graceS` 0.2 s / `graceDrop` 0.3 m, review of 2.9): the flag reaches the host a few frames after
+  X (the guest's sign, the shared memory) while MGSV's dive already moves him at ~5 m/s, so at a ditch his centre is often
+  past the rim when the hop comes. Off the ground less than 0.2 s and at most 0.3 m below it, he still hops, from that
+  ground's height (`hop #N (off a rim 0.07 s ago, 0.03 m below it)`); later it is an ordinary fall. If the sign comes only
+  late (CRAWL at the dive's end) no grace covers it: the guest's sign latency in the log says which.
+- **Never through a ceiling:** at the take-off the rise is cut to the room above his head (his **standing** height
+  `height_stand` + 0.05 m, whatever the stance the confirming frame reports: the guest arms a dive only on X while STAND, but
+  the sign may already be CRAWL / prone, and a prone 0.5 m head would let a full hop take him under a 1.9 m beam; with
+  `ceiling = false` the head ray's height); less than `hop_min_rise` 0.15 m: no hop, `dive -- no hop`); rising, rays up from
+  half his height stop him where his head meets something (he falls from there); a move in the air that would put anything
+  lower than his head above him (an overhang, a balcony ahead) is refused that frame (he goes on once he has come down). That
+  take-off height is kept for the whole hop. In the air the hop is a jump's (`AirStep`, merge with the jump): no hop in a jump
+  (`dive -- no hop (in a jump)`), no jump in a hop.
+- **Never up a wall:** in the air the low wall ray sits `hop_step` (0.15 m) + 0.05 above the feet instead of step_up + 0.05,
+  so a ledge is a wall until the feet are nearly over it; a ledge top within `hop_step` above the feet is landed on (while
+  rising only one above the take-off ground). Apex 0.6 m: a 1 m wall stops him every time, he lands back at its foot.
+- **Landing:** a jump's, on the whole body's ground (`LandingGround`: "Collision filters and the ground under Snake" below --
+  planks with gaps hold a hop's landing as a fall's): `r.landed` -> `LandingDamage`, counted as a fall only below the
+  take-off's height (a level hop: 0 m/s; before the merge ~3.4 m/s, no damage either); a hop off a cliff becomes an ordinary
+  fall after 1.25 flight times (the fall watchdog and fall damage as for any fall).
+- Logs: `puppet: dive -> hop #N: 0.60 m up toward (x, z) at 3.57 m/s from (...)` (`(lower: a ceiling)` when cut),
+  `puppet: dive -- no hop (...)`; `pr er status` counts `hops N (refused N, no move N)` (`[hop off]` when off).
+- Tests (`tests/test_host_hop.inc`, synthetic world): level hop 2.5 m / 0.6 m at 60 and 240 fps; a 1 m gap crossed (walking in
+  he falls; both at 1.5 m/s, so the far rim is never caught as a step: rise, apex and a landing past z 2.5 checked); the hop
+  0, 3 and 6 frames after walking off the gap's rim at 5 m/s still crosses, 0.27 s later it is refused; a 0.6 m ledge climbed from 0.3-1.0 m away (walking, stopped); a 0.5 m ledge with step_up 0.3; a 1 m wall never
+  crossed from four distances, five hops in a row; a 2.1 m ceiling over a standing Snake caps the head at 2.1 m, 1.9 m gives
+  no hop -- also when the confirming frame reports prone or crouched (the standing take-off height), and under 2.1 m told
+  prone the head still stays out (crouched at the take-off, room again); an overhang 2.0 m up ahead never takes his head
+  (also told prone); no hop under a low ceiling over a gap (he
+  falls in as walking); no second hop in the air. Merges: at the foot of stairs the full hop (head room from each probe's
+  own ground); along a gap between a scaffold's planks it lands on them (one ray: through, 3 m down); no hop in a jump, no
+  jump in a hop; a level hop lands at 0 m/s; walking into the 1 m gap at 4 m/s falls in (no step up its far face in mid-air).
+### Collision filters and the ground under Snake (`er/Kinematic.cpp` BodyGround, `[Puppet] ground_filter`, `wall_filter`, `wall_filter_also`, `ground_probes`)
+
+Player report 2026-10-14 ~19:54: the Tarnished climbed the wooden scaffolding on Stormveil's side; switched back to Snake at
+the top (`puppet ON ... ER feet (-3.15, 3.34, 0.69)`), Snake fell straight through it and died (`landed at 12.7 m/s -> fall
+damage`, ~8 m). Two causes, both fixed (unit-tested; verified live 2026-10-14 on that scaffold, below):
+
+**1. One ray under his centre.** Wooden floors are planks with gaps; the ground snap, the landing check and the puppet's start
+each cast a single ray under the body's centre, and a gap reads "no ground". Now `BodyGround` casts five: the centre and four
+points at 0.8 x the body radius (inside the body, clear of a wall it stands against; the cross turned 30 degrees, so planks
+laid along one direction see five different offsets across their gaps, not three). Where he stands:
+- **the centre found ground**: that ground, as the single ray had it (a slope, a step's edge). Standing on the highest held
+  probe instead (the first version) floated him over every slope -- the uphill probes are higher: 6/13/18/25 cm at 10/20/30/40
+  degrees (review 2026-10-14), and the head room lost as much (a sloped tunnel as tall as Snake refused him). Unless three or
+  more side probes stand on ground above the centre's: a slope or a step's edge lifts two of four at most (they are 90 degrees
+  apart), so that is a gap between planks under the centre, and he stands on the plane those probes agree on (opposite probes'
+  mean: on any plane exactly its height under the axis);
+- **the centre found nothing** (a gap down to a drop, a rim): the side probes' plane (an opposite pair both found ground), else
+  the highest probe that a second probe holds (another within 0.1 m below it). One probe on a step's edge or a shaft's rim is
+  no support: he still falls off edges (two probes hold a walking body until its centre is 0.14-0.20 m past the edge, by
+  heading) and into holes wider than the probes (~0.5 m).
+
+Used by the ground snap (step up / snap down), the landing check (`LandingGround`, for a fall, the dive's hop and the jump
+alike: the frame's whole move, from 0.1 m above its higher end -- a hop's `hop_step` + 0.05, a jump's `jump_air_step` + 0.05
+-- to 0.05 m below its lower end: consecutive frames overlap, so a thin platform is never stepped over at any speed; a plain
+fall going up lands on nothing; and on side probes
+alone he lands only where the ground snap would keep him: at a ledge's rim with the floor within `snap_down` below his centre
+he would step down at once, so he falls on past it -- merge with the dive's hop: a hop onto a 0.6 m ledge landed on its rim and
+snapped back down) and `SupportedStart`. **The start stands on firmer ground than a walk keeps** (`StartGround`): the centre's own
+ground, or four of the five probes at the body's level (planks with gaps under the centre). Two probes on a rim with the
+centre over a drop hold a walking body, but a start there (the first version) left Snake 4 cm from losing the second probe:
+the Fort Haight shaft rim again (review 2026-10-14). Such a start is moved, as before, to the nearest whole-body place (centre
+and four points at the full radius on ground), or failing that at a distance to one where all five probes stand (four is not
+enough: the cross is fixed in world axes, and with an arm square to the edge four probes stand with the centre a centimetre
+inside it; five keep it 0.2 m or more in). `[Puppet] ground_probes = false` is the old single ray. Tested in the synthetic
+world (`tests/test_host_motion.inc` `TestGround`: a 3 m scaffold of 22 cm planks with 6 cm gaps and a 0.8 m hole, a 2 cm
+platform, a boardwalk 0.3 m above the ground, 25-degree ramps: solid, of planks with gaps, and a tunnel 1.9 m tall):
+standing over a gap (the player's case; the old ray fell 3 m), walking across, along and diagonally over the planks with no
+dip, the hole and the edge still drop him, a 5 m fall onto the planks lands at ~9.9 m/s (the old ray: through to the ground),
+a 30 m fall (~24 m/s) lands on the 2 cm platform, the start over a gap stays, starts 0.1 and 0.2 m past the edge move onto
+the planks; on planes of 10-40 degrees at 24 headings (radius 0.35 and 0.45) the ground is the one under the axis within
+5 mm, with nothing or deeper ground under the centre too; up and down the ramps (planks too) the feet stay within 2 cm of the
+slope and the 1.9 m tunnel never refuses him. `tests/test_host_chord.inc` `TestSupportedStart`: starts 1-29 cm past a pit's
+edge, the world turned 0-75 degrees, all move 0.19 m or more in.
+
+**Live pass A (2026-10-14):** on the cliffside scaffold (the zig-zag wooden stairs above Stormveil Cliffside's grace) a
+Tarnished-mode switch on the planks started with `below the start: -0.05 m (ground_filter), -1.39 m (ray_filter 0x2000058)`;
+Snake stood 10 s, walked the landings and up and down the flights with no `left the ground`, 0 ceilings, 0 unsticks; the
+only walk-off lines were real edges. The Roundtable Hold's basement stairs climb as before (docs/FEATURES-1.md).
+
+**2. The ray filter.** `cs_phys_world_cast_ray(world, filter, from, extent, hit, ignore)` (0xC71E00) builds an hknp ray query:
+`filter` is the query's collision filter info, run through Elden Ring's `CS::CSCollisionFilter` (vtable 0x2B94DF0; the
+instance at `CSHavokMan+0xC0`), then the hits go to a `CS::CSClosestHitCollectorForSnipe` (0xC5A9F0; its addHit 0xC5ABF0
+also skips one object tied to the ignored character, `[[chr+0x190]+0xE8]`, probably his mount). RE'd (Ghidra +
+`tools/disasm.py`, 2026-10-14):
+- filter info bits: **0-6 = layer** (0-127), 7-8 = a group (two bodies in the same non-zero group never collide), 25-29 = a
+  sub-id (the query's character's own bodies with the same non-zero sub-id are skipped: 0x2000000 = sub-id 1), bit 30 = "only
+  its own character's". The check (`isCollisionEnabled`, 0xC63220 query vs body, 0xC63320 body vs body) reads a 128 x 128
+  bit matrix at `filter+0x20` (`row[queryLayer] >> bodyLayer`).
+- The matrix is built in the constructor (0xC5EE70 -> 0xC5F1F0, ~750 calls of enable/disable/copy-row helpers 0xC624A0 /
+  0xC62410 / 0xC5F160 and group helpers 0xC62DB0 / 0xC62A90 / 0xC62C10 / 0xC62800 / 0xC62530). Emulated from the
+  disassembly, the rows that matter:
+  - **characters**: layers 2-10 (pairs 3/4, 5/6, 7/8, 9/10 collide with each other; 0xE collides with every character
+    layer and nothing else). Their world: layers 0x37-0x4A come as 4 groups x 5 variants (0x37 + 5g + v); characters
+    collide with variants 1-3 (0x38/0x3D/0x42/0x47, 0x39/0x3E/0x43/0x48, 0x3A/0x3F/0x44/0x49) plus 0x4B, 0x31, 0x35, 0x52,
+    0x54. Layer 3 (and 5, 7, 9) also collides with group 2 (0x42-0x44), the even ones (4, 6, 8, 10) with 0x4F-0x51 instead:
+    probably player-only and enemy-only walls (UNVERIFIED which is which).
+  - **0x58, the old `ray_filter`** (the game's only caller of cast_ray, 0x3FB990, the main player's aim/sight ray):
+    variants 0, 1, 3, 4 and 0x33, 0x4D, 0x52-0x54, plus 0x1D-0x20, 0x23, 0x24, 0x27, 0x28 (probably characters' hit
+    capsules). It misses **variant 2 (0x39, 0x3E, 0x43, 0x48), 0x4B, 0x31 and 0x35** -- collision only characters meet
+    (floors, ramps and walls for walking) -- and hits variant 0 (0x37, 0x3C, 0x41, 0x46), which characters pass through.
+  - **0x16** (and 0x15, 0x17-0x1B: one per character layer 2, 3, 4, 9, 10, 0xB, 0xC) = a character layer's row with every
+    character layer 2-0x2D removed (0xC5F160 then 0xC62530): **exactly what the character's capsule collides with, no
+    characters**. 0x16 is layer 3's: 0x31 0x35 0x38 0x39 0x3A 0x3D 0x3E 0x3F 0x42 0x43 0x44 0x47 0x48 0x49 0x4B 0x52 0x54 (and
+    0x0 / 0x69, which collide with everything).
+- The collector (0xC5A8E0, shared with the camera's) drops hits whose material class (`0xC75570`, hundreds digit) is 2 or 5.
+  Not reachable through cast_ray's filter.
+- The query's byte at +0x24 (0xFB) is a **broad-phase layer mask**: the world's `hknpWideBroadPhase` (`[hknpWorld+0x4D8]`, its
+  cast vfunc 0x80 = 0x18A04D0) visits a layer only when that byte ANDs its mask byte (`layer+0x19D0`; live: 6 layers, masks
+  0x02 0x03 0x02 0x01 0x01 0x04) and the collision filter's vfunc 7 lets the layer through. 0xFB leaves out the layer whose mask
+  is 0x04.
+- **Snake's own ray query** (`game::CastRayKeep` / `CastRayAll`, 2026-10-14 live pass): cast_ray's query rebuilt byte for byte
+  (address table `cast_ray query build` 0xC71E8D, `cast_ray query calls` 0xC71F56: codec `[hknpWorld+0xB00]`, filter
+  `[CSHavokMan+0xC0]`, material 0xFFFF, filter info, the ignored chr, 2 at +0x20, the layer mask at +0x24, the ray at +0x30)
+  with a snipe collector (ctor 0xC5A9F0, dtor 0xC5AAB0) whose vtable is a copy with addHit replaced: a hit of class 2/5 in
+  `[Puppet] ground_keep` (bit per class) goes to `hknpClosestHitCollector::addHit` (0x1886510) instead of being dropped, any
+  other to the game's own (0xC5ABF0); `ground_layers` is the +0x24 byte. All of it byte-verified (80/80) or the body rays use
+  cast_ray (logged once). **Off by default** (`ground_keep = 0`, `ground_layers = 0xFB` = cast_ray itself): at Stormveil's
+  cliffside scaffold neither mattered -- every floor there is layer 0x39 (0x38 a few), materials 1/3/4/101/104 (a 1935-ray
+  survey of x -26..-5, z 10..32 with all layers: no class 2 or 5, nothing in the 0x04 layer), and the planks 0x58 misses
+  are found by 0x16. Diagnostics: `call rayall x y z dx dy dz [filter] [layers]` lists every hit (fraction, point, normal,
+  body, its layer and filter info, hknp material, shape key, Elden Ring material id, "dropped by the game's collector");
+  `call raykeep ... [filter] [keep] [layers]` is the closest hit as the body rays would get it; `puppet set ground_keep 0x24`
+  / `ground_layers 0xff` switch the body rays live. The Tarnished's own ground: `[[player+0x190]+0x68]+0x250` (i32, the
+  physics module's hit material, 4 = wood, 1 rock) and `+0x230` (the contact normal).
+
+So: **`[Puppet] ground_filter = 0x2000016`** (layer 0x16, sub-id 1) for Snake's vertical rays (ground, landing, step, head
+room, the start; also root motion's "ground under the proxy") -- everything the Tarnished stands on, no characters --, and
+his walls through **both** `wall_filter = 0` (= `ray_filter` 0x2000058: enemies' hit capsules stop him) **and
+`wall_filter_also = 0x2000016`** (the characters' own walls), the nearer hit kept (`er/Kinematic.h` `BodyRays`; 0 = only
+wall_filter). The first version had walls on 0x58 alone: a scaffold whose floor only 0x16 sees most likely has its railings
+and boarding in the same characters-only layers, and Snake, now standing on the floor, would have walked through them off
+the edge (review 2026-10-14; unit-tested: a railing only in those layers stops him a radius short, walls on 0x58 alone walk
+him off 3 m). Twice the wall rays' cost. UNVERIFIED live, and so is which character layer is the player's (3 or 4: layer 3
+also collides with 0x42-0x44, maybe player-only or enemy-only walls): if Snake stops at an invisible wall the Tarnished walks
+through, `wall_filter_also = 0` (and report where). `ray_filter` stays 0x2000058 for sight, bullets, the camera, mines and
+buddies (sight and bullets shouldn't meet character-only walls). `BodyRay` (`er/Puppet.cpp`) picks the filters per ray:
+mostly up/down -> ground_filter, else wall_filter and wall_filter_also. All but ray_filter need the address
+table's `collision layer 0x16 (CSCollisionFilter)` (the bytes at 0xC6004E that build row 0x16 from row 3: `mov edx,0x16; lea
+r8d,[rdx-0x13]; call 0xC5F160; mov edx,0x16; call 0xC62530`, verified on the exe); without it Snake's body uses `ray_filter`
+(logged once). Diagnostics: at the puppet's start `puppet: Snake's body rays: ground_filter ..., wall_filter ... + <also>,
+below the start: <dy>
+(ground_filter), <dy> (ray_filter)`; each time he walks off ground (not a jump, not a hop) `puppet: Snake left the ground at
+(...) [N frames after the start] -- below him: ... (ground_filter ...), ... (ray_filter ...); his five ground rays (centre
+first) down to 3 m: ...` with what both filters see below and each of `BodyGround`'s rays (the hit's depth below his feet,
+`-` none: nothing under any ray where the Tarnished stood means the filter doesn't see that floor), the first 20, any in a
+start's first 2 s, then every 50th. Try a filter by hand: `call ray x y z dx dy dz [filter]`.
+
+**In the air** (merge with the jump, 2026-10-14): a fall, a hop and a jump are one air (`Step`'s airborne pass): gravity at
+the frame's mean speed (a jump's apex is the one asked for), the landing on `LandingGround`, and the knee ray low: in a plain
+fall 0.1 m above the feet (`kFallStep`), in a hop `hop_step`, in a jump `jump_air_step` -- a ledge is a wall until the feet are
+nearly at its top. Before, a falling body kept step_up's knee ray (0.55 m): moving while falling past a ledge's face it walked
+into the face below its top and "landed" inside it, popping up (with the probes' rim hold, a 6 m/s walk crossed a 2 m gap
+0.4 m down into its far side; `TestJump`, `TestHop` 4 m/s into a 1 m gap: both fall in now).
 
 ### Breakables: pots, crates, barrels, carts (`er/Explosion.cpp` Break/Shrapnel, `er/GeomProbe.cpp`, `[Combat] break_objects`)
 
@@ -545,6 +765,94 @@ shot take 7.5 s). A rocket flies at 16 m/s for 1 s, then ramps to 60 m/s over 0.
 VERIFIED live 2026-10-12 (fake_mgsv `!fire rocket`, before the motor, at 20 m/s): `rounds: ... launched at 20 m/s` -> `went off (hit the world) at
 (-16.38, 3.58, -8.27) after 0.87 s, 17.3 m`, `... after 2.66 s, 53.2 m`, `(hit an enemy) ... after 0.12 s, 2.3 m`; screenshots
 at 20 and 50 m show the comet with its trail in flight and the fireball cluster where it hit.
+
+### Projectile meshes and muzzle flashes (roadmap 5.4: `er/Projectiles*`, `er/ProjectileLogic*`, `[Render] projectile_meshes`, `[Combat] muzzle_flash`)
+
+Both are **off by default and don't work yet** (live pass A, 2026-10-14, docs/FEATURES-1.md): no grenade draw was ever
+tagged by the guest, a rocket only as a 4-vertex quad 41 m out 18 frames after the release, and the host learned no
+template (`24 lists with tagged draws, 0 templates learned`); the muzzle flash fires once per shot as designed but the look
+is a 1-3 m fireball (10030001) or a golden burst with shards (10035001). Live switches: `pr er "throw meshes on|off"`,
+`pr er "boom set muzzle_flash on|off"`.
+
+**Projectile meshes.** The flown copies of Snake's grenades (`er/Throw.cpp`) and rounds (`er/Rounds.cpp`) were a small olive
+ball and a dark ball with a flame. The guest now publishes MGSV's draws of a projectile it just released with owner
+`kOwnerProjectile` (protocol v13; `mgsv/ProjectileTag.*`, docs/GUEST.md 15.5). The host:
+1. notes each release (`Throw::OnThrow`, `Rounds::Launch` -> `Projectiles::NoteRelease`) with its direction in MGSV world
+   (`Anchor::DirToMgsv`), keyed by what was released: the throw's equip id, the round's bullet id;
+2. in `RenderScene::Capture`, right after the draw list is copied -- also when MGSV sent none that frame
+   (`Projectiles::Apply`): the tagged draws of a list within 1.5 s of an unsettled release become a *candidate* -- each draw's
+   record (mesh, textures, material) and its matrices turned into the projectile's own frame (z along its flight, y up as far
+   as it goes, origin = the first draw's; `projectile::Learn`; more than 6 parts or origins spread over 1.5 m: not one). The
+   candidate is taken only when a later list, 3-20 MGSV frames on, shows the same meshes moved at least 2.5 m/s within 60
+   degrees of the release direction (`projectile::Confirms`): Snake's gear and a prop down range stay still in the list's
+   space (his root), so a mis-tag is never learned from one list. A release gives up after 8 lists without that ("never
+   flew", warned). The first confirmed template of a key stays; another one replaces it only when 2 releases in a row agree
+   on other meshes (warned). When its meshes are on the GPU its real size is measured once from their boxes
+   (`projectile::Across`, logged "X m across"): over 0.5 m for a throw or 1.2 m for a round it is refused (warned; the ball
+   stays, the next confirmed learn replaces it). `kOwnerProjectile` draws are removed from the list (MGSV's grenade flies over
+   MGSV's airport, not Elden Ring). With the switch **off** nothing is learned or placed and tagged draws go back to where the
+   guest put them before v13: Snake's within 2.5 m of his root (`[Render] draw_player` on), else out
+   (`projectile::HandBack`);
+3. each frame, every flown copy whose template's meshes are on the GPU (`RenderAssets::FindMesh`) is drawn with it: the
+   template placed at the copy's Elden Ring point, turned along its velocity (a thrown one tumbles about its flight at
+   `projectile_spin` rad/s while it moves; one that slows keeps the heading and spin it had, `projectile::Pose` per copy),
+   brought into the list's space through the inverse of
+   the snapshot's anchor matrix (rotation about Y with the optional X mirror: its transpose), so the renderer's own anchor
+   matrix puts it back exactly where the copy is. It is an ordinary rigid draw from then on (lit, shadowed, near-faded as an
+   "other" owner, velocity from the previous snapshot's same draw). `Projectiles::Drawn(source, copy, frame)` tells
+   Throw/Rounds to leave out the ball only for a copy really placed in the last scene (a rocket keeps its flame, exhaust and
+   smoke trail); tagged draws pass `[Render] draw_other = false` so they can still be learned.
+No template yet (the first throw of an item in a session, a guest from before v13 or with `[Capture] ProjectileMeshes` off
+-- its default --, a mesh forgotten after the guest re-attached, a template refused as too big), or the switch off: the ball
+as before. `throw` on the host console prints the templates (`pr er throw`).
+
+**Muzzle flashes.** Every `kGEvFire` / `kGEvBuddyFire` that is not D-Walker's flamethrower calls `Explosion::Muzzle`: the
+eighth explosion look, `kMuzzle` (`explosion_muzzle = 10030001`, the Fire Pot's fireball) written into the eighth carrier
+(`10302005`, Miranda's Prayer's cut chain, unreferenced: `test_host_combat` scans every param) as an effect-only copy
+(`MakeCarrier` without its children: no sparks, no ground flames) that does not move, lives `muzzle_life` (0.06 s) and takes
+its effect with it when it dies (`MakeFlash`: `sfxDeleteByLifeDead` 1), so the fireball is cut after its first flash.
+Spawned `muzzle_ahead` (0.1 m) in front of MGSV's muzzle point along the shot, at most `muzzle_per_second` (10; automatic
+fire shows a flash every few rounds), counted in our live-bullet cap like every look; none for tranquilizer rounds unless
+`muzzle_tranq` (MGSV's darts are suppressed). `boom muzzle` on the host console shows one in front of the Tarnished.
+If the fireball reads too big even cut short, try another look live: `boom look muzzle <bullet id> [sfx]`.
+
+### Decoys (`er/Decoys.cpp`, `er/DecoyLogic.*`, `[Decoys]`, protocol v13 `kGEvPlaced` a = `kAmmoDecoy`; roadmap 2.8; live pass B 2026-10-15)
+
+MGSV's decoys (inflatable 397-399, active 401-403, shock 405-407 / 380-381) only fool MGSV's soldiers, and its sandbox has
+none. The guest now announces them like a mine (`kGEvPlaced`, a = `kAmmoDecoy`, trigger 0; docs/GUEST.md 18.8) and the host
+keeps each where Snake set it (anchor at that moment, set down on Elden Ring's ground: near that height first, else down to 40 m
+below, else from 12 m above -- MGSV throws a decoy onto its flat apron, and live one thrown down a slope stood 5.5 m up in the
+air), drawn as a soldier-shaped grey-olive
+balloon of lit balls (`decoy::Figure`, `height` 1.75 m) that blows up over 0.8 s and collapses over 0.5 s when it pops; the
+active decoy's speaker blinks amber, the shock decoy shows a steady blue charge (`RenderMarkers::Owner::kDecoys`).
+
+Four times a second one `Combat::HostilesNear` scan around the standing decoys (`decoy::Notices`, pure):
+- a hostile whose eyes (top of its capsule) see one within `range` 15 m (`cone` 70 deg in front, a clear ray) stops and stares
+  for `stare` 6 s -- the box poster's mechanism (`er/Stealth.cpp`): ChrIns `+0x538` no-attack / no-move bits, only the bits
+  we set are cleared again; `cooldown` 15 s before the same one stares again. An **active** decoy is heard: within
+  `active_range` 25 m, no cone, no ray. Asleep enemies don't notice; one within `snake_close` 4 m of Snake and nearer him
+  than the decoy is busy with him (a decoy must not be a pause button in a fight);
+- a hostile whose capsule comes within `pop_distance` 1 m of its chest knocks it over: it pops (`kHEvDetonate` b = its id:
+  the guest sends `kGEvPlacedGone` and never announces it again), starers of it go on, and a **shock** decoy is a stun blast
+  (`Combat::BlastAt`, `shock_radius` 2.5 m: stagger through the usual pipeline).
+- `turn = true` (default off, UNVERIFIED: `ChrIns::SetYaw` is verified on the player only) also turns a starer to face it,
+  again every 0.5 s while it stares.
+
+Elden Ring's AI has no lure: nobody walks up to a decoy (that needs its AI's sound / target research, roadmap 2.8). Decoys are
+kept while the puppet stops; after a load (or another player object) they are dropped (they stay in MGSV), and a guest that
+re-announces one the host doesn't know (`kPlacedAgain`) is ignored -- both told to the guest with `kHEvDetonate` (as the mines'
+discard): it forgets them (`kGEvPlacedGone`), so they aren't announced again at every start of the puppet. Console `decoys`,
+`decoys add [m] [plain|active|shock]` (a test decoy ahead of the Tarnished, never sent to the guest), `decoys pop <id>`. Tests:
+`tests/test_host_decoy.inc`.
+
+Live pass B (2026-10-15, Gatefront, the save's E-STUN decoy 406): MGSV *throws* a decoy (LT until the arc shows, RT; pass A's LT+RT
+came apart -- its presses left a gap with nothing held, and the decoy it tried was equipped mid-session): `throw: equip 406 (not an
+explosive we send)`, then `placed #N: equip 406 (decoy) ... (vars slot N)` as it lands (MGSV does mirror decoys into
+`placedWeapons`) and `decoys: shock decoy N set (equip 406) at ER (...)`. `npc 43111210 ... sees the shock decoy 2 14.7 m away and
+stops to stare (6 s)`; a soldier shot at turned and stared at another at 11.8 m; later he walked into it: `shock decoy 3 popped:
+npc 43114010 ... walked into it -> kHEvDetonate`, `stun r 2.5 m` (`poise 80 lv 3` on him), the guest `placed #3: decoy ... popped
+... -> kGEvPlacedGone`. A fast travel and a death dropped the standing ones and told the guest (`4 decoy(s) set before a load ...
+dropped (4 told to the guest)`). Nine were out in MGSV at once (it holds 32 placed objects), throws still worked.
 
 ### Snake's cardboard box (`er/Stealth.cpp`, `[Stealth]`, protocol v8 `kGuestInBox` / `kGuestBoxPoster`)
 
@@ -711,6 +1019,75 @@ succeeded (MGSV's own Fulton on its proxy) -- kGEvFulton a=1` -> `fulton: the ba
 `out of Elden Ring's world` -> `+64 runes` (the menu's rune counter 0 -> 64, "Fulton: the enemy is on its way to Mother Base" in
 the corner, MGSV's own counter x48 -> x47). The first two tries failed for the timing alone: the soldier woke (Elden Ring's
 sleep, ~50 s) while the script walked up, and once a second Gatefront soldier killed Snake beside him.
+
+### Marking: MGSV's binoculars on Elden Ring's characters (`er/Marking*`, `[Marking]`, protocol v13 `kGuestBinoculars`)
+
+ROADMAP 2.6, without proxies: the guest sets `kGuestBinoculars` while MGSV's PlayerStatus `BINOCLE` is on (`mgsv/Frame.cpp`, from
+the `kLBinocle` bit `GuestScript` PR.Flags already reads for `kGuestFirstPerson`). Elden Ring's camera is then the binoculars'
+view, zoom included (`er/CameraDriver.cpp` copies MGSV's FOV). Each frame (`Marking::Tick`, after the guest's events):
+- the characters around (`game::Characters`, `max_characters` nearest, never the Tarnished; `targets = hostile` keeps the ones
+  the ActorTable flags `kActorHostile`; `rendered_only`: not the ones Elden Ring doesn't render, ChrIns+0x1C5 bit3 clear --
+  ballista/arrow-trap dummy shooters, characters an event hides -- nor ones with no max HP) within `range` (150 m) of the camera
+  whose body (0.6 m around the chest, 1.2 m over the feet, or his own hit radius when larger: the physics module's capsule, the
+  offsets er/Combat.cpp reads) is within the **cone**: `cone` (0.12) of the camera's half vertical FOV, never under
+  `min_cone_deg` -- the same part of the screen at any zoom, and a close one filling the view counts;
+- the six nearest the centre get a **line of sight** ray (Elden Ring's `CastRay` from the camera to the chest, the puppet
+  ignored, `[Puppet] ray_filter`; `marking::RayClear`: a hit within 1 m of the chest still counts, and so does one on his own hit
+  capsule (+0.3 m) -- a troll's or a boss's is metres wide, should the ray stop on character bodies); without the ray cast
+  (unresolved) marking goes on without it (warned once);
+- **dwell**: the seconds looked add up while he is in the cone and in sight, and ebb away twice as fast when he isn't; at `dwell`
+  (0.5 s) he is marked (`marking: marked 0x... (npc N, hostile) at D m`);
+- a marked character keeps his mark until the next **world**: `marking::LoadWatch` forgets every mark after a load screen of
+  0.5 s or more (fast travel, a death, the title, another save -- placed characters come back with the same FieldIns handles,
+  runtime spawns may reuse them; MGSV's marks last a mission) or when the Tarnished's ChrIns changes. Within a world one not in
+  the list (unloaded, fultoned, not rendered) keeps it and shows again when back; a rest at a grace keeps it (Elden Ring's
+  respawns keep their handles); one seen dead (or at 0 HP) fades over `fade` (1 s) and is forgotten; at most `max_marked` (the
+  oldest goes).
+The mark (`marking::Build`, the world markers of er/RenderMarkers.h, owner `kMarking`): a triangle pointing down with its tip
+`height` (2.2 m) over his feet, red (hostile) or white, dark-edged, `size` (0.012) of the screen height at any distance and FOV;
+his distance from Snake (the puppet) in whole metres as seven-segment glyphs over it (`text_size` of the triangle;
+`distance = always | centre | off`, centre: only within 10 degrees of the view's centre); a fresh mark's triangle pops (1.6x,
+0.3 s; the number stays put). Both are new marker shapes in the marker pixel shader (`kTriangle` 3, `kGlyph` 4: signed
+distances, a pixel-wide soft edge from `fwidth`), drawn with a depth slack of 10^6 m: through walls, like MGSV's. None for the
+Tarnished, in Elden Ring's menus (a grace's too) or talks (`interacting`), in MGSV's iDroid/pause menu (`kGuestInMenu`, as
+Fulton's markers), cutscenes, loads, death. Elden Ring's HUD hiding does *not* hide them: with its "Auto" HUD it hides out of
+combat, exactly while Snake scouts (the same pitfall `AutoHud` handles in er/Host.cpp). Nothing in Elden Ring is written:
+no new addresses (the capsule offsets are Combat's).
+Console: `mark [status | binoculars on|off|auto | nearest | clear]` -- `binoculars on` marks as if the guest's flag were set
+(tests with fake MGSV, or the real one without RB); fake MGSV `!binoculars on|off`; status counts the blocked rays and the
+characters skipped as unrendered. Tests: tests/test_host_marking.inc (cone, big bodies, dwell, rays and `RayClear`, deaths,
+caps, `LoadWatch`, layout and the pop); the shaders compile in test_render. **Live pass A (2026-10-14):** the guest's
+BINOCLE flag (`binoculars up/down`), a Stormveil soldier `marked ... (npc 30001014, hostile) at 2 m` 0.48 s after the
+binoculars came up (31 rays, 0 blocked), his red triangle and distance in Elden Ring's frame; `mark nearest` draws a white one.
+Still unverified: foliage vs. the ray filter, giants, fast travel as a load.
+
+### Phantom Cigar = Elden Ring time skip (`er/TimeSkip.cpp`, `[TimeSkip]`, protocol v13 `kGEvTimeSkip`; live pass B 2026-10-15)
+
+Roadmap 2.7. While Snake smokes MGSV's Phantom Cigar, the guest streams the game minutes MGSV's time-lapse runs through
+(docs/GUEST.md 18.16): `kGEvTimeSkip` with a = minutes, a few every quarter second. The same game time passes on Elden
+Ring's clock:
+- **The write** is the one VERIFIED with `poke` (Lighting from Elden Ring, below): `WorldAreaTime` +0x2C minute and +0x30
+  second, then +0x28 hour (u32 each; the hour write applies the three). No new address: `WorldAreaTime` is the verified
+  table entry `Game::TimeOfDay` already reads (+8 packed h/m/s).
+- **Smooth:** `phantom::timeskip::Pacer` (`common/TimeSkipLogic.h`) spreads every skip: each `step_ms` (100) it hands out
+  `pending x step_ms / smooth_ms` (1000), at least a minute -- a 6 h skip in ~45 writes over ~4 s, big steps first; the
+  guest's small streamed skips go out as they come, so Elden Ring's sky follows MGSV's time-lapse. `smooth_ms = 0`: one write.
+  Our own cursor carries the time between writes (a write may show a frame later), and takes Elden Ring's reading when it is up
+  to 10 min ahead of it (its own clock ran on). Whole days are dropped. Round midnight is just the dial going round.
+- **When:** only in a loaded world (`Frame::inGame`, not `loading`): a skip that arrives during a load waits for the world.
+- **Log / corner:** `time skip: MGSV's Phantom Cigar -- Elden Ring's clock from 12:00 on`; 3 s after the last write `time
+  skip: Elden Ring's clock 12:00 -> 18:30 (+6 h 30 min, N writes)` (N: this skip's writes; `timeskip` shows all) and the corner "Phantom Cigar: 6 h 30 min passed (12:00 ->
+  18:30)".
+- **Console:** `timeskip` (status: Elden Ring's clock, events, minutes, pending, writes), `timeskip <minutes>` (as a
+  kGEvTimeSkip: the host side tested without MGSV), `timeskip clear`.
+- **Night:** Elden Ring's sky and light follow the clock at once (seen with `poke`). Whether night-only characters (Night's
+  Cavalry, Renna at the Church of Elleh) appear without an area reload is UNVERIFIED; Elden Ring's own "pass time" at a grace
+  reloads the area.
+- `[TimeSkip] enabled = false` leaves Elden Ring's clock alone (the event is logged once). On by default: it only acts on
+  kGEvTimeSkip, which the guest sends with its own `[Cigar] TimeSkip` on (on since live pass B), or on the console command.
+- Live pass B (2026-10-15): `timeskip 900` moved 07:23 -> 22:23 in 53 writes (~8 s); smokes moved Elden Ring's clock 12:14 ->
+  18:02 (+5 h 48 min, 84 writes), 18:57 -> 02:14 (+7 h 17 min, 98 writes) and 04:10 -> 16:18 (+12 h 2 min) with the sky following
+  (the frames go from noon to dusk to a moonlit night); at night, after a fast travel, Renna stood at the Church of Elleh.
 
 ### Camera and Elden Ring's HUD compass (`er/CameraDriver.cpp`, `[Camera] sync_chr_cam`, `sync_compass_cam`)
 
@@ -888,6 +1265,7 @@ through `input virtualpad` + `press`):
   - `kGEvExplosion`: blast damage around the mapped centre -- or, with `pad[1]` = one of our throws / mines, where our copy is
     (above). `kGEvLog`: logged.
   - `kGEvThrow`, `kGEvPlaced`, `kGEvPlacedGone` (v5): `er/Throw.cpp`, `er/Mines.cpp`.
+  - `kGEvTimeSkip` (v13): Elden Ring's clock moves by a minutes, spread over `[TimeSkip] smooth_ms` (`er/TimeSkip.cpp`, above).
 - **Out:**
   - `kHEvHurt`: HP loss on the puppet, sent as the share of the Tarnished's max HP it took, in units of Snake's life / guest life scale (`[Combat] hurt_share`, docs/COMBAT.md; the hit hook measures the hit at full HP). `v0` is the unit direction from Snake toward the attacker (`last_hit_by`), in MGSV world. The kind is melee if the attacker is under 4 m away, projectile if further, fall after a hard landing, and other when the attacker is unknown.
   - `kHEvRespawn`: dead → alive.
@@ -926,11 +1304,17 @@ sym | single [filter]        named roots (base wcm player modules phys data chrc
                              | every FD4 singleton (also usable as s.<Name>, e.g. [s.CSFade])
 chr [n]                      characters by distance: handle, P/E/C, team, npc, hp, distance, pos
 status | cam | calib | buddy | ui | ez
-call setpos x y z | setyaw rad | ray x y z dx dy dz | kill yes
+call setpos x y z | setyaw rad | ray x y z dx dy dz [filter] | kill yes
+call rayall x y z dx dy dz [filter] [layers]   every hit along the ray: point, normal, body, its layer, hknp and Elden Ring
+                             material (what the game's collector drops) -- Snake's own ray query (docs "Collision filters")
+call raykeep x y z dx dy dz [filter] [keep] [layers]   the closest hit with dropped material classes / broad-phase layers kept
+puppet set <key> <value>     live: ground_keep ground_layers ground_filter wall_filter wall_filter_also ground_probes step_up
+                             snap_down radius jump_apex jump_air_step jump_air_control (not saved)
 flag [name [on|off]]         render dead nodead nodamage nohit noattack nomove nogravity
 puppet auto|off   menu auto|open|closed   debug on|off
 tarnished [on|off|toggle]    Tarnished mode, as View + Start held 1 s toggles it
 puppet motion kinematic|root_motion   switch [Puppet] motion live (and zero the moved/asked, walls and breakers counters)
+puppet hop [on|off]          dive = hop ([Puppet] hop) live; without an argument its settings
 render [status | keys | set <key> <value> | probe]
 hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value>]
 draw [skeleton|buddy|tracers on|off]
@@ -940,8 +1324,9 @@ snap reset|take <label>|diff <a> <b> [max] [va vb]|add <addr> [bytes]|clear
                              and the objects it points to); full list in PhantomRingHost.snapdiff.txt
 snap tree root <addr|player> | take <label> [depth [bytes]] | diff <a> <b> [max] [small]
                              the same over an object tree keyed by pointer path (survives reallocation across loads)
-input key|keydown|keyup <vk> | mouse <dx> <dy>   SendInput inside Elden Ring's Wine desktop (keydown/keyup: Elden Ring
-                             reads the keyboard once a frame)
+input key|keydown|keyup <vk> | mouse <dx> <dy> | wheel <notches> | mbutton left|right|middle down|up   SendInput inside
+                             Elden Ring's Wine desktop (keydown/keyup: Elden Ring reads the keyboard once a frame; wheel and
+                             mbutton are real mouse events: DirectInput sees them, unlike a VK_xBUTTON key event)
 input virtualpad on|off      test automation with no controller plugged in: user 0 reports a connected neutral pad to
                              Elden Ring's XInputGetCapabilities and polls, and Elden Ring is told devices changed
                              (WM_DEVICECHANGE): it enumerates and polls it, so `press` reaches Elden Ring itself (title,
@@ -950,8 +1335,9 @@ input virtualpad on|off      test automation with no controller plugged in: user
 press <buttons|none> [ms] [lx ly [rx ry]]   the injected pad (lt/rt included), through the same masks as a real one
 puppet hide render_flag|fade|none   switch [Puppet] hide_mode live
 buddy                        the buddy, plus D-Walker's orders seen and the LB hints shown (er/BuddyOrders)
-throw [status | arc on|off|auto|ini]   Snake's grenades we fly, the aiming arc
+throw [status | arc on|off|auto|ini | meshes on|off]   Snake's grenades we fly, the aiming arc, [Render] projectile_meshes live
 mines [detonate <id>]        Snake's placed explosives
+decoys [add [m] [plain|active|shock] | pop <id>]   Snake's decoys; add = a test decoy m ahead of the Tarnished (no MGSV)
 combat shoot <rifle|handgun|sniper|buck|stun|tranq|rocket|grenade|flame> x y z [share]   a test shot of Snake's at an
                              Elden Ring point, as a kGEvFire from his muzzle would be (share: MGSV's v8 damage share)
 combat strike x y z | aimat x y z | self <id> [off]   a CQC strike there; the MGSV yaw/pitch/camera phase that aims at
@@ -959,7 +1345,8 @@ combat strike x y z | aimat x y z | self <id> [off]   a CQC strike there; the MG
 combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|boss_lives|boss_from|big_from|share_mult <v>
 boom [status | lethal|stun|sleep|smoke|flame|breaker|shrapnel [radius] | mode ... | restore | pool]   looks 5 m ahead;
                              `pool`: Elden Ring's bullet/emitter counts and ours alive
-boom look <kind> <bullet> [sfx] | set <key> <value> | raw <bullet> x y z   change a look live, tune the breakers, fly
+boom look <kind> <bullet> [sfx] | set <key> <value> | raw <bullet> x y z   change a look live, tune the breakers (set
+                             muzzle_flash on|off: [Combat] muzzle_flash), fly
                              an unmodified Elden Ring bullet from the Tarnished's chest (what does Elden Ring break?)
 stealth [hide on|off | speffect <id>]   the cardboard box (er/Stealth.h)
 geom [learn [use] | offset <hex> | near|all [radius [filter|-filter]] | ladders [radius] | dump <ins>]   map assets (er/GeomProbe.h)
@@ -1102,6 +1489,41 @@ polished part G 0.2 B 0.8) → gloss = (1 − G)², metal = B. Diffuses that car
 lashes, decals) are alpha-tested at 0.5 (the guest flags none). D-Walker's armour material (`camo_materials`
 = `5216a6bb`) is painted with its camo pattern (texture 3) where its mask (texture 4) is set. MGSV's
 translucent draws (none in the recordings) are left out of the G-buffer.
+
+**Material roles** (`er/MaterialRoles.*`, `[Render] role_guard`, `poster_check`; 2026-10-14; live pass A: 0 textures in a wrong
+role, no false colours on D-Walker/D-Dog close up after buddy swaps; the poster box not re-checked). The player saw
+D-Dog's coat in orange/green, D-Walker right next to the camera in magenta/orange and the cardboard box black. Offline, all
+seven real-MGSV recordings decode cleanly (`dog_follow`, `idle_walker`, `run`, `rocket_back`, `no_buddy`, `fulton`,
+`proxy_fulton`: every texture's mip chain consistent, every draw's texture keys constant over the recording, t0/t1/t2 never
+shared between roles): D-Dog's materials are a white/grey base (`46f51ad4` fur cards: BC3 strands with alpha, t4 the coat's
+colour atlas; `a7c7c5e2` body, `f249704d` head), their SRMs are yellow-green, D-Walker's orange with magenta, and both carry a
+blue/pink/cyan layer noise in an extra slot. The false colours are exactly those maps drawn as a diffuse. Cause (guest,
+docs/GUEST.md 15.3): textures were keyed by MGSV's texture pointer forever while our copy of the texture (and our reference)
+was let go after a minute, so a texture MGSV made later at a freed address -- a buddy deployed later, a higher-resolution
+texture streamed in as the camera nears, the box put on 48 minutes into session 6 -- went out under another texture's key.
+Fixed in the guest. The host has two checks of its own, each `off | log | on`; both default to `log` (nothing changes on
+screen, each texture the check would act on is logged once and counted in `render`), since neither is purely additive and
+neither has been tried live:
+- `role_guard`: diffuse, normal map and SRM keep apart by key (the first one a key is drawn as wins); extras t3-t5 neither
+  are refused nor bar anything (MGSV's flat 128x128 normal map is also one shader's t5 in `fulton.prrec`, and the guest keys
+  by content, so a generic texture may be a diffuse here and an extra there: until the review of 2026-10-14 one extra
+  binding barred a diffuse from the next frame on). A diffuse whose own blocks are DXT5nm is refused too: red and blue ~0.5
+  in >= 90% of the blocks of its <= 64-texel mip, and green both well below (>= 2% of the blocks) and well above (>= 2%)
+  them. Recordings, every BC1-BC3 texture: every detailed normal map 100% red/blue with green below on >= 18% and above on
+  >= 5%; every diffuse and SRM <= 14% red/blue; a mid-grey, sage or muted purple diffuse fails the green test; MGSV's two
+  flat normal maps fail it too (drawn as a diffuse they are plain grey anyway); two normal-like extras pass. With `on`, a
+  refused slot is left empty (grey diffuse / vertex normal / default SRM): plain instead of wrong colours, but an alpha card
+  (hair, fur strands, lashes) whose diffuse is refused draws as an opaque grey quad, since the shader takes the alpha from
+  t0. `render: texture ... (would be) left out (a stale guest key?)`, once per texture (32 at most); `render` shows
+  `material guard (...): N textures in a wrong role (M normal maps as a diffuse; B bindings)`. Recordings: none expected.
+- `poster_check`: with `on`, `poster_materials` paint the poster only where texture 4 is a poster by its content (>= 15%
+  of its blocks the plain background (243, 242, 243); no texture in the recordings above 3%, D-Dog's near-white fur strands
+  35% but those are a diffuse), since a box of the same shader without a poster may carry a layer mask there, which "replace
+  the cardboard wherever t4 isn't near-white" paints black (a hypothesis from the shader: no box recording). The poster as
+  drawn now is VERIFIED live while 15% was never measured on it, hence `log`: every box's texture 4 is logged once with its
+  share (`render: material ... texture 4 (...) has N% of its blocks the poster background ...`), which is the measurement
+  to set the threshold from before `on`.
+`render set role_guard on|log|off`, `render set poster_check on|log|off` switch live.
 
 Elden Ring's per-view constants (all its mesh vertex shaders: `BindlessCBV[registers[1] + 4]`, i.e. root
 parameter 1's table + 4; vkd3d-proton gives each root parameter a push-constant slot): [3] view origin,
@@ -1365,8 +1787,62 @@ The ER clock can be moved live for tests: write `WorldAreaTime` +0x2C minute and
 
 ### Keyboard and mouse
 
-These are left to Elden Ring for now; its keyboard menu keys (Esc, G) are noticed like the pad's Start ("Keyboard menus"
-above). Driving Snake from them: roadmap 2.14.
+Roadmap 2.14 tier 1, `[Keyboard]` (opt-in, off by default; **live pass B 2026-10-15: works** with keys and mouse events sent into
+Elden Ring's window by the console's `input` -- a player's own keyboard and mouse not yet tried). `er/KbmMap.h` and `er/KbmFilter.h` (pure,
+`tests/test_host_kbm.inc`) and `er/Kbm.h` (the glue). While Snake plays, the keys and the mouse become the pad MGSV gets; everything the bridge does with a
+pad (Start/View gate and chord, prompt button, MGSV's menu owning the pad, held-over buttons) works unchanged for them.
+
+- **Keys**: `GetAsyncKeyState` once a frame (`Kbm::Tick`, FrameBegin after `SetPadMode`), only while Elden Ring's window is
+  in front. Keys held when Snake takes the keyboard (an Elden Ring menu's confirm) are ignored until released.
+- **Mouse**: Elden Ring's own DirectInput mouse. It reads keyboard and mouse through DirectInput8 and imports no raw input
+  (binary-scout §2), so `IDirectInputDevice8::GetDeviceState` (slot 9) and `GetDeviceData` (slot 10) are hooked inside
+  dinput8.dll (found through probe devices of both kinds, W and A interfaces; one hook per distinct function). The deltas
+  are the device's counts, never the cursor position. No raw input is registered: under Wine dinput's mouse may itself use
+  raw input, and a second registration in the process would take it over.
+- **Mouse curve** (`KbmMap MouseStick`): the speed (counts/s, smoothed `mouse_smoothing_ms`) per frame; u = speed x
+  `mouse_sensitivity` / 1000, u' = u (1 + `mouse_acceleration` u), deflection = `mouse_anti_deadzone` + (1 - it) min(1, u');
+  below `mouse_min_speed` centred. Default 0.6 / 0.5 / 0.2: 1000 counts/s = 82% of the stick. Live tuning: `input kbm sens 0.8`.
+- **What Elden Ring sees** (DirectInput filtered after the real read): while Snake plays nothing of the mouse and of the
+  keyboard only `er_keys` (Esc; not even that while MGSV's menu is open: Esc is then Start for MGSV, to close it). In
+  Tarnished mode only the chord key (G) is kept from it: held, it is Start + View on the pad (the gate's chord); let go before
+  `[Input] chord_ms` it reaches Elden Ring as a 120 ms tap at the release (G = its map; counted for MenuWatch's latch).
+  During an interaction's buttons-only phase (`InputBridge::SetButtonsOnly`: a pickup, a lever, a dialog before its HUD
+  hides) it gets `er_keys` + `er_interaction_keys` (E, Q, Enter, arrows) and no mouse: the keyboard's share of the pad's
+  `kInteractionButtons`, so WASD, Space, F or a click can't walk, roll, jump or swing the hidden Tarnished. Elden Ring's
+  menus and everything without Snake: untouched. MenuWatch counts a menu key only when it reaches Elden Ring
+  (`Kbm::KeyReachesEr`), so G held for the chord is not taken for its map.
+- **Held keys** (`KbmFilter`, review 2026-10-14): Elden Ring never sees a press it shouldn't act on and never misses the
+  release of one it saw. Snapshots (`GetDeviceState`) are filtered by zeroing, a release: a key hidden while held stays
+  hidden until let go whatever changes under it (Esc that closed MGSV's menu doesn't open Elden Ring's once `kGuestInMenu`
+  clears; E that started an interaction doesn't start a second; G held into a menu isn't its map). Buffered events
+  (`GetDeviceData`) are filtered by dropping presses only: a release passes whenever Elden Ring had the press, and a key it
+  has down that is hidden now gets a made-up release (else W held in Tarnished mode would stay down in Elden Ring after
+  the chord, the Tarnished walking on alone). Mouse buttons alike. The DIK tables are rebuilt (`input kbm on|off`) into a
+  spare copy and published by one index store, never half-built under Elden Ring's input thread.
+- **Device**: `Kbm::Apply` (XInputGetState detour, before publish and masking) replaces the published pad with the keyboard's
+  when the keyboard is the device in use: the last one used, the real pad on a tie (pad activity = past XInput's dead zones).
+  The pad is where it starts, so controller players never notice.
+- **No controller**: Elden Ring then never calls XInputGetState. `virtual_pad = auto` turns on the bridge's virtual pad
+  (`input virtualpad on`) the first time the keyboard is used while Elden Ring hasn't polled XInput for 0.5 s.
+- **Glyphs**: `keyboard_glyphs` makes KeyGuide set Elden Ring's keyboard glyphs ("E: Rest") while the keyboard plays Snake.
+- **Cursor**: `capture_cursor` clips it to Elden Ring's client area while the keyboard plays Snake (only our own clip is undone).
+- Console: `input kbm` (state, device, DirectInput read counts by kind and the last state size, packets written, taps),
+  `input kbm on|off`, `input kbm sens|accel|antidz|smooth|minspeed <v>`.
+
+- **Chord tap** (`chord_tap`, live pass B): in Tarnished mode a tap of the chord key used to reach Elden Ring as that key (G),
+  which opens its map only where its map is bound to G -- the tested save had it on M (System > Keyboard/Mouse Settings > Key
+  Bindings), and nothing happened. `view` (default) hands Elden Ring the pad's View for `kTapMs` instead (`Kbm::Apply`; the gate
+  passes it on at its release), its map whatever its key bindings; `key` is the old way, `off` nothing.
+
+Live pass B (2026-10-15, `input key/keydown/keyup`, `input mouse`, and new `input wheel <n>` / `input mbutton left|right|middle
+down|up`, real mouse events DirectInput sees): Elden Ring reads both devices **by state** once a frame (keyboard 60 state reads/s,
+0 buffered; mouse the same, last size 256); Ctrl tap stood Snake up, W walked 2.6 m in 1.5 s, Shift+S ran 5.9 m, 600 mouse counts
+turned the camera 51 deg, RMB aimed and LMB fired 2 rounds, R reloaded, 1-4 and the wheel switched weapons, V held raised the
+binoculars, Space dived (and hopped), the middle button jumped 1.19 m, Q + mouse + middle button gave D-Walker's Whistle, E at a
+grace rested (keyboard glyph "E: Rest at site of grace"), Tab tapped / held opened the map / the iDroid, Esc closed the iDroid
+without Elden Ring's menu (tap and 0.5 s hold) and a fresh Esc opened it, G as Snake opened nothing, G held 1.3 s switched
+Tarnished mode both ways, W held across the chord in either direction left nobody walking (0.0 m / 0.04 m in 2 s). A controller was
+plugged in, so `virtual_pad = auto` never had to act. Open: a real mouse's counts and the feel of `mouse_sensitivity`.
 
 ### Offline verification
 
@@ -1374,11 +1850,19 @@ above). Driving Snake from them: roadmap 2.14.
   - the console expression parser;
   - the anchor math (round trips, delta/heading consistency for every erForward/mirror combination);
   - the kinematic controller against a synthetic world (flat walk, wall stop at radius, slide, 0.3 m step, 1 m block, ledge fall + landing at ~9.9 m/s, no drift), `Enclosed()` and the unsticking (back to where it stood free, across an origin shift);
+  - (`tests/test_host_motion.inc`) low ceilings, stalls, and the ground under the whole body (`TestGround`: planks with gaps, a hole, a thin platform, a boardwalk, falls onto them, the start over a gap and past an edge);
   - the link against a scratch mapping (attach/alive/foreign nonce, GuestState, events);
   - the console with no game (peek/poke of own memory; game symbols answer "unavailable").
 - `tests/test_host_chord.inc` (included by test_host): Start/View and the Tarnished-mode chord (`PadGate`: taps, holds, the
   iDroid hold, the chord in either order, early release, mode changes under held buttons, MGSV's menu, `chord_ms` 0), and
   the fall watchdog against the synthetic world.
+- `tests/test_host_kbm.inc` (included by test_host): keyboard and mouse as Snake's pad (`er/KbmMap.h`): key names both ways,
+  the default bindings, walk/run/diagonals, every button and trigger, Esc as Start only in MGSV's menu, the wheel's queued
+  taps, the mouse curve (anti-dead zone, monotonic, acceleration, smoothing, a still mouse centres, frame-length
+  independence, stall clamp, invert), the device arbiter, the Tarnished-mode chord-key tap, `[Keyboard]` from an ini; what
+  Elden Ring's DirectInput sees (`er/KbmFilter.h`): the DIK tables, each scope (the interaction's buttons-only phase), held
+  keys across scope and MGSV-menu changes (Esc closing the iDroid), the chord key's tap, mouse buttons, buffered releases
+  never lost (made-up ones for keys hidden while down), peeks on a copy.
 - `tests/test_host_overlay.inc` (included by test_host): every overlay rule (status/boot/failed/absent
   lines, messages, HUD fade on menu/death/guest loss, reticle auto/on), the reticle picture and a GDI text
   panel under wine (`PHANTOM_DUMP_OVERLAY=<dir>` writes them as raw RGBA for a look).
@@ -1408,7 +1892,7 @@ The ordered, step-by-step plan is `docs/LIVE_TEST_P01.md`; this is the host's pa
 2. The XInput hook works: `input: publishing XInput pad N`. `pr status` shows the pad. ER ignores sticks and face buttons while the puppet is on. Start opens the ER menu, and the menu can be navigated (latch, then a `learned ER menu UI state` line). Pin those indices.
 3. Calibration lines appear after running around without the guest: `ER character forward`, `camera +0x30 row`, and a camera distance of 2–6 m.
 4. The puppet starts (`puppet ON`), and the Tarnished disappears. If the hitbox or shadow also disappears, or nothing hides, try `hide_mode = fade`.
-5. Motion follows Snake: walls stop it, it slides, it climbs steps under 0.5 m, it falls off ledges. `ray_filter 0x2000058` must hit the world. Check with `call ray <pos> 0 -5 0`.
+5. Motion follows Snake: walls stop it, it slides, it climbs steps under 0.5 m, it falls off ledges. `ray_filter 0x2000058` and `ground_filter 0x2000016` must hit the world. Check with `call ray <pos> 0 -5 0` and `call ray <pos> 0 -5 0 0x2000016`.
 6. The skeleton stands on the puppet (green, CSEzDraw), faces like Snake, and limbs are not mirrored. If not, adjust `[Axes] mirror_x`, `mgsv_yaw_sign` and `mgsv_root_offset_y`. If nothing draws, check `ez`.
 7. Camera: ER renders from `pers_cam_1` written at group 107 (RE E3). If not, try `task_group = 144`. Also check the fov units (the log prints ER's own value) and the forward row sign. Walls pull the camera in.
 8. Hits on the puppet produce `kHEvHurt` (debug log), and the HP bar mirrors Snake's life. Snake's death triggers YOU DIED, and the respawn sends `kHEvRespawn`.

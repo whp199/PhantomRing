@@ -160,8 +160,11 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 - Life drops on Hurt and regenerates.
 - **D-Walker deployed** (`buddyType = WALKER_GEAR`), with the v2 buddy block (beside Snake, `kBuddyRidden` and under him while ridden, ammo counting down with each BuddyFire). It is **ridden 4 s of every 12** (`kGuestOnVehicle`, vehicleId 0x402, 2.5× speed).
 - Sends Fire every 2 s and BuddyFire every 3 s.
+- `!grab <grab|hold|throw|choke|interrogate|release>`: a v13 kGEvCqc from Snake's feet and facing (CQC holds and throws, COMBAT §7a).
 - Each frame, publishes a draw list with Snake (`kOwnerPlayer`) and D-Walker (`kOwnerBuddy`) on the triple buffer, plus a 64×8 life-bar HUD.
 - Sends one triangle mesh and a 4×4 texture per owner on the render ring.
+- `!binoculars on|off` (v13) sets `kGuestBinoculars` + `kGuestFirstPerson`: the real Elden Ring host then marks the characters
+  near its camera's centre (docs/HOST.md "Marking"; `pr er 'mark binoculars on'` does the same without any guest flag).
 - Answers `pr lua` (and `!status`) through a tiny Lua subset: `return <exprs>` and `vars.x = <expr>`, with `vars.*`, `BuddyType.*`, `math.*`, `tostring`, `..`, `~=`, and/or/not.
 
 ## Tests (offline)
@@ -169,7 +172,7 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 ```
 python3 tools/phantomring/test_layout.py     # build/layout_dump.exe (110 values) + a dump generated from proto.py (489 values: every field
                                              # offset/size of all 22 structs, all constants, all enum values), both MinGW-built, run under wine
-python3 tools/phantomring/test_fakes.py      # fake_mgsv vs fake_er, ~14 s, 50 checks incl. host restart -> guest re-attach + resend, buddy block
+python3 tools/phantomring/test_fakes.py      # fake_mgsv vs fake_er, ~14 s, 51 checks incl. host restart -> guest re-attach + resend, buddy block
 python3 tools/phantomring/test_launcher.py   # backup/verify/restore/prune, seed save, guest install refusals, profile validation,
                                              # me3 archive lookup (temp dirs only; any machine, games running or not)
                                              # --unit: only game-process matching on a fake /proc; --machine: also this machine's

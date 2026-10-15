@@ -28,6 +28,7 @@ PR.F = {
 	SQUAT = 256, CRAWL = 512, CQC = 1024, SUBJECT = 2048, FALL = 4096, BINOCLE = 8192,
 	NORMAL = 16384, HELI = 32768, GUN_FIRE = 65536, CARRY = 131072, SEQ_GAME = 262144, BEHIND = 524288,
 	CBOX = 1048576, POSTER = 2097152, NVG = 4194304,
+	CIGAR = 268435456,  -- 1 << 28 (State.h kLCigar)
 }
 
 local function fn(mod, name)
@@ -128,6 +129,8 @@ function PR.Flags()
 		return i ~= 0 and vars.items[i] == TppEquip.EQP_IT_Nvg
 	end)
 	if okN and nvg then f = f + F.NVG end
+	-- the raw signal: a signal that sticks is the C++ side's call (Cigar.cpp ClockGovernor, in milliseconds)
+	if PR.cigar and PR.CigarSmoking() then f = f + F.CIGAR end
 	return f, mission, seq
 end
 
@@ -294,6 +297,7 @@ function PR.Run(commands)
 			-- Rest at a grace / respawn (kHEvRested): the magazine sizes of Snake's three weapons; the C++ side (Ammo.cpp) then
 			-- fills the magazines and every ammo/item stock natively, through MGSV's own setters
 			if w[1] == 'refill' then return PR.Magazines() end
+			if w[1] == 'cigar' then return PR.CigarClock(w[2]) end  -- the Phantom Cigar's clock (mgsv/Cigar.cpp)
 			return 'unknown'
 		end)
 		out[#out + 1] = tostring(w[1]) .. '=' .. tostring(ok and r or ('error ' .. tostring(r)))
@@ -465,6 +469,85 @@ function PR.ProxySleep(id)
 	return tostring(ok and life)
 end
 
+-- Inert full proxies (docs/GUEST.md 20.6, [Proxies] Inert; only with [Proxies] Enabled). In TppSoldier2's command handler
+-- (0x141356170, byte-checked: Addresses.h kSoldierRestrictNoticeCase / kSoldierSetPuppetCase) SetRestrictNotice{enabled} sets bit 51
+-- of the soldier's first flags qword in the system's per-instance table and SetPuppet{enabled} bit 27 of the second; SetEnabled only
+-- adds bits 30/36, so both can go out before the soldier is enabled and hold from his first update. UNVERIFIED live: that
+-- restrict-notice keeps a soldier from noticing Snake (the name says so; puppet alone stood 20 s in plain view, phase 0).
+function PR.ProxyInert(id, puppet)
+	local okR = send(id, { id = 'SetRestrictNotice', enabled = true })
+	local okP = true
+	if puppet then okP = send(id, { id = 'SetPuppet', enabled = true }) end
+	return tostring(okR) .. ',' .. tostring(okP)
+end
+
+-- A proxy into the world with no update of live AI: damage off, inert, enabled (noAssignRoute: no route handed to him), inert again.
+function PR.ProxyEnable(id, noAssignRoute)
+	send(id, { id = 'SetDisableDamage', life = true, faint = true, sleep = true })
+	PR.ProxyInert(id, true)
+	local cmd = { id = 'SetEnabled', enabled = true }
+	if noAssignRoute then cmd.noAssignRoute = true end
+	local ok = send(id, cmd)
+	PR.ProxyInert(id, true)
+	return tostring(ok)
+end
+
+-- MGSV's alert phase (vars.playerPhase: 0 sneak, 1 caution, 2 evasion, 3 alert); -1 unknown.
+function PR.ProxyPhase()
+	local ok, p = pcall(function() return vars.playerPhase end)
+	if ok and type(p) == 'number' then return tostring(p) end
+	return '-1'
+end
+
+-- The command posts back to sneak. TppCommandPost2's SetPhase{phase} sent to the type writes every post's phase (Addresses.h
+-- kCpSetPhaseAll); each post's own id is sent it too (the handler's per-post case). UNVERIFIED live: that the posts' own logic
+-- then stays there and vars.playerPhase follows.
+function PR.ProxyCalm()
+	local sneak = 0
+	if type(TppGameObject) == 'table' and type(TppGameObject.PHASE_SNEAK) == 'number' then sneak = TppGameObject.PHASE_SNEAK end
+	local before = PR.ProxyPhase()
+	local okAll = send({ type = 'TppCommandPost2' }, { id = 'SetPhase', phase = sneak })
+	local n = 0
+	local f = fn(GameObject, 'GetGameObjectIdByIndex')
+	if f then
+		local seen = {}
+		for i = 0, 63 do
+			local ok, id = pcall(f, 'TppCommandPost2', i)
+			if not ok or type(id) ~= 'number' or id == NULL_ID or seen[id] then break end
+			seen[id] = true
+			if send(id, { id = 'SetPhase', phase = sneak }) then n = n + 1 end
+		end
+	end
+	return string.format('phase %s: SetPhase %d to every command post %s, to %d by id', before, sneak, tostring(okAll), n)
+end
+
+-- Every soldier and hostage out of the world but the ids in keep ('1104,1098'): what PR.DisableSoldiers did at the setup, again,
+-- for a reinforcement or a soldier the mission enabled since. GetGameObjectIdByIndex wraps past the last instance: stop at a repeat.
+function PR.ProxySweep(keep)
+	local skip = {}
+	for v in string.gmatch(keep or '', '%d+') do skip[tonumber(v)] = true end
+	local f = fn(GameObject, 'GetGameObjectIdByIndex')
+	if not f then return 'no GetGameObjectIdByIndex' end
+	local count = 0
+	for _, cls in ipairs({ 'TppSoldier2', 'TppHostage2' }) do
+		local seen, misses = {}, 0
+		for i = 0, 1023 do
+			local ok, id = pcall(f, cls, i)
+			if not ok or type(id) ~= 'number' or id == NULL_ID then
+				misses = misses + 1
+				if misses > 64 then break end
+			elseif seen[id] then
+				break
+			else
+				misses = 0
+				seen[id] = true
+				if not skip[id] and send(id, { id = 'SetEnabled', enabled = false }) then count = count + 1 end
+			end
+		end
+	end
+	return tostring(count) .. ' disabled'
+end
+
 function PR.FultonDisable(id)
 	local ok = send(id, { id = 'SetEnabled', enabled = false })
 	return tostring(ok)
@@ -519,9 +602,75 @@ function PR.Clock(hms, freeze)
 	if hms and hms ~= '' then out[#out + 1] = 'time=' .. tostring((try(TppClock, 'SetTime', hms))) end
 	if freeze then
 		local weather = type(TppCommand) == 'table' and TppCommand.Weather or nil
-		out[#out + 1] = 'freeze=' .. tostring((try(weather, 'SetClockTimeScale', 0)))
+		local ok = (try(weather, 'SetClockTimeScale', 0))
+		PR.clockFrozen = ok == true  -- the Phantom Cigar may let it run while Snake smokes (PR.CigarClock)
+		out[#out + 1] = 'freeze=' .. tostring(ok)
 	end
 	return table.concat(out, ' ')
+end
+
+-- ---- the Phantom Cigar (docs/GUEST.md 18.16, mgsv/Cigar.cpp) ------------------------------------------------------------
+-- Snake smokes the Phantom Cigar (EQP_IT_TimeCigarette): MGSV's time-lapse. While it runs MGSV sets its game status flag
+-- S_IS_TIME_CIGARETTE (TppGameStatusFlag 0x15, enum registration 0x14053F410) and posts its 'Cigarette' sound mute (4, the
+-- mute names compared in 0x14096FFB0). Either one counts: which one MGSV keeps for the whole smoke is UNVERIFIED live. The C++
+-- side (mgsv/Cigar.cpp) debounces the signal, reads MGSV's clock natively (vars.clock) and sends the minutes that pass; here
+-- only the sandbox's frozen clock ([Boot] FreezeClock), on its word (PR.CigarClock): whether MGSV's own time-lapse sets the
+-- clock's speed itself is UNVERIFIED, so it is let run at PR.cigar.scale only if MGSV's clock stood still half a second in.
+function PR.CigarSmoking()
+	if call(TppGameStatus, 'IsSet', '', 'S_IS_TIME_CIGARETTE') == true then return true end
+	if call(TppSoundDaemon, 'CheckCurrentMuteIs', 'Cigarette') == true then return true end
+	return call(TppSoundDaemon, 'CheckHighestMuteIs', 'Cigarette') == true
+end
+
+local function clockScale(scale)
+	local weather = type(TppCommand) == 'table' and TppCommand.Weather or nil
+	return (try(weather, 'SetClockTimeScale', scale))
+end
+
+function PR.Cigar(enabled, scale)
+	if not enabled then
+		PR.cigar = nil
+		return 'off'
+	end
+	PR.cigar = PR.cigar or { on = false, lit = 0 }
+	PR.cigar.scale = scale or 20
+	return string.format('watching (status check %s, mute check %s); the clock %s while he smokes',
+		fn(TppGameStatus, 'IsSet') and 'ok' or 'missing', fn(TppSoundDaemon, 'CheckCurrentMuteIs') and 'ok' or 'missing',
+		PR.clockFrozen and ('is let run at x' .. tostring(PR.cigar.scale) .. ' unless MGSV moves it itself') or 'is not frozen: left as it is')
+end
+
+-- The C++ side's word ('cigar lit|run|out', mgsv/Cigar.cpp ClockGovernor): lit = a smoke starts, the clock is no longer held
+-- frozen (MGSV's own time-lapse may set its speed); run = MGSV's clock stood still half a second in, run it at PR.cigar.scale;
+-- out = the smoke is over (or its signal stuck, or a load): frozen again.
+function PR.CigarClock(what)
+	local c = PR.cigar
+	if not c then return 'off' end
+	if what == 'lit' then
+		c.on = true
+		c.lit = c.lit + 1
+		return 'lit'
+	end
+	if what ~= 'run' and what ~= 'out' then return 'unknown' end
+	if what == 'out' then c.on = false end
+	if not PR.clockFrozen then return 'clock not frozen: left' end
+	if what == 'run' then
+		c.runs = (c.runs or 0) + 1
+		return 'x' .. tostring(c.scale) .. '=' .. tostring((clockScale(c.scale)))
+	end
+	return 'frozen=' .. tostring((clockScale(0)))
+end
+
+-- While he doesn't smoke the sandbox's clock is held frozen: re-frozen every 60 Ticks (~1 s at MGSV's ~60 Hz; the exact time
+-- doesn't matter), whenever MGSV restores its own speed after its time-lapse -- one call, cheap. Only in the loaded sandbox
+-- (State.h LuaView::InGame): not into a load, the title or a cutscene.
+function PR.CigarHold(flags)
+	local c = PR.cigar
+	if c.on or not PR.clockFrozen or PR.tick % 60 ~= 0 then return end
+	local F = PR.F
+	local has = function(b) return math.floor(flags / b) % 2 == 1 end
+	if not has(F.PREPARED) or not has(F.SEQ_GAME) or has(F.TITLE) or has(F.DEMO) then return end
+	c.holds = (c.holds or 0) + 1
+	clockScale(0)
 end
 
 function PR.Weather(name)
@@ -814,6 +963,24 @@ function PR.Poster(name, boxName)
 	return 'press ' .. slot .. ' ' .. tostring(((to - (from or #cycle)) % #cycle))
 end
 
+-- The Phantom Cigar (EQP_IT_TimeCigarette) in a free item slot when the save carries none ([Cigar] TimeSkip: docs/GUEST.md
+-- 18.16), not made current: the player picks it in the item wheel (D-pad left held, right stick on it, R3: Use).
+function PR.CigarItem()
+	if type(vars) ~= 'table' or type(TppEquip) ~= 'table' or type(TppEquip.EQP_IT_TimeCigarette) ~= 'number' then return 'no vars' end
+	local id = TppEquip.EQP_IT_TimeCigarette
+	for i = 0, 7 do
+		if vars.items[i] == id then return 'in item slot ' .. i .. ' (the save has it)' end
+	end
+	-- The last free slot: slot 0 is the current item of a fresh load, and a quick D-pad left tap would light it.
+	for i = 7, 1, -1 do
+		if vars.items[i] == 0 then
+			local ok = try(Player, 'ChangeEquip', { slotType = PlayerSlotType.ITEM, subIndex = i, equipId = id, toActive = false })
+			return ok and ('put into item slot ' .. i) or 'ChangeEquip failed'
+		end
+	end
+	return 'no free item slot'
+end
+
 -- The box in that item slot made Snake's current item (he gets into it: the item menu then opens on it), or the previous
 -- current item back (0 = none: RT is CQC again, not the box).
 function PR.BoxItem(slot)
@@ -858,6 +1025,7 @@ function PR.Tick(commands)
 	if PR.audio and (PR.tick % 60 == 0 or PR.tick == PR.audioHoldUntil) then PR.AudioKeep(false) end
 	if PR.audioRefreshAt and (PR.tick == PR.audioRefreshAt[1] or PR.tick == PR.audioRefreshAt[2]) then PR.AudioRefresh() end
 	local flags, mission, seq = PR.Flags()
+	if PR.cigar then PR.CigarHold(flags) end
 	local name, active = activeBuddy()
 	local bid, bx, by, bz, byaw
 	if name then

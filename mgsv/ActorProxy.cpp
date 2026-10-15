@@ -126,11 +126,13 @@ namespace phantom::guest::proxy::plan
 			}
 			if (clear) {
 				s.proxy = true;
-				s.pos = t->pos;
+				s.pos = ProxyFeet(t->pos, a_centre.y, a_s.height);
+				s.real = t->pos;
 				s.yaw = t->yaw;
 			} else {
 				s.proxy = false;
 				s.pos = ParkPosition(a_centre, si, a_s);
+				s.real = s.pos;
 				s.yaw = 0.0f;
 			}
 		}
@@ -210,6 +212,137 @@ namespace phantom::guest::proxy::plan
 	bool AutoAimWanted(bool a_enabled, bool a_autoAimForProxies, bool a_savesGuarded, std::size_t a_pool, std::size_t a_placed, std::size_t a_unplaced)
 	{
 		return a_enabled && a_autoAimForProxies && a_savesGuarded && a_pool > 0 && a_placed == a_pool && a_unplaced == 0;
+	}
+
+	// ---- inert full proxies (docs/GUEST.md 20.6) --------------------------------------------------------------------------------
+	Height ParseHeight(std::string_view a_text, Height a_fallback)
+	{
+		if (a_text == "ground") {
+			return Height::kGround;
+		}
+		if (a_text == "enemy") {
+			return Height::kEnemy;
+		}
+		return a_fallback;
+	}
+
+	Vec3 ProxyFeet(const Vec3& a_target, float a_groundY, Height a_mode)
+	{
+		return a_mode == Height::kGround && std::isfinite(a_groundY) ? Vec3{ a_target.x, a_groundY, a_target.z } : a_target;
+	}
+
+	bool ReadBackOk(const Vec3& a_put, const Vec3& a_at, float a_xzTol, float a_yTol)
+	{
+		const Vec3 d = a_at - a_put;
+		return d.Finite() && d.LengthXZ() < a_xzTol && std::fabs(d.y) < a_yTol;
+	}
+
+	bool OwnsLocation(const Vec3& a_cache, const Vec3& a_feet, float a_tol)
+	{
+		const Vec3 d = a_cache - a_feet;
+		return d.Finite() && d.LengthXZ() <= a_tol;
+	}
+
+	namespace
+	{
+		// Where the ray (a_origin + t * a_d, unit a_d, t in (0, a_range]) passes within a_radius of the vertical axis a_feet ..
+		// a_feet + a_height: its t, or -1. a_denom = 1 - a_d.y^2 (> 0: not near-vertical).
+		float RayMeetsAxis(const Vec3& a_origin, const Vec3& a_d, float a_denom, const Vec3& a_feet, float a_radius, float a_height, float a_range)
+		{
+			const Vec3  w = a_origin - a_feet;
+			const float dw = a_d.x * w.x + a_d.y * w.y + a_d.z * w.z;
+			const float s = std::clamp((w.y - a_d.y * dw) / a_denom, 0.0f, a_height);
+			const float t = s * a_d.y - dw;  // the ray point nearest the axis point at height s
+			if (t <= 0.0f || t > a_range) {
+				return -1.0f;
+			}
+			const Vec3 onRay = a_origin + a_d * t;
+			const Vec3 onAxis = a_feet + Vec3{ 0.0f, s, 0.0f };
+			return (onRay - onAxis).Length() > a_radius ? -1.0f : t;
+		}
+	}
+
+	int CorrectShot(const Vec3& a_origin, Vec3& a_dir, const Body* a_bodies, std::size_t a_count, float a_radius, float a_bodyHeight, float a_range)
+	{
+		const float len = a_dir.Length();
+		if (!a_bodies || !a_count || !(len > 1e-6f) || !a_dir.Finite() || !a_origin.Finite()) {
+			return -1;
+		}
+		const Vec3 d = a_dir * (1.0f / len);
+		// A near-vertical round never meets a standing body sideways: nothing to turn.
+		const float denom = 1.0f - d.y * d.y;
+		if (denom < 1e-4f) {
+			return -1;
+		}
+		// The camera is MGSV's: a round the player aimed by hand at a character (or one that just happens to cross one) already
+		// goes where Elden Ring has him. Turning it too would lift it a second time over his head, or onto the stand-in of someone
+		// standing on a roof in front of him. So any real body on the ray keeps the round as it is.
+		for (std::size_t i = 0; i < a_count; ++i) {
+			const auto& b = a_bodies[i];
+			if (b.real.Finite() && RayMeetsAxis(a_origin, d, denom, b.real, a_radius, a_bodyHeight, a_range) >= 0.0f) {
+				return -1;
+			}
+		}
+		int   best = -1;
+		float bestT = a_range;
+		Vec3  bestPoint;
+		for (std::size_t i = 0; i < a_count; ++i) {
+			const auto& b = a_bodies[i];
+			if (!b.placed.Finite() || !b.real.Finite()) {
+				continue;
+			}
+			const float t = RayMeetsAxis(a_origin, d, denom, b.placed, a_radius, a_bodyHeight, bestT);
+			if (t < 0.0f) {
+				continue;
+			}
+			best = static_cast<int>(i);
+			bestT = t;
+			bestPoint = a_origin + d * t + (b.real - b.placed);
+		}
+		if (best < 0) {
+			return -1;
+		}
+		const Vec3  to = bestPoint - a_origin;
+		const float toLen = to.Length();
+		if (!(toLen > 1e-4f)) {
+			return -1;
+		}
+		a_dir = to * (1.0f / toLen);
+		return best;
+	}
+
+	PhaseStep PhaseGuard::Update(int a_phase, std::uint64_t a_nowMs, const PhaseSettings& a_s)
+	{
+		PhaseStep st;
+		if (a_phase < 0) {
+			return st;  // unknown (the read failed): neither a new alert nor its end
+		}
+		if (a_phase == 0) {
+			m_since = 0;
+			return st;
+		}
+		if (!m_since) {
+			m_since = std::max<std::uint64_t>(a_nowMs, 1);
+			m_calmAt = m_sweepAt = a_nowMs;
+			++m_alerts;
+			st.sweep = true;
+			st.calm = true;
+		} else {
+			if (a_nowMs - m_calmAt >= a_s.calmEveryMs) {
+				m_calmAt = a_nowMs;
+				st.calm = true;
+			}
+			// Again while it stays up: a reinforcement (heli, truck) is enabled some time into the alert, not at its first read.
+			if (a_nowMs - m_sweepAt >= a_s.sweepEveryMs) {
+				m_sweepAt = a_nowMs;
+				st.sweep = true;
+			}
+		}
+		if (!m_gaveUp && a_nowMs - m_since >= a_s.giveUpMs) {
+			m_gaveUp = true;
+			st.giveUp = true;
+		}
+		return st;
 	}
 }
 

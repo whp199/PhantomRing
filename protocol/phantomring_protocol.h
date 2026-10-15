@@ -28,14 +28,17 @@
 namespace phantom::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x47524850;  // "PHRG"
-	inline constexpr std::uint32_t kVersion = 12;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
+	inline constexpr std::uint32_t kVersion = 14;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
 	                                              // v5: kGEvThrow, kGEvPlaced, kGEvPlacedGone, kHEvDetonate;
 	                                              // v6: GuestState aimThrow* (0xA8..0xC4) + kGuestThrowAim; v7: kGEvBuddyOrder;
 	                                              // v8: kGuestInBox, kGuestBoxPoster, kGEvFire pad[1] = MGSV damage share;
 	                                              // v9: kPlacedAgain (kGEvPlaced pad[0]: an announcement repeated);
 	                                              // v10: kGuestNvg, kHEvRested, kHEvTarnished;
 	                                              // v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100);
-	                                              // v12: kGEvFulton
+	                                              // v12: kGEvFulton;
+	                                              // v13: kGuestBinoculars, kGuestDiving, kGEvTimeSkip, kGEvCqc, kAmmoDecoy,
+	                                              //      kOwnerProjectile;
+	                                              // v14: kGuestJumping
 	inline constexpr wchar_t       kDefaultMapping[] = L"file:Z:\\dev\\shm\\phantomring_v1";
 
 	// ---- region offsets ---------------------------------------------------------------------
@@ -152,6 +155,11 @@ namespace phantom::proto
 		kGuestInBox = 1u << 14,      // (v8) Snake is inside a cardboard box (the host hides him from Elden Ring's enemies while he keeps still)
 		kGuestBoxPoster = 1u << 15,  // (v8) ...and it is a box with a poster/pin-up on it (MGSV: soldiers who see it are distracted)
 		kGuestNvg = 1u << 16,        // (v10) Snake's night-vision goggles are on (the host recreates the effect on Elden Ring's frame)
+		kGuestBinoculars = 1u << 17, // (v13) Snake looks through his binoculars (the camera is their view): the host marks the Elden Ring
+		                             // characters near the view centre (MGSV-style markers with distance, through walls)
+		kGuestDiving = 1u << 18,     // (v13) Snake is in MGSV's dive (X): the host may carry the puppet over short gaps/ledges
+		kGuestJumping = 1u << 19,    // (v14) Snake jumps ([Jump] button, MGSV has no jump): set from the press until he lands in MGSV; the host
+		                             // gives the puppet an Elden Ring-like jump through its collision on the rising edge
 	};
 
 	struct GuestState
@@ -311,6 +319,21 @@ namespace phantom::proto
 		                       // pad[0] | pad[1] << 32 = that character's ActorRecord handle, v0 = the proxy's position (MGSV world),
 		                       // a = 1 the balloon went up (MGSV's own fulton succeeded), 0 = it failed/was cancelled; the host
 		                       // removes that enemy from Elden Ring's world (no death drop) and shows the balloon
+		kGEvTimeSkip = 13,     // (v13) MGSV's clock was fast-forwarded (Phantom Cigar): a = MGSV game minutes advanced; the host advances
+		                       // Elden Ring's clock by the same game time (WorldAreaTime)
+		kGEvCqc = 14,          // (v13) a CQC grab/hold/throw/choke/interrogate/release began: a = CqcAction, v0 = Snake (MGSV world),
+		                       // v1 = his facing (unit), b = range (mm) of the grab; pad[0] = MGSV's raw CQC action id; pad[1] = the
+		                       // target: a proxy's ER handle low 32 bits if the grab is on a proxy (ActorProxy), else 0
+	};
+
+	enum CqcAction : std::uint32_t  // (v13) kGEvCqc a
+	{
+		kCqcGrab = 0,
+		kCqcHold = 1,
+		kCqcThrow = 2,
+		kCqcChoke = 3,
+		kCqcInterrogate = 4,
+		kCqcRelease = 5,
 	};
 
 	// (v9) kGEvPlaced pad[0] bit: this one was announced before (to this host or an earlier one) and is announced again (the
@@ -324,6 +347,7 @@ namespace phantom::proto
 		kAmmoTranq = 1,   // sleep build-up in Elden Ring
 		kAmmoStun = 2,    // stagger / poise damage
 		kAmmoSmoke = 3,   // (v4) kGEvExplosion only: smoke / flare, no damage
+		kAmmoDecoy = 4,   // (v13) kGEvPlaced only: a decoy (enemies who see it stop and look at it; no damage)
 	};
 
 	enum MeleeKind : std::uint32_t
@@ -477,6 +501,7 @@ namespace phantom::proto
 		kOwnerBuddy = 1,
 		kOwnerVehicle = 2,
 		kOwnerOther = 3,
+		kOwnerProjectile = 4,  // (v13) a thrown grenade / fired rocket in flight (its own MGSV mesh, drawn at the host's flown copy)
 	};
 
 	inline constexpr std::uint32_t kDrawTextures = 6;

@@ -44,6 +44,11 @@ namespace phantom::er::Explosion
 	// D-Walker's flamethrower: one flame flying from a_from along a_dir (rate-limited, [Combat] flame_per_second).
 	void Flame(const Frame& a_frame, const Vec3& a_from, const Vec3& a_dir);
 
+	// (roadmap 5.4) A muzzle flash at a shot: explosion_muzzle's effect, cut after [Combat] muzzle_life s, a little in front of
+	// a_muzzle along a_dir (Elden Ring world); rate-limited (muzzle_per_second); none while muzzle_flash is off, or for a
+	// tranquilizer round (a_tranq) without muzzle_tranq.
+	void Muzzle(const Frame& a_frame, const Vec3& a_muzzle, const Vec3& a_dir, bool a_tranq);
+
 	// The object-only attack at a_at (a shot's impact, a strike that hit no one, a bump): breaks a destructible asset
 	// there, nothing else. a_dir: where it came from (the sphere is put a little back along it, on the surface).
 	void Break(const Frame& a_frame, const Vec3& a_at, const Vec3& a_dir, std::string_view a_what);
@@ -54,7 +59,7 @@ namespace phantom::er::Explosion
 	void OnPuppetStop();
 	void OnWorldShift(const Vec3& a_delta);  // er/WorldShift.h: the clouds' spots move with Elden Ring's origin
 
-	// Dev console: `boom [status] | boom <lethal|stun|sleep|smoke|flame|breaker> [radius] | boom pool | boom mode
+	// Dev console: `boom [status] | boom <lethal|stun|sleep|smoke|flame|breaker|muzzle> [radius] | boom pool | boom mode
 	// auto|bullet|sfx|off|ini | boom restore`.
 	std::string Console(const std::vector<std::string>& a_words, const Frame& a_frame);
 	std::string Describe();

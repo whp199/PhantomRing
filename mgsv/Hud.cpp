@@ -50,6 +50,13 @@ namespace phantom::guest::capture::hud
 		constexpr std::uint64_t    kNvgOverlayPs = 0xae282a7fe2bdbdd9;
 		std::atomic<bool>          g_nightVision{ false };
 		std::atomic<std::uint64_t> g_nvgLeftOut{ 0 };
+		// The binoculars' (and scopes') lens: a UI draw (a mesh ring, idx 216) whose pixel shader samples MGSV's whole picture
+		// (t0 inScreenTexture 1280x720, t1 inNormalTexture: the lens' refraction) and so painted MGSV's airport around the lens in
+		// Elden Ring's frame (live 2026-10-14, `!capture probe` with RB held: the only UI draw with a screen texture; with it left
+		// out the layer keeps the binoculars' HUD and dark vignette and none of MGSV's world). MGSV's world never belongs in the
+		// layer, so it is always left out (live: none drawn in third person).
+		constexpr std::uint64_t    kLensScreenPs = 0x2f38cdb182e4da4f;
+		std::atomic<std::uint64_t> g_lensLeftOut{ 0 };
 		std::atomic<std::uint64_t> g_jobs{ 0 }, g_uiDraws{ 0 }, g_mirrored{ 0 }, g_skippedTarget{ 0 }, g_windowDraws{ 0 }, g_published{ 0 }, g_skippedEmpty{ 0 },
 			g_notReady{ 0 };
 
@@ -373,6 +380,10 @@ namespace phantom::guest::capture::hud
 			g_nvgLeftOut.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
+		if (a_s.psInfo && a_s.psInfo->hash == kLensScreenPs) {
+			g_lensLeftOut.fetch_add(1, std::memory_order_relaxed);
+			return;
+		}
 		auto* t = TargetFor(rt.width, rt.height, rt.formats[0]);
 		if (!t) {
 			return;
@@ -501,10 +512,12 @@ namespace phantom::guest::capture::hud
 		const auto* t = g_target.load(std::memory_order_acquire);
 		const auto  main = g_mainSize.load();
 		return std::format("hud: hooked {} enabled {} failed {} every {}; ui jobs {} ui draws {} mirrored {} (other targets {}); main target {}x{}; layer {}; "
-		                   "published {} (empty skipped {}, copies not ready {}); night vision {} ({} overlay draws left out); dev skip ps {:#x} ({} left out)",
+		                   "published {} (empty skipped {}, copies not ready {}); night vision {} ({} overlay draws left out); lens draws of MGSV's picture left "
+		                   "out {}; dev skip ps {:#x} ({} left out)",
 			g_hooked.load(), g_enabled.load(), g_failed.load(), g_every.load(), g_jobs.load(), g_uiDraws.load(), g_mirrored.load(), g_skippedTarget.load(), main >> 32,
 			main & 0xFFFFFFFF, t ? std::format("{}x{} {}", t->width, t->height, d3d::FormatName(t->rtvFormat)) : std::string("none"), g_published.load(),
-			g_skippedEmpty.load(), g_notReady.load(), g_nightVision.load() ? "on" : "off", g_nvgLeftOut.load(), g_skipPs.load(), g_skippedPs.load());
+			g_skippedEmpty.load(), g_notReady.load(), g_nightVision.load() ? "on" : "off", g_nvgLeftOut.load(), g_lensLeftOut.load(), g_skipPs.load(),
+			g_skippedPs.load());
 	}
 
 	std::string ProbeLine(const d3d::ContextState& a_s, const d3d::DrawArgs& a_a)

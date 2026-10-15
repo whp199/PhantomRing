@@ -178,7 +178,33 @@ namespace phantom::er::render
 		a_post.push_back(d3d::Transition(a_res, a_to, a_from, a_sub));
 	}
 
-	std::uint32_t DrawFlags(const proto::DrawRecord& a_d, const RenderAssets::Mesh& a_mesh, const RenderAssets::Texture* a_albedo, const RenderAssets::Texture* a_normal)
+	bool RoleFits(RenderAssets::Texture& a_tex, unsigned a_slot, std::uint32_t a_material)
+	{
+		const auto mode = MaterialRoles::ModeOf(Cfg().render.roleGuard);
+		if (mode == MaterialRoles::Mode::kOff) {
+			return true;
+		}
+		// log: the same verdicts, logged once per texture, but bound anyway (nothing on screen changes).
+		const bool acts = mode == MaterialRoles::Mode::kOn;
+		auto       first = [&] { return !(a_tex.noted.fetch_or(MaterialRoles::kNotedRole, std::memory_order_relaxed) & MaterialRoles::kNotedRole); };
+		const auto group = MaterialRoles::GroupOf(a_slot);
+		if (group == MaterialRoles::kAlbedo && MaterialRoles::NormalLike(a_tex.traits)) {
+			MaterialRoles::NoteRefused(a_tex.key, a_slot, a_material, 0, true, acts, first());
+			return !acts;
+		}
+		const auto seen = a_tex.roles.load(std::memory_order_relaxed);
+		if (!MaterialRoles::Admit(seen, group)) {
+			MaterialRoles::NoteRefused(a_tex.key, a_slot, a_material, seen, false, acts, first());
+			return !acts;  // not recorded either way: the role it was first drawn in stays the reference
+		}
+		if (!(seen & group)) {
+			a_tex.roles.fetch_or(group, std::memory_order_relaxed);
+		}
+		return true;
+	}
+
+	std::uint32_t DrawFlags(const proto::DrawRecord& a_d, const RenderAssets::Mesh& a_mesh, const RenderAssets::Texture* a_albedo, const RenderAssets::Texture* a_normal,
+		const RenderAssets::Texture* a_layer)
 	{
 		const auto&   rc = Cfg().render;
 		std::uint32_t f = 0;
@@ -198,7 +224,16 @@ namespace phantom::er::render
 			f |= Shaders::kShCamo;
 		}
 		if (std::find(rc.posterMaterials.begin(), rc.posterMaterials.end(), a_d.material) != rc.posterMaterials.end()) {
-			f |= Shaders::kShPoster;
+			// on: only a box that carries a poster (other boxes of the same shader may have a layer mask there); log: as before,
+			// with texture 4's measured share logged once (er/MaterialRoles.h).
+			const auto mode = MaterialRoles::ModeOf(rc.posterCheck);
+			if (mode != MaterialRoles::Mode::kOff && a_layer) {
+				const bool first = !(a_layer->noted.fetch_or(MaterialRoles::kNotedPoster, std::memory_order_relaxed) & MaterialRoles::kNotedPoster);
+				MaterialRoles::NotePoster(a_d.material, a_layer->key, a_layer->traits, mode, first);
+			}
+			if (mode != MaterialRoles::Mode::kOn || (a_layer && MaterialRoles::PosterLike(a_layer->traits))) {
+				f |= Shaders::kShPoster;
+			}
 		}
 		if (a_d.flags & proto::kDrawTranslucent) {
 			f |= Shaders::kShTranslucent;
@@ -266,6 +301,9 @@ namespace phantom::er::render
 		const UINT                             slot = a_rec.descUsed;
 		for (UINT r = 0; r < proto::kDrawTextures; ++r) {
 			tex[r] = d.textures[r] ? RenderAssets::FindTexture(d.textures[r]) : nullptr;
+			if (tex[r] && !RoleFits(*tex[r], r, d.material)) {
+				tex[r] = nullptr;  // an empty slot: the shader's plain default instead of another model's map
+			}
 			a_rec.device->CopyDescriptorsSimple(1, a_rec.Cpu(slot + r), tex[r] ? RenderAssets::Srv(*tex[r]) : a_rec.nullSrv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 			if (tex[r]) {
 				texMask |= 1u << r;
@@ -288,7 +326,7 @@ namespace phantom::er::render
 		c.bones = bones;
 		c.prev = prev;
 		c.texSlot = slot;
-		c.flags = DrawFlags(d, *mesh, tex[0].get(), tex[1].get());
+		c.flags = DrawFlags(d, *mesh, tex[0].get(), tex[1].get(), tex[4].get());
 		c.texMask = texMask;
 		c.mats = mats;
 		SetDraw(a_rec, d, c, a_fade);

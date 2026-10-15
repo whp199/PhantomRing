@@ -3,6 +3,7 @@
 #include "Addresses.h"
 #include "Game.h"
 #include "InputBridge.h"
+#include "Kbm.h"
 #include "Mem.h"
 #include "Singletons.h"
 
@@ -383,6 +384,8 @@ namespace phantom::er::MemDiff
 			in[0].ki.dwFlags = w[1] == "keyup" ? KEYEVENTF_KEYUP : 0;
 			in[1].ki.dwFlags = KEYEVENTF_KEYUP;
 			n = w[1] == "key" ? 2 : 1;
+		} else if (w.size() > 1 && w[1] == "kbm") {
+			return Kbm::Command(w.size() > 2 ? w[2] : std::string(), w.size() > 3 ? w[3] : std::string());  // [Keyboard] (er/Kbm.h)
 		} else if (w.size() > 2 && w[1] == "virtualpad") {
 			return InputBridge::SetVirtualPad(w[2] == "on");
 		} else if (w.size() > 3 && w[1] == "mouse") {
@@ -391,8 +394,30 @@ namespace phantom::er::MemDiff
 			in[0].mi.dy = std::strtol(w[3].c_str(), nullptr, 10);
 			in[0].mi.dwFlags = MOUSEEVENTF_MOVE;
 			n = 1;
+		} else if (w.size() > 2 && w[1] == "wheel") {
+			// Notches (+ = away from the player, up): Elden Ring's DirectInput mouse reads them as lZ (120 per notch).
+			in[0].type = INPUT_MOUSE;
+			in[0].mi.mouseData = static_cast<DWORD>(std::strtol(w[2].c_str(), nullptr, 10) * WHEEL_DELTA);
+			in[0].mi.dwFlags = MOUSEEVENTF_WHEEL;
+			n = 1;
+		} else if (w.size() > 3 && w[1] == "mbutton" && (w[3] == "down" || w[3] == "up")) {
+			// A real mouse button event (DirectInput's rgbButtons and GetAsyncKeyState both see it), unlike a VK_xBUTTON
+			// keyboard event, which only the async key state carries.
+			const bool down = w[3] == "down";
+			in[0].type = INPUT_MOUSE;
+			if (w[2] == "left") {
+				in[0].mi.dwFlags = down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP;
+			} else if (w[2] == "right") {
+				in[0].mi.dwFlags = down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP;
+			} else if (w[2] == "middle") {
+				in[0].mi.dwFlags = down ? MOUSEEVENTF_MIDDLEDOWN : MOUSEEVENTF_MIDDLEUP;
+			} else {
+				return "input mbutton left|right|middle down|up";
+			}
+			n = 1;
 		} else {
-			return "input key|keydown|keyup <vk> | mouse <dx> <dy> | virtualpad on|off";
+			return "input key|keydown|keyup <vk> | mouse <dx> <dy> | wheel <notches> | mbutton left|right|middle down|up | virtualpad on|off | "
+			       "kbm [on|off|sens|accel|antidz|smooth|minspeed <v>]";
 		}
 		const UINT sent = ::SendInput(n, in, sizeof(INPUT));
 		return std::format("SendInput: {}/{} event(s) (foreground window {})", sent, n, static_cast<void*>(::GetForegroundWindow()));

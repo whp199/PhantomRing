@@ -10,6 +10,7 @@
 // the GPU is still reading.
 
 #include "D3D12Util.h"
+#include "MaterialRoles.h"
 #include "phantomring_protocol.h"
 
 #include <atomic>
@@ -48,6 +49,9 @@ namespace phantom::er::RenderAssets
 		std::int32_t                descriptor{ -1 };  // slot in the CPU SRV heap
 		std::uint32_t               uploadBytes{ 0 };
 		std::atomic<bool>           ready{ false };
+		MaterialRoles::Traits       traits;             // from its own blocks, before it is published (er/MaterialRoles.h)
+		std::atomic<std::uint8_t>   roles{ 0 };         // MaterialRoles groups it has been drawn in (role guard)
+		mutable std::atomic<std::uint8_t> noted{ 0 };   // MaterialRoles::kNoted*: already logged/counted once
 		~Texture();
 	};
 

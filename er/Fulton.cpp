@@ -306,6 +306,11 @@ namespace phantom::er::Fulton
 		}
 	}
 
+	bool IsLifting(std::uint64_t a_handle)
+	{
+		return std::any_of(g_lifts.begin(), g_lifts.end(), [&](const Lifting& a_l) { return a_l.handle == a_handle; });
+	}
+
 	void OnEnemiesBack(const char* a_why)
 	{
 		for (auto& l : g_lifts) {

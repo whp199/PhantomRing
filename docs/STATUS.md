@@ -1,4 +1,4 @@
-# Status (2026-10-14, 0.3.0-alpha)
+# Status (2026-10-15, 0.4.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,13 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## Live passes A and B, 2026-10-14/15 night (real MGSV + Elden Ring, both on the default mapping; 0.4.0-alpha)
+
+Every feature of rounds 1 and 1b (keyboard and mouse, binocular marking, the Phantom Cigar, dive = hop, CQC holds and throws,
+projectile meshes and muzzle flashes, C4, the D-Horse treadmill, full proxies, material colours, solid ground, the jump,
+decoys) was run with both games, then a regression pass over README's How to play and 10 minutes of continuous play; results,
+fixes and the defaults they set are in [FEATURES-1.md](FEATURES-1.md) ("Live pass A", "Live pass B").
 
 ## Combined run, 2026-10-14 afternoon (real MGSV + Elden Ring, both on the default mapping; 0.3.0-alpha)
 
@@ -229,8 +236,8 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
   [docs/COMBAT.md](COMBAT.md) §9), D-Walker's flamethrower with Dragonfire flames. The smoke looks more like brown
   dust than MGSV's white smoke. Muzzle flashes: none.
 - The grenade in flight is a simple ball, a rocket a small dark ball with a glowing trail, not MGSV's models. CQC
-  throws/chokes need a target MGSV doesn't have. C4's detonator button in MGSV wasn't found (RT, RB, B, X, Y, stick
-  clicks, D-pad: nothing), so placed C4 can't be set off yet.
+  throws/chokes need a target MGSV doesn't have. C4: MGSV's own detonator (Y with C4 in hand) never answers in the sandbox;
+  PhantomRing sets the oldest C4 off on a Y tap instead (`[Combat] C4Backup`, on since live pass A 2026-10-14: 2 of 2 taps).
 - Breaking things: sturdy ones (defence 90: Limgrave's wooden palisade fences) don't break even in a blast; a few low
   crates stayed up under CQC strikes; pots that break when the Tarnished just walks into them weren't near the test
   spots (UNVERIFIED for Snake: shooting, striking or blowing them up works as for crates). [docs/HOST.md](HOST.md)
@@ -247,17 +254,30 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
   and 1.6 deg (frames of ~19 ms) and one 2 m camera pull-in by collision. Not investigated yet.
 - Regeneration after Elden Ring's hits now follows MGSV's own curve (fixed; Margit kills a Snake who stands still in ~12 s);
   life can tick up by up to ~2% for a moment before the curve's first write after a hit.
-- D-Horse: no treadmill while riding (nothing found moves the horse in MGSV), so MGSV's own map limits a ride, and after a
-  far dismount the horse jumps back in Elden Ring and gallops in. Galloping off a ledge hurts as a fall. Quiet: untested.
+- D-Horse: the treadmill moves it in MGSV (`[Buddy] HorseTreadmill`, on since live pass B 2026-10-15: a straight 300 m ride, no
+  jump after the dismount). Galloping off a ledge hurts as a fall; Limgrave's ravines kill. Quiet: untested.
 - D-Dog's coat is sometimes drawn in false colours (orange/green; normal grey at other times), and D-Walker right next to the
   camera in magenta/orange (MGSV's near-camera fade): materials the capture doesn't map yet. The cardboard box looks very dark.
+  Cause found offline (2026-10-14, feature/materials): stale texture keys in the guest after a minute (another model's SRM /
+  normal map / layer noise drawn as the diffuse) and, a hypothesis, the box poster rule on a box without one; fixed in the
+  guest (`[Capture] Revalidate`), with host checks (`[Render] role_guard`, `poster_check`) that only log by default; live pass A
+  2026-10-14: no false colours after two buddy swaps (docs/HOST.md "Material roles"); the box not re-checked.
 - Low ceilings: Snake stops ~0.2 m short of an underside lower than him (his ahead probe), also at table edges and overhangs.
+- Wooden floors: Snake fell through the wooden scaffolding on Stormveil's side the Tarnished had climbed (2026-10-14). Fixed
+  (the ground under his whole body, five rays, and the characters' own collision layer for his ground rays: HOST.md "Collision
+  filters"); live pass A 2026-10-14: he stayed up on that scaffold, its landings and stairs.
 - Fulton: Elden Ring's balloon goes up ~5 s after Y is let go (it waits for MGSV's balloon to lift the stand-in); Elden Ring's
   sleep lasts ~50 s, and a soldier that wakes meanwhile can't be fultoned.
-- Full proxies (`[Proxies] Enabled`, off by default): with the real Elden Ring they set MGSV on alert (an MGSV reinforcement
-  shot Snake on the apron) and can't stand at heights the apron doesn't have: not for play yet.
+- Full proxies (`[Proxies] Enabled`, off by default): inert since round 1 -- live pass B kept MGSV at alert phase 0 for 11
+  minutes, no stand-in shot Snake -- but LT never swung the aim onto a stand-in: not worth turning on yet.
 - Ladders: walking on into the hole at a ladder's top drops Snake down the shaft (face it and press Y on "Descend").
-- Flasks, spirit ashes, Torrent and jumps need Tarnished mode (ladders: Snake's Y hands the climb to Elden Ring).
+- Flasks, spirit ashes and Torrent need Tarnished mode (ladders: Snake's Y hands the climb to Elden Ring).
+- Snake's jump (R3, protocol v14 `kGuestJumping`: the guest lifts him in MGSV, the host jumps the puppet; HOST.md "Jumps",
+  GUEST.md §6): live pass A 2026-10-14: 1.2 m, onto 1.1-1.3 m rock steps and a plank walkway at Stormveil's cliffside (the
+  way in that needed it), the camera rides with him; MGSV's look is a short fall. A gap and a 1.7 m wall not tried live.
+- Back to Snake on a wooden scaffold: he fell through and died (player, 2026-10-14). Fixed (the characters' collision layer
+  for his ground rays, five rays under his body) and verified live the same night on that scaffold: he stands, walks its
+  landings and stairs; the old filter saw its planks 0.5-1.4 m too low (docs/FEATURES-1.md "Live pass A").
 - Skipping a boss's intro cutscene: fixed (e226ea5, 6b6ac58) and unit-tested, not re-tried live (Margit's plays once).
 - MGSV's goggles on Snake's head are drawn with a noisy texture on their lenses.
 - MGSV advances its game one fixed step per frame and still drops to ~54 frames/s while the camera turns: Snake's game

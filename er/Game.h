@@ -123,6 +123,37 @@ namespace phantom::er::game
 	bool CanCastRay();
 	bool CastRay(const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit, const std::uint8_t* a_ignore, std::uint32_t a_filter);
 
+	// Snake's own ray (docs/HOST.md "Collision filters"): cast_ray's query and collector, built here, with one difference: hits
+	// the game's snipe collector drops for their material class (2 or 5: material id / 100) are kept when a_keep has that bit
+	// (bit c = class c). Live 2026-10-14: Stormveil's wooden walkways and scaffolds are class 5 -- the Tarnished stands on them,
+	// cast_ray never sees them, and Snake fell through. Same filter, same ignored character, same closest hit otherwise.
+	// false (nothing cast) when the addresses aren't verified: callers fall back to CastRay.
+	// a_layers: the hknp broad-phase layers the query looks in (the query's +0x24 byte, ANDed with each layer's mask byte; cast_ray
+	// uses 0xFB). Live 2026-10-14 the Stormveil wooden walkways are in the layer whose mask is 0x04: cast_ray never looks there.
+	inline constexpr std::uint8_t kCastRayLayers = 0xFB;
+	bool CanCastRayKeep();
+	bool CastRayKeep(const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit, const std::uint8_t* a_ignore, std::uint32_t a_filter, std::uint32_t a_keep,
+		std::uint8_t a_layers = kCastRayLayers);
+
+	// One hit of CastRayAll: Havok's collision result for it.
+	struct RayHit
+	{
+		Vec3          pos;
+		Vec3          normal;
+		float         fraction{ 0 };
+		std::uint32_t body{ 0 };         // hknpBodyId
+		std::uint16_t hkMaterial{ 0 };   // the shape's hknpMaterialId
+		std::uint32_t shapeKey{ 0 };
+		std::uint32_t shapeFilter{ 0 };  // the shape's collision filter info (bits 0-6 = its layer)
+		std::int32_t  material{ -1 };    // Elden Ring's material id (0xC75570; -1 none): id / 100 = the class the collector drops
+	};
+	// Every hit along the ray that a_filter lets through, nearest first, whatever its material (diagnostics: `call rayall`).
+	// Returns how many (at most a_max are written); -1 when it can't cast.
+	int CastRayAll(const Vec3& a_from, const Vec3& a_delta, const std::uint8_t* a_ignore, std::uint32_t a_filter, RayHit* a_out, int a_max,
+		std::uint8_t a_layers = kCastRayLayers);
+	// The broad-phase layers' mask bytes (the world's hknpWideBroadPhase: +0x10 layers, +0x18 count, each layer's +0x19D0), for the log.
+	std::string BroadPhaseLayers();
+
 	// Camera: the final render camera (CSCamera.pers_cam_1); nullptr if unavailable.
 	std::uint8_t* PersCam1();
 	std::uint8_t* ChrCamObject();

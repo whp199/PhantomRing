@@ -12,6 +12,7 @@
 #include "Ini.h"
 #include "Link.h"
 #include "Log.h"
+#include "ProjectileTag.h"
 #include "phantomring_protocol.h"
 
 #include <windows.h>
@@ -109,17 +110,22 @@ namespace phantom::guest::capture
 			bool          failed{ false };
 			std::uint32_t sentGeneration{ ~0u };
 			std::vector<std::uint8_t> payload;  // kept for a resend after a host re-attach
+			// The game's buffers this entry was built from and which copy of each (assets::Serial): see Stale().
+			ID3D11Resource* res[d3d::kVbSlots + 1]{};
+			std::uint64_t   serial[d3d::kVbSlots + 1]{};
 		};
 		struct TexEntry
 		{
 			std::uint64_t key{ 0 };
 			bool          failed{ false };
 			std::uint32_t sentGeneration{ ~0u };
+			std::uint64_t serial{ 0 };  // which copy of the game's texture the key is for (assets::Serial); 0 = none yet
 			std::shared_ptr<const assets::TextureBytes> bytes;
 		};
 		std::unordered_map<std::uint64_t, MeshEntry>   g_meshes;    // by MeshSource::Hash (session-local identity)
 		std::unordered_map<ID3D11Texture2D*, TexEntry> g_textures;  // by the game's texture (AddRef'd by assets)
 		std::atomic<std::uint64_t>                      g_published{ 0 }, g_lastDraws{ 0 }, g_skipped{ 0 }, g_meshesSent{ 0 }, g_texturesSent{ 0 }, g_proxyDrops{ 0 };
+		std::atomic<std::uint64_t>                      g_restarted{ 0 }, g_pruned{ 0 };  // pointer-keyed entries dropped as stale (Stale())
 		std::uint64_t                                   g_presentCount{ 0 };
 		std::vector<std::uint8_t>                       g_list;
 
@@ -178,7 +184,11 @@ namespace phantom::guest::capture
 				db = bx * bx + by * by + bz * bz;
 			}
 			std::uint32_t owner = ~0u;
-			if (ds < 2.5f * 2.5f && ds <= db) {
+			// (v13) The grenade / rocket Snake just released: a rigid draw where it must be by now (ProjectileTag.h), near him or not.
+			const float origin[3] = { world[3], world[7], world[11] };
+			if (!(object[32] > 0.0f) && projectile::Tag(rec ? rec->frame : in.frame, origin)) {
+				owner = proto::kOwnerProjectile;
+			} else if (ds < 2.5f * 2.5f && ds <= db) {
 				owner = proto::kOwnerPlayer;
 			} else if (db < 4.0f * 4.0f) {
 				owner = proto::kOwnerBuddy;
@@ -187,8 +197,9 @@ namespace phantom::guest::capture
 				return;
 			}
 			// ActorProxy ([Proxies]): a pool soldier standing in for an Elden Ring enemy near Snake or the buddy is never theirs.
-			// The Fulton anchor's sleeping soldier lies right beside Snake (FultonAnchor.cpp): never his either.
-			if (const float at[3] = { world[3], world[7], world[11] }; proxy::ExcludesDraw(at, root) || fulton::ExcludesDraw(at, root)) {
+			// The Fulton anchor's sleeping soldier lies right beside Snake (FultonAnchor.cpp): never his either. A projectile tag too:
+			// a proxy's rifle can sit on a rocket's line; a grenade passing a proxy only loses that frame's tag (the host needs two).
+			if (proxy::ExcludesDraw(origin, root) || fulton::ExcludesDraw(origin, root)) {
 				g_proxyDrops.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
@@ -243,10 +254,42 @@ namespace phantom::guest::capture
 			g_acc.push_back(std::move(c));
 		}
 
+		// Our caches below are keyed by MGSV's pointers, but our reference to a resource lasts only as long as its copy
+		// (assets::Evict, a minute after its last use): after that MGSV may free it and create another one at the same
+		// address. Before 2026-10-14 the keys were kept forever, so a texture made later at a freed address (a buddy
+		// deployed later, a higher-resolution texture streamed in as the camera nears) went out as the OLD texture's key:
+		// D-Dog's coat and D-Walker next to the camera in other maps' colours, the box black (docs/GUEST.md 15.3).
+		using keys::Stale;  // the copy an entry was made from is no longer the current one (CaptureKeys.h, unit-tested)
+
+		void RememberSources(MeshEntry& a_m, const MeshSource& a_src)
+		{
+			for (unsigned i = 0; i < d3d::kVbSlots; ++i) {
+				a_m.res[i] = a_src.vb[i].buffer;
+			}
+			a_m.res[d3d::kVbSlots] = a_src.ib;
+			for (unsigned i = 0; i <= d3d::kVbSlots; ++i) {
+				a_m.serial[i] = a_m.res[i] ? assets::Serial(a_m.res[i], false) : 0;
+			}
+		}
+
+		bool MeshStale(const MeshEntry& a_m, bool a_touch)
+		{
+			bool stale = false;
+			for (unsigned i = 0; i <= d3d::kVbSlots; ++i) {
+				if (a_m.res[i]) {
+					stale |= Stale(a_m.serial[i], assets::Serial(a_m.res[i], a_touch));  // every one touched: a mesh in use keeps all its buffers
+				}
+			}
+			return stale;
+		}
+
 		// Present thread: send what the host doesn't have yet. True when the mesh can be drawn this frame.
 		MeshEntry* EnsureMesh(const Captured& a_c, std::uint32_t a_gen)
 		{
 			auto& m = g_meshes[a_c.srcHash];
+			if (Cfg().captureRevalidate && keys::Revalidate(m, [](const MeshEntry& a_m) { return MeshStale(a_m, true); })) {
+				g_restarted.fetch_add(1, std::memory_order_relaxed);
+			}
 			if (m.failed) {
 				return nullptr;
 			}
@@ -266,6 +309,7 @@ namespace phantom::guest::capture
 				if (assets::Failed(a_c.src.ib)) {
 					m.failed = true;
 				}
+				RememberSources(m, a_c.src);  // the copies just asked for (queued, ready or failed): a failure is retried once they go
 				if (m.failed || !ready || !ib) {
 					return nullptr;
 				}
@@ -281,7 +325,7 @@ namespace phantom::guest::capture
 				m.bones = built->bones;
 				m.weights = built->weights;
 				m.payload = std::move(built->payload);
-				Log::Info("capture: mesh {:016x}: {} verts, {} indices, {} bones ({}) {}", m.key, built->vertexCount, m.indexCount, m.bones, a_c.owner == proto::kOwnerBuddy ? "buddy" : "Snake",
+				Log::Info("capture: mesh {:016x}: {} verts, {} indices, {} bones ({}) {}", m.key, built->vertexCount, m.indexCount, m.bones, a_c.owner == proto::kOwnerBuddy ? "buddy" : a_c.owner == proto::kOwnerProjectile ? "projectile" : "Snake",
 					built->layout);
 			}
 			if (m.sentGeneration != a_gen) {
@@ -302,11 +346,16 @@ namespace phantom::guest::capture
 				return 0;
 			}
 			auto& t = g_textures[a_tex];
+			// Another texture at this address now (or the same one again): copy and key it afresh. The touch keeps it in use.
+			if (Cfg().captureRevalidate && keys::Revalidate(t, [a_tex](const TexEntry& a_t) { return Stale(a_t.serial, assets::Serial(a_tex, true)); })) {
+				g_restarted.fetch_add(1, std::memory_order_relaxed);
+			}
 			if (t.failed) {
 				return 0;
 			}
 			if (!t.bytes) {
 				t.bytes = assets::Texture(a_tex);
+				t.serial = assets::Serial(a_tex, false);
 				if (!t.bytes) {
 					t.failed = assets::Failed(a_tex);
 					return 0;
@@ -609,11 +658,23 @@ namespace phantom::guest::capture
 			g_probeDraws = 0;
 		}
 
+		// Present thread, after an eviction: forget what was keyed by pointers whose copies are gone (and their bytes, kept for
+		// resends), so nothing of theirs is sent again and the memory goes.
+		void Prune()
+		{
+			const auto n = keys::Prune(g_textures, [](ID3D11Texture2D* a_tex, const TexEntry& a_t) { return Stale(a_t.serial, assets::Serial(a_tex, false)); }) +
+			               keys::Prune(g_meshes, [](std::uint64_t, const MeshEntry& a_m) { return MeshStale(a_m, false); });
+			g_pruned.fetch_add(n, std::memory_order_relaxed);
+		}
+
 		void OnPresent(ID3D11DeviceContext* a_imm)
 		{
 			assets::Pump(d3d::Device(), a_imm);
 			if (++g_presentCount % 600 == 0) {
 				assets::Evict(g_presentCount);
+				if (Cfg().captureRevalidate) {
+					Prune();
+				}
 			}
 			hud::OnPresent(d3d::Device(), a_imm);
 			if (link::HostAlive()) {
@@ -673,11 +734,12 @@ namespace phantom::guest::capture
 			return std::format("capture: describing the next {} frame(s) into PhantomRingCapture.txt (present hooked: {})", n, d3d::PresentHooked());
 		}
 		const auto st = d3d::Counters();
-		return std::format("capture: lists published {} (last {} draws), meshes sent {} ({} known), textures sent {} ({} known), skipped {}, proxy draws dropped {}, ring pending {} KB; {}\n",
+		return std::format("capture: lists published {} (last {} draws), meshes sent {} ({} known), textures sent {} ({} known), skipped {}, proxy draws dropped {}, stale entries restarted {} / pruned {}, ring pending {} KB; {}\n",
 			g_published.load(), g_lastDraws.load(), g_meshesSent.load(), g_meshes.size(), g_texturesSent.load(), g_textures.size(), g_skipped.load(), g_proxyDrops.load(),
+			g_restarted.load(), g_pruned.load(),
 			ring::Pending() / 1024,
 			assets::Describe()) +
-		hud::Describe() + "\n" +
+		hud::Describe() + "\n" + projectile::Describe() + "\n" +
 		std::format("capture: device {} present hooked {} presents {} draws {} (deferred {}) cbMaps {} cbUpdates {} executes {} finishes {} contexts {} layouts {} vs {} ps {}",
 			static_cast<void*>(d3d::Device()), d3d::PresentHooked(), d3d::Presents(), st.draws, st.drawsDeferred, st.cbMaps, st.cbUpdates, st.executes, st.finishes,
 			st.contexts, st.layouts, st.vertexShaders, st.pixelShaders);

@@ -8,6 +8,7 @@
 #include "Explosion.h"
 #include "Fulton.h"
 #include "Config.h"
+#include "DiveHop.h"
 #include "HitHook.h"
 #include "Hud.h"
 #include "Link.h"
@@ -84,6 +85,10 @@ namespace phantom::er::Puppet
 		std::uint64_t  g_ceilings{ 0 };           // kinematic: frames a move was refused under a ceiling lower than Snake
 		FallWatch      g_fallWatch;               // a fall that never lands (a chasm's kill volume under NoDead) -> Snake dies
 		std::uint64_t  g_endlessFalls{ 0 };
+		// Dive = hop (roadmap 2.9, [Puppet] hop): MGSV's dive lifts the kinematic puppet over a gap or onto a ledge.
+		DiveTrigger    g_dive;
+		std::uint64_t  g_hops{ 0 }, g_hopsRefused{ 0 }, g_hopsNoMove{ 0 };
+		std::uint64_t  g_groundLost{ 0 };         // kinematic: walked off ground (each logged with what the two filters see below)
 		ULONGLONG      g_lastBump{ 0 };           // kinematic: the last object-only attack against what blocked the body
 		ULONGLONG      g_rootMotionSince{ 0 };
 		// Death visuals: from the kill (or Elden Ring's own death of the puppet) until the respawn Snake
@@ -96,6 +101,13 @@ namespace phantom::er::Puppet
 		bool           g_hiddenForDeath{ false };  // the puppet stopped with the Tarnished still hidden (g_saved holds the originals)
 		Vec3           g_deathPos{};               // where the dying player was (er/Revival.h: a revival moves it)
 		bool           g_deathPosValid{ false };
+		// Snake's jumps (protocol v14 kGuestJumping, the guest's [Jump] button): the flag last frame (a jump starts on its rising
+		// edge), the puppet's running velocity on the ground (the takeoff's), and counts for the log and `puppet`.
+		JumpEdge       g_jumpEdge;
+		Vec3           g_runVel;
+		std::uint64_t  g_jumps{ 0 };
+		std::uint64_t  g_jumpsRefused{ 0 };
+		bool           g_jumpRootWarned{ false };
 
 		Axes CurrentAxes()
 		{
@@ -105,6 +117,88 @@ namespace phantom::er::Puppet
 			a.erForward = Calibration::ErForward();
 			a.mgsvCamForward = Cfg().mgsvCamForward;
 			return a;
+		}
+
+		// The cast_ray filters for Snake's body (docs/HOST.md "Collision filters"): [Puppet] ground_filter for the vertical rays
+		// (ground, landing, head room), wall_filter for the horizontal ones (walls; 0 = ray_filter) and wall_filter_also for them
+		// too (0 = none; the nearer hit is kept). Anything but ray_filter needs the layer table this was RE'd from
+		// (A::CollisionLayers): without it, ray_filter alone (logged once).
+		struct BodyFilters
+		{
+			std::uint32_t ground;
+			std::uint32_t wall;
+			std::uint32_t wallAlso;  // 0 = none
+			std::uint32_t keep{ 0 }; // material classes the ground and wallAlso rays keep ([Puppet] ground_keep; game::CastRayKeep)
+			std::uint8_t  layers{ game::kCastRayLayers };  // ... and the broad-phase layers they look in ([Puppet] ground_layers)
+		};
+
+		BodyFilters Filters()
+		{
+			const auto& cfg = Cfg();
+			BodyFilters f{ cfg.groundFilter ? cfg.groundFilter : cfg.rayFilter, cfg.wallFilter ? cfg.wallFilter : cfg.rayFilter, cfg.wallFilterAlso,
+				cfg.groundKeep, static_cast<std::uint8_t>(cfg.groundLayers) };
+			if ((f.keep || f.layers != game::kCastRayLayers) && !game::CanCastRayKeep()) {
+				static bool keepWarned = false;
+				if (!keepWarned) {
+					keepWarned = true;
+					Log::Warn("puppet: [Puppet] ground_keep {:#x} / ground_layers {:#04x} need Snake's own ray query (cast_ray's query, the snipe "
+					          "collector, the world cast, the material lookup), unverified on this exe -> the game's cast_ray (wooden walkways "
+					          "stay invisible to Snake)",
+						f.keep, f.layers);
+				}
+				f.keep = 0;
+				f.layers = game::kCastRayLayers;
+			}
+			if (f.wallAlso == f.wall) {
+				f.wallAlso = 0;
+			}
+			static bool warned = false;
+			if ((f.ground != cfg.rayFilter || f.wall != cfg.rayFilter || f.wallAlso) && !Addr().Has(A::CollisionLayers)) {
+				if (!warned) {
+					warned = true;
+					Log::Warn("puppet: [Puppet] ground_filter {:#x} / wall_filter {:#x} / wall_filter_also {:#x} need the collision layer table, "
+					          "unverified on this exe -> ray_filter {:#x} alone for Snake's body",
+						f.ground, f.wall, f.wallAlso, cfg.rayFilter);
+				}
+				f = { cfg.rayFilter, cfg.rayFilter, 0, f.keep, f.layers };
+			}
+			return f;
+		}
+
+		// One body ray through a filter: the game's cast_ray, or with material classes kept (ground and wallAlso rays).
+		bool BodyCast(const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit, const std::uint8_t* a_ignore, std::uint32_t a_filter, std::uint32_t a_keep,
+			std::uint8_t a_layers)
+		{
+			return a_keep || a_layers != game::kCastRayLayers ? game::CastRayKeep(a_from, a_delta, a_hit, a_ignore, a_filter, a_keep, a_layers)
+			                                                  : game::CastRay(a_from, a_delta, a_hit, a_ignore, a_filter);
+		}
+
+		// Snake's body against Elden Ring's world (er/Kinematic.h BodyRays): a ray mostly up or down is a ground/head-room probe
+		// (ground_filter), the others are walls (wall_filter, and wall_filter_also: the characters' own walls -- a scaffold's
+		// railings in the layers whose floor only ground_filter sees; the nearer hit).
+		RayFn BodyRay(const std::uint8_t* a_ignore)
+		{
+			const BodyFilters f = Filters();
+			const auto        cast = [a_ignore](std::uint32_t a_filter, std::uint32_t a_keep, std::uint8_t a_layers) -> RayFn {
+				return [a_ignore, a_filter, a_keep, a_layers](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
+					return BodyCast(a_from, a_delta, a_hit, a_ignore, a_filter, a_keep, a_layers);
+				};
+			};
+			// The wall_filter ray (ray_filter: enemies' hit capsules) stays the game's; the characters' own layer looks where the
+			// game's cast_ray doesn't (the broad-phase layer of Stormveil's wooden walkways, the materials its collector drops), for
+			// the ground and the walls alike (a walkway's railings too).
+			return BodyRays(cast(f.ground, f.keep, f.layers), cast(f.wall, 0, game::kCastRayLayers),
+				f.wallAlso ? cast(f.wallAlso, f.keep, f.layers) : RayFn{});
+		}
+
+		// What is below a_at (3 m) through a filter: "+0.12 m" / "none".
+		std::string Below(const Vec3& a_at, const std::uint8_t* a_ignore, std::uint32_t a_filter, std::uint32_t a_keep = 0,
+			std::uint8_t a_layers = game::kCastRayLayers)
+		{
+			Vec3 hit;
+			return BodyCast(a_at + Vec3{ 0.0f, 0.5f, 0.0f }, Vec3{ 0.0f, -3.5f, 0.0f }, hit, a_ignore, a_filter, a_keep, a_layers)
+			           ? std::format("{:+.2f} m", hit.y - a_at.y)
+			           : std::string("none");
 		}
 
 		Vec3 GuestRoot(const proto::GuestState& a_g)
@@ -228,6 +322,9 @@ namespace phantom::er::Puppet
 			g_rmDebt = g_rmAsked = g_rmHanded = {};
 			g_unstick.Reset();
 			g_fallWatch.Reset();
+			g_dive.Reset();
+			g_jumpEdge.Reset((g.flags & proto::kGuestJumping) != 0);  // a jump under way when the puppet starts is not one to make
+			g_runVel = {};
 			if (!(g_hiddenForDeath && g_deathChr == p.chr)) {  // else still hidden by us: g_saved has the originals
 				g_saved.renderBit = game::GetBit(p.chr + game::kChrFlags1C5, 0x08);
 				g_saved.transparencyMod = SafeRead<float>(p.chr + game::kChrTransparencyMod).value_or(0.0f);
@@ -250,11 +347,17 @@ namespace phantom::er::Puppet
 				kp.stepUp = Cfg().stepUp;
 				kp.snapDown = Cfg().snapDown;
 				kp.chestHeight = Cfg().chestHeight;
-				const auto* ignore = p.chr;
-				const auto  filter = Cfg().rayFilter;
-				const RayFn ray = [ignore, filter](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
-					return game::CastRay(a_from, a_delta, a_hit, ignore, filter);
-				};
+				kp.groundProbes = Cfg().groundProbes;
+				const RayFn ray = BodyRay(p.chr);
+				const BodyFilters f = Filters();
+				Log::Info("puppet: Snake's body rays: ground_filter {:#x}, wall_filter {:#x} + {:#x}, {}, {}; below the start: {} (ground_filter), {} "
+				          "(ray_filter {:#x})",
+					f.ground, f.wall, f.wallAlso, kp.groundProbes ? "ground under the whole body (5 probes)" : "ground under the centre (1 ray)",
+					f.keep || f.layers != game::kCastRayLayers
+						? std::format("Snake's own ray query (broad-phase layers {:#04x} of masks {}, material classes {:#x} kept)", f.layers,
+							  game::BroadPhaseLayers(), f.keep)
+						: std::string("the game's cast_ray"),
+					Below(g_anchor.pe, p.chr, f.ground, f.keep, f.layers), Below(g_anchor.pe, p.chr, Cfg().rayFilter), Cfg().rayFilter);
 				if (const auto at = SupportedStart(g_anchor.pe, kp, ray)) {
 					Log::Info("puppet: no ground under the Tarnished's centre at ({:.2f}, {:.2f}, {:.2f}) (a rim, a ladder's top) -> Snake starts "
 					          "{:.2f} m away on ground",
@@ -400,6 +503,87 @@ namespace phantom::er::Puppet
 
 	namespace
 	{
+		// Dive = hop (roadmap 2.9): kGuestDiving's rising edge, then the dive's first move gives the hop its direction.
+		void DiveHop(const Frame& a_f, const Vec3& a_step, const KinematicParams& a_params, const RayFn& a_ray)
+		{
+			const auto& cfg = Cfg();
+			Vec3        dir;
+			const auto  out = g_dive.Update((a_f.guest.flags & proto::kGuestDiving) != 0, cfg.hop && !g_riding, ::GetTickCount64(), a_step, a_f.dt,
+				 cfg.hopWaitMs, &dir);
+			if (out == DiveTrigger::Out::kNoMove) {
+				if (++g_hopsNoMove <= 5) {
+					Log::Info("puppet: MGSV dived but Snake didn't move within {} ms -- no hop", cfg.hopWaitMs);
+				}
+				return;
+			}
+			if (out != DiveTrigger::Out::kHop) {
+				return;
+			}
+			HopParams hop;
+			hop.height = cfg.hopHeight;
+			hop.length = cfg.hopLength;
+			hop.step = cfg.hopStep;
+			hop.minRise = cfg.hopMinRise;
+			// His standing height, not this frame's stance: the guest arms a dive only on X while STAND, and the frame that
+			// confirms it may already say prone (a 0.5 m head would let a full hop take him under a 1.9 m beam).
+			hop.head = cfg.ceiling ? cfg.heightStand : 0.0f;
+			const bool  grounded = g_kin.grounded;
+			const float airS = g_kin.airS, below = g_kin.groundY - g_kin.pos.y;
+			if (g_kin.jumping) {
+				++g_hopsRefused;
+				Log::Info("puppet: dive -- no hop (in a jump; refused #{})", g_hopsRefused);
+				return;
+			}
+			const float rise = KinematicHop(g_kin, dir, hop, a_params, a_ray);
+			if (rise <= 0.0f) {
+				++g_hopsRefused;
+				Log::Info("puppet: dive -- no hop ({}less than {:.2f} m of room above his {:.2f} m: a ceiling; refused #{})",
+					grounded ? std::string() : std::format("off the ground {:.2f} s and {:.2f} m (a hop from the air only within {:.2f} s and {:.2f} m), or ", airS, below,
+						hop.graceS, hop.graceDrop),
+					cfg.hopMinRise, hop.head > 0.0f ? hop.head : a_params.headHeight, g_hopsRefused);
+				return;
+			}
+			++g_hops;
+			Log::Info("puppet: dive -> hop #{}{}: {:.2f} m up{} toward ({:.2f}, {:.2f}) at {:.2f} m/s from ({:.2f}, {:.2f}, {:.2f})", g_hops,
+				grounded ? std::string() : std::format(" (off a rim {:.2f} s ago, {:.2f} m below it)", airS, below), rise,
+				rise + 1e-3f < cfg.hopHeight ? " (lower: a ceiling)" : "", dir.x, dir.z, LengthXZ(g_kin.hopVel), g_kin.pos.x, g_kin.pos.y, g_kin.pos.z);
+		}
+
+		// The guest's kGuestJumping went up: the puppet jumps (er/Kinematic.h KinematicJump) if Snake stands on the ground in
+		// Elden Ring with room over his head; the run's velocity carries on in the air.
+		void TryJump(const proto::GuestState& a_g, const KinematicParams& a_params, const RayFn& a_ray)
+		{
+			const auto& cfg = Cfg();
+			const char* why = nullptr;
+			if (!cfg.jump) {
+				why = "[Puppet] jump = false";
+			} else if (g_riding) {
+				why = "riding";
+			} else if ((a_g.flags & (proto::kGuestCrouching | proto::kGuestProne)) || a_g.stance != 0) {
+				why = "not standing";
+			} else if (!g_kin.grounded) {
+				why = "already in the air";
+			}
+			JumpStart j;
+			if (!why) {
+				j = KinematicJump(g_kin, g_runVel, cfg.jumpApex, cfg.jumpMinRoom, cfg.maxSpeed, a_params, a_ray);
+				why = j.ok ? nullptr : j.why;
+			}
+			if (!why) {
+				++g_jumps;
+				if (g_jumps <= 10 || g_jumps % 50 == 0) {
+					Log::Info("puppet: Snake jumps -- {:.2f} m up at {:.1f} m/s{} (jump #{})", j.apex, j.speed,
+						std::isfinite(j.room) ? std::format(", {:.2f} m over his head", j.room) : std::string(), g_jumps);
+				}
+				return;
+			}
+			++g_jumpsRefused;
+			if (g_jumpsRefused <= 10 || g_jumpsRefused % 50 == 0) {
+				Log::Info("puppet: no jump -- {}{} (refused #{})", why, std::isfinite(j.room) ? std::format(" ({:.2f} m over his head)", j.room) : std::string(),
+					g_jumpsRefused);
+			}
+		}
+
 		// FallWatch fired: Snake dies of the fall as he would have on landing (kHEvHurt lethal, then Elden Ring's death).
 		void EndlessFall(const Frame& a_f)
 		{
@@ -501,7 +685,7 @@ namespace phantom::er::Puppet
 	{
 		// Not "Elden Ring moved the player by itself": its whole world moved (32 / 40 m steps, VERIFIED live riding).
 		g_lastSet += a_delta;
-		g_kin.pos += a_delta;
+		KinematicShift(g_kin, a_delta);  // the place, and a jump's takeoff height (its landing's fall damage)
 		g_unstick.Shift(a_delta);
 		g_fallWatch.Shift(a_delta.y);
 	}
@@ -534,6 +718,10 @@ namespace phantom::er::Puppet
 			g_lastSet = now;  // ER moves the puppet itself: compare against where it was last frame
 		}
 
+		// A jump starts on the rising edge of the guest's kGuestJumping (the edge is taken whatever happens to it below: a press
+		// during a cutscene is never replayed afterwards). The flag is remembered on every frame the state was read, ready or not:
+		// one frame that read not ready mid-jump never makes the same press a second jump (er/Kinematic.h JumpEdge).
+		const bool jumpEdge = g_jumpEdge.Update(a_f.guestRead, a_f.guestReady, (a_f.guest.flags & proto::kGuestJumping) != 0);
 		if (!a_f.guestReady || a_f.cutscene || a_f.interacting) {
 			RootMotion::Clear();
 			g_rmDebt = g_rmAsked = g_rmHanded = {};
@@ -588,6 +776,10 @@ namespace phantom::er::Puppet
 			g_kin.vy = 0;
 			g_lastSet = now;
 		}
+		if (g_rootMotion && jumpEdge && !g_jumpRootWarned) {
+			g_jumpRootWarned = true;
+			Log::Info("puppet: Snake jumped in MGSV, but jumps need [Puppet] motion = kinematic (Elden Ring's proxy moves him now) -- no jump");
+		}
 		if (g_rootMotion) {
 			// Elden Ring's proxy moves the puppet during this frame's physics; our state just mirrors it.
 			Vec3 moved = now - g_kin.pos;
@@ -631,7 +823,8 @@ namespace phantom::er::Puppet
 				// would set off the fall watchdog after 4 s, and the flat at the bottom read as a landing): ground right under the
 				// proxy says so. A real fall reads grounded only in its last metres (the landing comes that much early).
 				Vec3 hit;
-				grounded = game::CastRay(now + Vec3{ 0.0f, 0.5f, 0.0f }, Vec3{ 0.0f, g_riding ? -3.0f : -2.0f, 0.0f }, hit, p.chr, cfg.rayFilter);
+				const BodyFilters f = Filters();
+				grounded = BodyCast(now + Vec3{ 0.0f, 0.5f, 0.0f }, Vec3{ 0.0f, g_riding ? -3.0f : -2.0f, 0.0f }, hit, p.chr, f.ground, f.keep, f.layers);
 			}
 			if (grounded && !g_kin.grounded) {
 				g_landingSpeed = std::max(0.0f, -g_kin.vy);
@@ -662,10 +855,52 @@ namespace phantom::er::Puppet
 		params.chestHeight = cfg.chestHeight;
 		params.gravity = cfg.gravity;
 		params.bodyHeight = !cfg.ceiling ? 0.0f : g_riding ? cfg.heightRide : StanceHeight(g);
-		const auto* ignore = p.chr;
-		const auto  filter = cfg.rayFilter;
-		const RayFn ray = [ignore, filter](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) { return game::CastRay(a_from, a_delta, a_hit, ignore, filter); };
+		params.groundProbes = cfg.groundProbes;
+		params.jumpAirStep = cfg.jumpAirStep;
+		params.jumpAirControl = cfg.jumpAirControl;
+		const RayFn ray = BodyRay(p.chr);
+		if (jumpEdge) {
+			TryJump(g, params, ray);
+		}
+		DiveHop(a_f, step, params, ray);
+		if (g_kin.jumping) {
+			step.y = 0.0f;  // in the air the puppet flies its own jump: MGSV's own lift and fall of Snake (the odometer's height) never count
+		}
+		const bool  hopping = g_kin.hopping;
+		const bool  wasGrounded = g_kin.grounded;  // after a jump's or a hop's take-off: neither is a walk off the ground
 		const auto  r = KinematicStep(g_kin, step, a_f.dt, params, ray);
+		if (hopping && !g_kin.hopping) {
+			Log::Debug("puppet: hop over: {} at ({:.2f}, {:.2f}, {:.2f})", r.landed ? std::format("landed at {:.1f} m/s", r.landingSpeed) : std::string("falling on"),
+				g_kin.pos.x, g_kin.pos.y, g_kin.pos.z);
+		}
+		if (wasGrounded && !g_kin.grounded && !g_kin.jumping && !g_kin.hopping && (++g_groundLost <= 20 || g_groundLost % 50 == 0 || g_frames <= 120)) {
+			// Walked off ground (not a jump, not a hop): what each filter sees below him, and what the body's five ground rays
+			// see where the ground went (from 0.55 m above his feet to 3 m below), so a fall through something the Tarnished stands
+			// on shows in the log (live 2026-10-14: Snake fell through Stormveil's wooden scaffolding). Nothing under any ray where
+			// the Tarnished stood: the filter doesn't see that floor. The first 20, any in a start's first 2 s, then every 50th.
+			const BodyFilters f = Filters();
+			float             below[5];
+			const Vec3        at = g_kin.pos - Vec3{ 0.0f, g_kin.vy * a_f.dt, 0.0f };  // where the ground went, not this frame's drop
+			GroundProbes(at, 0.55f, 3.55f, params.radius, ray, below);
+			std::string seen;
+			for (const float b : below) {
+				seen += std::isfinite(b) ? std::format(" {:.2f}", b) : std::string(" -");
+			}
+			Log::Info("puppet: Snake left the ground at ({:.2f}, {:.2f}, {:.2f}){} -- below him: {} (ground_filter {:#x}), {} (ray_filter {:#x}); his five "
+			          "ground rays (centre first) down to 3 m:{} (#{})",
+				at.x, at.y, at.z, g_frames <= 120 ? std::format(" {} frames after the start", g_frames) : std::string(), Below(at, p.chr, f.ground, f.keep, f.layers), f.ground,
+				Below(at, p.chr, cfg.rayFilter), cfg.rayFilter, seen, g_groundLost);
+		}
+		if (g_kin.grounded && !r.landed) {
+			// The puppet's velocity on the ground (eased over a few frames): a jump's takeoff carries it on.
+			const float dt = std::clamp(a_f.dt, 1.0f / 240.0f, 0.1f);
+			const Vec3  v{ r.moved.x / dt, 0.0f, r.moved.z / dt };
+			g_runVel = Finite(v) ? g_runVel + (v - g_runVel) * 0.35f : Vec3{};
+		}
+		if (r.jumpLanded) {
+			Log::Debug("puppet: the jump landed at {:.2f} m ({:+.2f} m from where it left), as a fall of {:.1f} m/s", g_kin.pos.y, g_kin.pos.y - g_kin.jumpFromY,
+				r.landingSpeed);
+		}
 		if (r.ceilingEscape) {
 			Log::Info("puppet: under a ceiling {:.2f} m up ({}: {:.2f} m) and every move refused for {:.2f} s -- the ceiling check stands aside until "
 			          "he stands free (a way out that dips)",
@@ -713,7 +948,7 @@ namespace phantom::er::Puppet
 		}
 		if (cfg.unstick && g_frames % 3 == 0) {
 			const int  boxed = Enclosed(g_kin.pos, params.radius + 0.3f, params, ray);
-			const bool room = params.bodyHeight <= 0.0f || SolidHeadroom(g_kin.pos, params.bodyHeight + 0.05f, ray) >= params.bodyHeight;
+			const bool room = params.bodyHeight <= 0.0f || SolidHeadroom(g_kin.pos, params.bodyHeight + 0.05f, ray, params.stepUp) >= params.bodyHeight;
 			if (const auto back = g_unstick.Update(g_kin.pos, boxed, g_kin.grounded, nowS, cfg.unstickSeconds, room)) {
 				Log::Info("puppet: boxed in at ({:.2f}, {:.2f}, {:.2f}) ({} of 8 directions blocked) for {:.1f} s -- back to ({:.2f}, {:.2f}, {:.2f}) where it "
 				          "stood free (unstick #{})",
@@ -930,6 +1165,7 @@ namespace phantom::er::Puppet
 	bool          RidingHorse() { return g_active && g_riding && g_horse; }
 	float         GroundY() { return g_active ? g_kin.groundY : NAN; }
 	float         FallSpeed() { return g_active && !g_kin.grounded ? std::max(0.0f, -g_kin.vy) : 0.0f; }
+	bool          Jumping() { return g_active && !g_rootMotion && g_kin.jumping && !g_kin.grounded; }
 	float         HpFrac() { return g_hpFrac; }
 	float         DeathSeconds() { return g_deathAt ? static_cast<float>(::GetTickCount64() - g_deathAt) / 1000.0f : -1.0f; }
 	bool          Dying() { return g_deathAt != 0; }
@@ -996,10 +1232,11 @@ namespace phantom::er::Puppet
 			return std::format("puppet off ({}{})", held, usable ? "ready to start" : why);
 		}
 		return std::format("puppet ON {} frames ({} motion, moved {:.2f} of {:.2f} m asked, catch-up owed {:.2f} m, unstuck {} (stalls {}), walls {} ({} frames), "
-		                   "ceilings {}, breakers {}): delta {:.3f}, feet ({:.2f}, "
+		                   "ceilings {}, breakers {}, Snake jumped {} ({} refused), hops {} (refused {}, no move {}){}): delta {:.3f}, feet ({:.2f}, "
 		                   "{:.2f}, {:.2f}) {} vy {:.2f}, ground {:.2f}, riding {}, dropped jumps {}, host falls {}, endless falls {}, HP {} (bar {:.0f}%), heals {} ({} HP){}\n{}; {}",
 			g_frames, g_rootMotion ? "root" : "kinematic", g_movedM, g_wantedM, LengthXZ(g_rmDebt), g_unstick.Count(), g_unstick.Stalls(), g_walls, g_wallFrames, g_ceilings, g_bumps,
-			g_anchor.delta, g_kin.pos.x, g_kin.pos.y, g_kin.pos.z, g_kin.grounded ? "grounded" : "airborne",
+			g_jumps, g_jumpsRefused, g_hops, g_hopsRefused, g_hopsNoMove, Cfg().hop ? "" : " [hop off]", g_anchor.delta, g_kin.pos.x, g_kin.pos.y, g_kin.pos.z,
+			g_kin.grounded ? "grounded" : g_kin.jumping ? "jumping" : g_kin.hopping ? "hopping" : "airborne",
 			g_kin.vy, g_kin.groundY, g_riding ? (g_horse ? "D-Horse" : "a vehicle") : "no", g_dropped, g_falls, g_endlessFalls, g_hpLast, g_hpFrac * 100.0f, g_heals, g_healedHp,
 			g_killedByGuest ? ", DYING for Snake" : (g_deathPending ? ", death pending" : ""),
 			RootMotion::Describe(), HitHook::Describe());

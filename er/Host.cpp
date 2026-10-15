@@ -16,6 +16,7 @@
 #include "Hud.h"
 #include "InputBridge.h"
 #include "Interaction.h"
+#include "Kbm.h"
 #include "KeyGuide.h"
 #include "Ladder.h"
 #include "Link.h"
@@ -51,6 +52,12 @@ namespace phantom::er::Host
 		std::uint64_t g_releaseUntil{ 0 };  // the puppet stepped aside for an ER-driven walk (the mist) until then
 		bool          g_hudSeen{ false };  // the HUD state was visible since the last load (else it is off in ER's settings)
 		bool          g_hudWasHidden{ false };
+		// The HUD's last hide came with one of Elden Ring's screens (a prompt just before it: a dialog, a pickup; a rest; a menu;
+		// a cutscene). Tarnished mode keeps the chord from giving Snake back only under such screens (live pass B 2026-10-15: in
+		// Tarnished mode the HUD state hid with nothing on screen -- after a map press Elden Ring refused, an enemy near -- and
+		// View + Start then only woke it: Snake came back on the second try. Its "Auto" HUD fading doesn't touch this state).
+		bool          g_hudHideScreen{ false };
+		constexpr std::uint64_t kScreenPromptMs = 2000;
 		std::uint64_t g_promptSeenAt{ 0 };  // an interaction prompt was on screen then
 		std::int32_t  g_promptSeen{ -1 };   // ... this one
 		constexpr std::uint64_t kDialogPromptMs = 1000;
@@ -496,7 +503,12 @@ namespace phantom::er::Host
 			a_f.menuOpen = a_f.menuOpen || a_f.interacting;
 			if (a_f.hudHidden != g_hudWasHidden) {
 				g_hudWasHidden = a_f.hudHidden;
-				Log::Info("ER HUD {} (UI state {})", a_f.hudHidden ? "hidden" : "back", Cfg().interactionHudState);
+				const auto now = ::GetTickCount64();
+				g_hudHideScreen = a_f.hudHidden && (a_f.menuOpen || a_f.interacting || a_f.cutscene || a_f.loading || !a_f.inGame || g_atGrace ||
+				                                    (g_promptSeenAt && now - g_promptSeenAt < kScreenPromptMs) ||
+				                                    (g_restPromptAt && now - g_restPromptAt < kRestWindowMs));
+				Log::Info("ER HUD {} (UI state {}){}", a_f.hudHidden ? "hidden" : "back", Cfg().interactionHudState,
+					a_f.hudHidden && !g_hudHideScreen ? " -- nothing on screen explains it" : "");
 			}
 		}
 
@@ -618,7 +630,8 @@ namespace phantom::er::Host
 			LogStateChanges(f);
 
 			f.guestReady = false;
-			if (f.guestAlive && link.ReadGuestState(f.guest)) {
+			f.guestRead = f.guestAlive && link.ReadGuestState(f.guest);
+			if (f.guestRead) {
 				// Both the per-frame flags and the boot status: a state left by a previous MGSV process never counts.
 				f.guestReady = (f.guest.flags & proto::kGuestReady) && !(f.guest.flags & proto::kGuestLoading) && link.GuestStatus() == proto::Status::kReady;
 			}
@@ -653,8 +666,9 @@ namespace phantom::er::Host
 			} else if (puppeting && !erOwnsPad) {
 				padMode = PadGate::Mode::kSnake;
 			} else if ((g_tarnished || g_ladder.Holding()) && !puppeting && f.inGame && !f.menuOpen && !f.cutscene && !f.dead && !f.dying &&
-			           !(g_autoHud.Detected() ? g_atGrace : f.hudHidden)) {
-				// (With Elden Ring's "Auto" HUD its hiding says nothing: at a grace is what keeps the chord from giving Snake back there.)
+			           !(g_autoHud.Detected() ? g_atGrace : f.hudHidden && g_hudHideScreen)) {
+				// (With Elden Ring's "Auto" HUD its hiding says nothing: at a grace is what keeps the chord from giving Snake back there;
+				// otherwise only a hide one of its screens explains keeps it.)
 				// On a ladder the Tarnished has the pad as in Tarnished mode: View+Start is the chord (it keeps him after the ladder),
 				// never Elden Ring's menu and map together (live: the chord on a ladder opened its menu).
 				padMode = PadGate::Mode::kTarnished;
@@ -662,6 +676,7 @@ namespace phantom::er::Host
 			InputBridge::SetPadMode(padMode);
 			LogGuestMenu(guestMenu);
 			InputBridge::PollIfIdle();  // test automation without a controller (console `press`)
+			Kbm::Tick();                // [Keyboard]: keys and mouse as Snake's pad (er/Kbm.h), in the modes just set
 			BuddyOrders::Tick(f);
 			KeyGuide::Tick(puppeting);
 

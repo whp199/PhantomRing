@@ -19,7 +19,6 @@ namespace phantom::guest::capture::assets
 		constexpr int           kMaxStartsPerPresent = 4;
 		constexpr std::uint64_t kMaxBytesPerPresent = 16ull << 20;
 		constexpr std::uint64_t kMaxBufferBytes = 64ull << 20;
-		constexpr std::uint64_t kEvictAfterPresents = 60 * 60;  // a minute unused
 
 		enum class St
 		{
@@ -37,6 +36,7 @@ namespace phantom::guest::capture::assets
 			ID3D11Resource*      staging{ nullptr };
 			std::uint64_t        started{ 0 };
 			std::uint64_t        lastUse{ 0 };
+			std::uint64_t        serial{ 0 };  // Serial(): this copy among every one made for this address
 			std::uint64_t        bytes{ 0 };
 			D3D11_TEXTURE2D_DESC tdesc{};
 			std::shared_ptr<const std::vector<std::uint8_t>> buf;
@@ -46,6 +46,7 @@ namespace phantom::guest::capture::assets
 		std::mutex                                    g_lock;
 		std::unordered_map<ID3D11Resource*, Entry>    g_entries;  // node-based: Entry addresses are stable until erased (Present thread only)
 		std::deque<ID3D11Resource*>                   g_queue;
+		std::uint64_t                                 g_serial{ 0 };  // under g_lock
 		std::atomic<std::uint64_t>                    g_present{ 0 };
 		std::atomic<std::uint64_t>                    g_copied{ 0 }, g_copiedBytes{ 0 }, g_failed{ 0 }, g_waits{ 0 };
 
@@ -56,6 +57,7 @@ namespace phantom::guest::capture::assets
 				a_res->AddRef();  // keeps the address ours while cached
 				it->second.src = a_res;
 				it->second.texture = a_texture;
+				it->second.serial = ++g_serial;
 				g_queue.push_back(a_res);
 			}
 			it->second.lastUse = g_present.load(std::memory_order_relaxed);
@@ -282,6 +284,19 @@ namespace phantom::guest::capture::assets
 		return it != g_entries.end() && it->second.st == St::kFailed;
 	}
 
+	std::uint64_t Serial(ID3D11Resource* a_resource, bool a_touch)
+	{
+		std::scoped_lock lock(g_lock);
+		const auto       it = g_entries.find(a_resource);
+		if (it == g_entries.end()) {
+			return 0;
+		}
+		if (a_touch) {
+			it->second.lastUse = g_present.load(std::memory_order_relaxed);
+		}
+		return it->second.serial;
+	}
+
 	void Pump(ID3D11Device* a_device, ID3D11DeviceContext* a_imm)
 	{
 		g_present.fetch_add(1, std::memory_order_relaxed);
@@ -330,7 +345,7 @@ namespace phantom::guest::capture::assets
 		const auto       now = g_present.load(std::memory_order_relaxed);
 		for (auto it = g_entries.begin(); it != g_entries.end();) {
 			auto& e = it->second;
-			if ((e.st == St::kReady || e.st == St::kFailed) && now - e.lastUse > kEvictAfterPresents) {
+			if (keys::Evictable(e.st == St::kReady || e.st == St::kFailed, e.lastUse, now)) {
 				e.src->Release();
 				it = g_entries.erase(it);
 			} else {

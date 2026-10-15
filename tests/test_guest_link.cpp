@@ -67,6 +67,9 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.holdMode == d.holdMode && shipped.radius == d.radius && shipped.teleportJump == d.teleportJump && shipped.warpCooldownMs == d.warpCooldownMs);
 	CHECK(shipped.treadmillOnVehicle == d.treadmillOnVehicle && shipped.treadmillMovesBuddy == d.treadmillMovesBuddy && shipped.velocitySmoothing == d.velocitySmoothing);
 	CHECK(shipped.ridingCameraKeep == d.ridingCameraKeep && d.ridingCameraKeep);
+	CHECK(shipped.jump == d.jump && shipped.jumpButton == d.jumpButton && d.jumpButton == 0x0080 && shipped.jumpPassWith == d.jumpPassWith &&
+	      d.jumpPassWith == 0x030F && shipped.jumpPassAiming == d.jumpPassAiming && d.jumpPassAiming && shipped.jumpLift == d.jumpLift &&
+	      shipped.jumpMaxAirMs == d.jumpMaxAirMs);
 	CHECK(shipped.jobSleepUs == d.jobSleepUs && shipped.waitProbe == d.waitProbe);
 	CHECK(shipped.padDuringBoot == d.padDuringBoot && shipped.hideDirectInputControllers == d.hideDirectInputControllers && shipped.rumble == d.rumble &&
 	      shipped.guardWindow == d.guardWindow);
@@ -77,10 +80,15 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.meleeShapeGeometry == d.meleeShapeGeometry && shipped.tranqWeapons.empty() && shipped.stunWeapons.empty());
 	CHECK(shipped.blockSaves == d.blockSaves && shipped.saveSinkDir == d.saveSinkDir && shipped.music == d.music && shipped.ambience == d.ambience && shipped.radio == d.radio);
 	CHECK(shipped.luaOverride == d.luaOverride && shipped.dumpDefaultLua == d.dumpDefaultLua);
+	CHECK(shipped.cigarTimeSkip == d.cigarTimeSkip && d.cigarTimeSkip && shipped.cigarClockScale == d.cigarClockScale);
 	CHECK(shipped.proxies == d.proxies && !d.proxies && shipped.proxyMax == d.proxyMax && shipped.proxyMaxDistance == d.proxyMaxDistance &&
 	      shipped.proxySnakeClearance == d.proxySnakeClearance && shipped.proxyBuddyClearance == d.proxyBuddyClearance &&
 	      shipped.proxyParkDepth == d.proxyParkDepth && shipped.proxyTableLagMs == d.proxyTableLagMs && shipped.proxyAutoAim == d.proxyAutoAim &&
 	      shipped.proxyKeepMarkers == d.proxyKeepMarkers && shipped.proxyCaptureRadius == d.proxyCaptureRadius);
+	// Inert full proxies (docs/GUEST.md 20.6)
+	CHECK(shipped.proxyInert == d.proxyInert && shipped.proxyNoAssignRoute == d.proxyNoAssignRoute && !d.proxyNoAssignRoute &&
+	      shipped.proxyPhaseLock == d.proxyPhaseLock && shipped.proxyAlertGiveUpSec == d.proxyAlertGiveUpSec && shipped.proxyHeight == d.proxyHeight &&
+	      d.proxyHeight == "ground" && shipped.proxyHeightTolerance == d.proxyHeightTolerance && shipped.proxyAimHeightFix == d.proxyAimHeightFix);
 	CHECK(shipped.capture == d.capture && shipped.hud == d.hud && shipped.hudEvery == d.hudEvery && shipped.warpLift == d.warpLift);
 	CHECK(shipped.buddyFollowLeadSec == d.buddyFollowLeadSec && shipped.buddyFollowSteer == d.buddyFollowSteer && shipped.buddyFollowRespectCommands == d.buddyFollowRespectCommands && shipped.blasts == d.blasts && shipped.throws == d.throws && shipped.placed == d.placed && shipped.mgsvBlasts == d.mgsvBlasts && !d.mgsvBlasts &&
 	      shipped.buddyFollowSideRunning == d.buddyFollowSideRunning && shipped.buddyFollowCatchUp == d.buddyFollowCatchUp &&
@@ -92,7 +100,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	const std::wstring custom = L"test_guest_custom.ini";
 	FILE*              f = _wfopen(custom.c_str(), L"wb");
 	std::fputs("[Boot]\nMission = 30010\nPosition = -1.5, 2.25, 300\nRotY = 90\n[Motion]\nHold = native_treadmill\n[Buddy]\nType = Horse\n"
-	           "[Combat]\nTranqWeapons = 0x10, 17\n[Audio]\nMusic = keep\n",
+	           "[Combat]\nTranqWeapons = 0x10, 17\n[Audio]\nMusic = keep\n[Jump]\nButton = LS\nPassWith = lb+0x0200\nLift = 9\n",
 		f);
 	std::fclose(f);
 	Config c;
@@ -100,6 +108,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(c.mission == 30010 && c.hasPosition && c.position[0] == -1.5f && c.position[1] == 2.25f && c.position[2] == 300.0f && c.rotYDeg == 90.0f);
 	CHECK(c.holdMode == phantom::guest::HoldMode::kNativeTreadmill && c.buddy == "horse" && c.music == phantom::guest::MusicMode::kKeep);
 	CHECK(c.tranqWeapons.size() == 2 && c.tranqWeapons[0] == 0x10 && c.tranqWeapons[1] == 17);
+	CHECK(c.jumpButton == 0x0040 && c.jumpPassWith == 0x0300 && !c.jumpPassAiming && c.jumpLift == 1.5f);  // L3, LB/RB, no LT, lift capped
 }
 
 // The real guest link (mgsv/Link.cpp) against a live host on a_where -- fake_er.py or the real host

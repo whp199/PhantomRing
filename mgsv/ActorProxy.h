@@ -34,6 +34,19 @@ namespace phantom::guest::proxy
 	{
 		using logic::Vec3;
 
+		// Where a proxy stands vertically (docs/GUEST.md 20.6). kEnemy: at the Elden Ring character's height relative to Snake
+		// (v0/v1). kGround: on the sandbox's ground (x/z still the character's) -- with the real Elden Ring its enemies stand 1-5 m
+		// above and below Snake, MGSV's flat apron can't hold a soldier there and the read-back flapped (live 2026-10-14).
+		enum class Height : std::uint8_t
+		{
+			kEnemy,
+			kGround,
+		};
+		// "ground" / "enemy" (anything else: a_fallback).
+		Height ParseHeight(std::string_view a_text, Height a_fallback);
+		// A proxy's feet for a target at a_target: its x/z, and its y (kEnemy) or a_groundY (kGround).
+		Vec3 ProxyFeet(const Vec3& a_target, float a_groundY, Height a_mode);
+
 		struct Settings
 		{
 			int   maxProxies{ 4 };            // soldiers used as proxies (the nearest hostiles); the rest of the pool is parked
@@ -45,6 +58,7 @@ namespace phantom::guest::proxy
 			float minMove{ 0.02f };           // re-place a proxy only when its target moved this much (m) or turned 1 deg ...
 			int   refreshFrames{ 30 };        // ... or every this many frames anyway
 			int   tableLagMs{ 33 };           // a new ActorTable was built from the GuestState about this long before it arrived
+			Height height{ Height::kEnemy };  // [Proxies] Height (kGround only with full proxies; the Fulton-only path keeps kEnemy)
 		};
 
 		// One hostile Elden Ring character, already corrected into MGSV world as of now.
@@ -95,7 +109,8 @@ namespace phantom::guest::proxy
 		{
 			std::uint16_t id{ 0xFFFF };   // MGSV GameObject id (TppSoldier2)
 			std::uint64_t handle{ 0 };    // the Elden Ring character it stands for; 0 = parked
-			Vec3          pos;            // where it should be (MGSV world)
+			Vec3          pos;            // where it should be (MGSV world; on the sandbox ground with Height kGround)
+			Vec3          real;           // where its character is (MGSV world, unflattened): aim correction, kGEvFulton's v0
 			float         yaw{ 0 };
 			bool          proxy{ false }; // true: standing in for `handle` at pos; false: parked
 		};
@@ -134,6 +149,63 @@ namespace phantom::guest::proxy
 		// parked, read back where it was put): a disabled soldier left standing pulls the aim off the Elden Ring target
 		// (docs/GUEST.md 18.13). a_savesGuarded: the option is never written while MGSV could save it.
 		bool AutoAimWanted(bool a_enabled, bool a_autoAimForProxies, bool a_savesGuarded, std::size_t a_pool, std::size_t a_placed, std::size_t a_unplaced);
+
+		// ---- inert full proxies (docs/GUEST.md 20.6) ----------------------------------------------------------------------
+		// The read-back: a placed proxy stands where it was put when its feet are within a_xzTol horizontally and a_yTol vertically.
+		// On the ground (kGround) MGSV's own ground under a far proxy may differ from the sandbox centre's by a step or a kerb: y
+		// gets its own, looser tolerance so a soldier settling on MGSV's ground doesn't flap auto-aim off and on.
+		bool ReadBackOk(const Vec3& a_put, const Vec3& a_at, float a_xzTol, float a_yTol);
+
+		// The location object a proxy holds is still his: TppSoldier2's position cache (refreshed slower for far soldiers: ~1 m off
+		// at 33 m, live) is within a_tol (horizontal) of the object's feet. The ~30 location objects are pooled per realized
+		// character: after an unrealize the same object may carry another soldier (a reinforcement) that must not be moved.
+		bool OwnsLocation(const Vec3& a_cache, const Vec3& a_feet, float a_tol);
+
+		// Aim correction for flattened proxies: a round whose ray (a_origin + t * a_dir, t in (0, a_range]) passes within a_radius of
+		// a placed proxy's body (its feet to a_bodyHeight above) is turned to the same point of the real character (+ real - placed),
+		// so MGSV's aim assist onto a proxy on the ground still hits an Elden Ring enemy standing 3 m higher. The nearest such body
+		// along the ray wins. A ray that meets any character's REAL body (same radius and height) is left alone: the camera is MGSV's,
+		// so a round aimed by hand at the enemy (or at an enemy behind another's stand-in) already goes where Elden Ring has him.
+		// a_dir stays unit length. Returns the index of the proxy it was turned to, -1 = unchanged.
+		struct Body
+		{
+			Vec3 placed;  // feet where MGSV has the proxy
+			Vec3 real;    // feet where the character really is (MGSV world)
+		};
+		int CorrectShot(const Vec3& a_origin, Vec3& a_dir, const Body* a_bodies, std::size_t a_count, float a_radius, float a_bodyHeight, float a_range);
+
+		// MGSV's alert phase (vars.playerPhase, 0 sneak .. 3 combat) while full proxies are in the world. It belongs at 0: at the
+		// first non-zero read every soldier outside the slots is disabled again (sweep: a reinforcement or a soldier the mission
+		// re-enabled; repeated every sweepEveryMs while it stays up, since MGSV's reinforcements arrive some time into an alert) and
+		// the command posts are set back to sneak (calm, repeated every calmEveryMs); if it is still up after giveUpMs the full
+		// proxies turn themselves off (the Fulton-only proxies stay). Reset() when full proxies are turned on again.
+		struct PhaseSettings
+		{
+			std::uint64_t calmEveryMs{ 1000 };
+			std::uint64_t sweepEveryMs{ 3000 };
+			std::uint64_t giveUpMs{ 20000 };
+		};
+		struct PhaseStep
+		{
+			bool calm{ false };
+			bool sweep{ false };
+			bool giveUp{ false };
+		};
+		class PhaseGuard
+		{
+		public:
+			PhaseStep Update(int a_phase, std::uint64_t a_nowMs, const PhaseSettings& a_s);
+			void      Reset() { *this = {}; }
+			[[nodiscard]] std::uint32_t Alerts() const { return m_alerts; }
+			[[nodiscard]] bool          GaveUp() const { return m_gaveUp; }
+
+		private:
+			std::uint64_t m_since{ 0 };   // first non-zero read of this alert (0 = phase 0)
+			std::uint64_t m_calmAt{ 0 };
+			std::uint64_t m_sweepAt{ 0 };
+			std::uint32_t m_alerts{ 0 };  // alerts seen (0 -> non-zero)
+			bool          m_gaveUp{ false };
+		};
 	}
 
 	// ---- game glue (ActorProxyGame.cpp; game thread unless noted) -------------------------------------------------------
@@ -169,4 +241,9 @@ namespace phantom::guest::proxy
 	// `!fulton <handle> [fail]` calls it directly: the event path without MGSV's own fulton (live 2026-10-14: proxies can't move
 	// MGSV's soldiers yet, docs/GUEST.md 20.4).
 	std::string Fulton(std::uint64_t a_handle, bool a_ok, const char* a_why);
+
+	// Combat.cpp's ShotSolver detour (game thread): turns a round aimed at a flattened proxy ([Proxies] Height = ground) to the
+	// Elden Ring character's real height (plan::CorrectShot). a_dir: MGSV world, unit length; changed in place. No-op unless full
+	// proxies run with [Proxies] AimHeightFix.
+	void CorrectShot(const float a_origin[3], float a_dir[3]);
 }

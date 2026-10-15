@@ -6,9 +6,12 @@
 #include "Blast.h"
 #include "Camera.h"
 #include "Capture.h"
+#include "Cigar.h"
 #include "Combat.h"
+#include "Cqc.h"
 #include "Config.h"
 #include "Death.h"
+#include "Dive.h"
 #include "Follow.h"
 #include "FultonAnchor.h"
 #include "Frame.h"
@@ -16,6 +19,7 @@
 #include "GuestScript.h"
 #include "Hook.h"
 #include "Hold.h"
+#include "Horse.h"
 #include "Ini.h"
 #include "Link.h"
 #include "Log.h"
@@ -90,6 +94,7 @@ namespace phantom::guest
 			menu::Poll(a_nowMs);
 			frame::PublishStalled(a_nowMs, a_ready);
 			sound::Tick(a_ready);
+			cigar::Tick(a_nowMs, a_ready);  // the Phantom Cigar's minutes for Elden Ring's clock (Cigar.h)
 		}
 
 		std::string Command(std::string_view a_line)
@@ -101,9 +106,17 @@ namespace phantom::guest
 					state::BootName(state::CurrentBoot()), pump::Describe(), frame::Describe(), death::Describe(), follow::Describe(), skeleton::DescribeBuddy(), menu::Describe(), blast::Describe(), throwing::Describe(), placed::Describe(),
 					ammo::Describe(), state::Parked() ? "on (Snake parked)" : "off", saves::SteamGuarded(), link::HostAlive(), centre ? std::format("{:.2f},{:.2f},{:.2f}", centre->x, centre->y, centre->z) : std::string("none"));
 			}
+			if (cmd == "cigar") {
+				return cigar::Describe() + "\n";
+			}
 			if (cmd == "boot") {
 				state::RequestBootRestart();
 				return "boot sequence restarted";
+			}
+			if (cmd == "jump") {
+				// As if the [Jump] button went down (the game thread decides whether Snake can jump: the log says)
+				pad::RequestJump();
+				return "jump requested (see the log: 'jump: ...')";
 			}
 			if (cmd == "treadmill off" || cmd == "treadmill on") {
 				state::SetTreadmillEnabled(cmd.ends_with("on"));
@@ -243,6 +256,29 @@ namespace phantom::guest
 				// !loc <GameObject id>: the player location manager's object for another id (EXPERIMENT, D-Horse)
 				return hold::DescribeLocation(static_cast<std::uint16_t>(std::strtoul(std::string(cmd.substr(4)).c_str(), nullptr, 0)));
 			}
+			if (cmd == "horse" || cmd.starts_with("horse ")) {
+				// !horse [on|off|scan|shift <dx> <dz>]: the D-Horse treadmill ([Buddy] HorseTreadmill, Horse.cpp, GUEST.md 8.1a)
+				if (cmd == "horse on" || cmd == "horse off") {
+					MutableCfg().buddyHorseTreadmill = cmd == "horse on";
+					return std::format("[Buddy] HorseTreadmill = {} for this session", Cfg().buddyHorseTreadmill);
+				}
+				if (cmd == "horse scan") {
+					horse::RequestScan();
+					return "horse: location objects scanned again at the next frame";
+				}
+				if (cmd.starts_with("horse shift")) {
+					float dx = 0, dz = 0;
+					if (std::sscanf(std::string(cmd).c_str(), "horse shift %f %f", &dx, &dz) != 2 || !std::isfinite(dx) || !std::isfinite(dz) ||
+						std::fabs(dx) > 20.0f || std::fabs(dz) > 20.0f) {
+						return "usage: !horse shift <dx> <dz>   (metres, at most 20 each)";
+					}
+					if (const auto refused = horse::RequestTestShift({ dx, 0.0f, dz }); !refused.empty()) {
+						return "horse: shift refused -- " + refused;
+					}
+					return std::format("horse: shift by {:.2f},{:.2f} asked for the next frame (see !horse: last)", dx, dz);
+				}
+				return horse::Describe();
+			}
 			if (cmd == "proxy" || cmd == "proxies") {
 				// !proxy: ActorProxy ([Proxies], docs/GUEST.md 20): the pool, each soldier's job and whether it stands where it should
 				return proxy::Describe();
@@ -315,6 +351,9 @@ namespace phantom::guest
 			if (cmd == "blast") {
 				return blast::Describe();
 			}
+			if (cmd == "cqc" || cmd.starts_with("cqc ")) {
+				return cqc::Console(cmd.substr(3));  // !cqc [action]: CQC holds and throws (Cqc.h)
+			}
 			if (cmd == "shots") {
 				return combat::DescribeDamage();
 			}
@@ -347,6 +386,9 @@ namespace phantom::guest
 			if (cmd == "sound" || cmd.starts_with("sound ")) {
 				return sound::Command(std::string(cmd.size() > 5 ? cmd.substr(6) : std::string_view{}));
 			}
+			if (cmd == "dive") {
+				return dive::Describe();
+			}
 			if (cmd == "pad") {
 				return std::format("pad polls {}  offline {} (refused {} connections)", pad::Polls(), offline::Enabled(), offline::Refused());
 			}
@@ -369,7 +411,7 @@ namespace phantom::guest
 				Log::SetDebug(cmd.ends_with("on"));
 				return std::string(cmd);
 			}
-			return "guest commands: !status !boot !treadmill on|off !centre !pulse <a+b..> [ms] !pad !sandbox <mission> [x y z rot] !hold <mode> [radius] !whistle !follow ... !blast !menu !refill !ammo !sound [volume g] !capture [probe N|...] !window !debug on|off   (anything else is Lua)";
+			return "guest commands: !status !boot !jump !treadmill on|off !centre !pulse <a+b..> [ms] !pad !sandbox <mission> [x y z rot] !hold <mode> [radius] !whistle !follow ... !blast !menu !refill !ammo !cigar !sound [volume g] !capture [probe N|...] !window !debug on|off   (anything else is Lua)";
 		}
 
 		DWORD WINAPI Maintenance(void*)
@@ -459,6 +501,7 @@ namespace phantom::guest
 			hold::Init();
 		}
 		follow::Install();
+		horse::Init();  // [Buddy] HorseTreadmill (Horse.cpp): logs on or off
 		blast::Install();
 		throwing::Install();
 		placed::Init();

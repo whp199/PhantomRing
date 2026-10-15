@@ -25,6 +25,7 @@ namespace phantom::er
 		float             dt{ 1.0f / 60.0f };
 		bool              guestAlive{ false };
 		bool              guestReady{ false };  // alive, attached, GuestState read, kGuestReady
+		bool              guestRead{ false };   // GuestState read this frame (guest is this frame's, ready or not)
 		proto::GuestState guest{};
 		game::Player      player;
 		bool              inGame{ false };

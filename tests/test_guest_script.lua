@@ -193,6 +193,103 @@ env.vars.currentItemIndex = 0
 check(math.floor(PR.Flags() / F.NVG) % 2 == 0 and PR.Run('refill') == 'refill=36/30/0,0/0/0,7/0/0', 'no NVG; refill magazine sizes')
 env.vars.optionSelectedIndices = { [11] = 0 }
 check(PR.AutoAim(false) == 'off (was on)' and env.vars.optionSelectedIndices[11] == 1, 'auto-aim correction off')
+-- v13: the Phantom Cigar -- the raw smoking flag; the frozen clock moves only on the C++ side's word ('cigar lit|run|out',
+-- mgsv/Cigar.cpp ClockGovernor) and is held frozen (every 60 Ticks) while he doesn't smoke
+local smokingNow = false
+env.TppGameStatus.IsSet = function(name, flag) return flag == 'S_IS_TIME_CIGARETTE' and smokingNow end
+check(F.CIGAR == 268435456, 'CIGAR is 1 << 28 (State.h kLCigar)')
+check(math.floor(PR.Flags() / F.CIGAR) % 2 == 0, 'no cigar flag while [Cigar] is off')
+check(PR.Clock('12:00:00', true) == 'time=true freeze=true' and PR.clockFrozen == true, 'the clock is frozen')
+check(PR.Cigar(true, 20):find('let run at x20') ~= nil, 'cigar watch on')
+local function lastScale() for i = #log, 1, -1 do if log[i]:find('^scale ') then return log[i] end end end
+local function scales() local n = 0 for i = 1, #log do if log[i]:find('^scale ') then n = n + 1 end end return n end
+log = {}
+for _ = 1, 120 do PR.Tick('') end
+check(scales() == 2 and lastScale() == 'scale 0', 'not smoking: held frozen every 60 Ticks')
+smokingNow = true
+check(math.floor(PR.Flags() / F.CIGAR) % 2 == 1, 'S_IS_TIME_CIGARETTE -> the cigar flag')
+log = {}
+local rc = { PR.Tick('cigar lit') }
+check(math.floor(rc[1] / F.CIGAR) % 2 == 1 and PR.cigar.on and PR.cigar.lit == 1 and lastScale() == nil and rc[11] == 'cigar=lit',
+	'lit: no speed set (MGSV may run its own time-lapse): ' .. tostring(rc[11]))
+for _ = 1, 120 do PR.Tick('') end
+check(lastScale() == nil, 'while he smokes the clock is not held frozen')
+rc = { PR.Tick('cigar run') }
+check(lastScale() == 'scale 20' and rc[11] == 'cigar=x20=true', 'run: the clock at x20: ' .. tostring(rc[11]))
+smokingNow = false
+log = {}
+rc = { PR.Tick('cigar out') }
+check(lastScale() == 'scale 0' and not PR.cigar.on and rc[11] == 'cigar=frozen=true', 'out: frozen again: ' .. tostring(rc[11]))
+log = {}
+for _ = 1, 120 do PR.Tick('') end
+check(scales() == 2, 'and held frozen after, whenever MGSV restores its own speed')
+-- Not into the title (a load, a cutscene): nothing held there.
+env.gvars.ini_isTitleMode = true
+log = {}
+for _ = 1, 120 do PR.Tick('') end
+check(scales() == 0, 'not held frozen outside the loaded sandbox')
+env.gvars.ini_isTitleMode = false
+-- [Boot] FreezeClock = false: the clock is left alone.
+PR.clockFrozen = false
+log = {}
+rc = { PR.Tick('cigar lit;cigar run;cigar out') }
+for _ = 1, 120 do PR.Tick('') end
+check(scales() == 0 and PR.cigar.lit == 2 and not PR.cigar.on and rc[11]:find('left') ~= nil, 'an unfrozen clock is left alone: ' .. tostring(rc[11]))
+PR.clockFrozen = true
+check(PR.Run('cigar bogus') == 'cigar=unknown', 'unknown cigar word')
+local mutedCigar, muteCheck = nil, env.TppSoundDaemon.CheckCurrentMuteIs
+env.TppSoundDaemon.CheckCurrentMuteIs = function(n) return n == mutedCigar end
+mutedCigar = 'Cigarette'
+check(math.floor(PR.Flags() / F.CIGAR) % 2 == 1, "MGSV's 'Cigarette' mute alone counts too")
+env.TppSoundDaemon.CheckCurrentMuteIs = muteCheck
+check(PR.Cigar(false) == 'off' and PR.cigar == nil, 'cigar watch off')
+
+-- ---- inert full proxies (docs/GUEST.md 20.6) -------------------------------------------------------------
+log = {}
+check(PR.ProxyEnable(0x101, false) == 'true', 'ProxyEnable answers the enable')
+check(log[1] == 'send 257 SetDisableDamage nil ' and log[2] == 'send 257 SetRestrictNotice true ' and log[3] == 'send 257 SetPuppet true ',
+	'proxy enable: damage off, restrict-notice and puppet BEFORE the enable: ' .. tostring(log[2]) .. ' / ' .. tostring(log[3]))
+check(log[4] == 'send 257 SetEnabled true ' and log[5] == 'send 257 SetRestrictNotice true ' and log[6] == 'send 257 SetPuppet true ' and log[7] == nil,
+	'proxy enable: enabled, then inert again: ' .. tostring(log[4]))
+log = {}
+check(PR.ProxyInert(0x101, false) == 'true,true' and log[1] == 'send 257 SetRestrictNotice true ' and log[2] == nil,
+	'an asleep proxy keeps restrict-notice only (a puppet ignores ChangeLifeState)')
+env.vars.playerPhase = 3
+check(PR.ProxyPhase() == '3', 'alert phase read')
+-- The calm and the noAssignRoute enable with a stub that logs the fields the shared one leaves out (phase, noAssignRoute), and
+-- two command posts by index (then a repeat: GetGameObjectIdByIndex wraps), so the per-post SetPhase loop runs.
+local sharedGO = env.GameObject
+env.GameObject = {
+	GetGameObjectIdByIndex = function(cls, i)
+		if cls == 'TppCommandPost2' then return ({ [0] = 0x5001, 0x5002, 0x5001 })[i] or 65535 end
+		return sharedGO.GetGameObjectIdByIndex(cls, i)
+	end,
+	SendCommand = function(target, cmd)
+		local who = type(target) == 'table' and target.type or tostring(target)
+		record('send', who, cmd.id, 'phase=' .. tostring(cmd.phase), 'noAssignRoute=' .. tostring(cmd.noAssignRoute), 'enabled=' .. tostring(cmd.enabled))
+	end,
+}
+log = {}
+local calm = PR.ProxyCalm()
+check(calm == 'phase 3: SetPhase 0 to every command post true, to 2 by id', 'calm: ' .. calm)
+check(log[1] == 'send TppCommandPost2 SetPhase phase=0 noAssignRoute=nil enabled=nil', 'calm: SetPhase 0 to the command post type: ' .. tostring(log[1]))
+check(log[2] == 'send 20481 SetPhase phase=0 noAssignRoute=nil enabled=nil' and log[3] == 'send 20482 SetPhase phase=0 noAssignRoute=nil enabled=nil'
+	and log[4] == nil, 'calm: SetPhase 0 to each command post once (stops at the repeat): ' .. tostring(log[2]) .. ' / ' .. tostring(log[4]))
+env.TppGameObject = { PHASE_SNEAK = 0 }
+log = {}
+check(PR.ProxyEnable(0x101, true) == 'true', 'ProxyEnable(noAssignRoute) answers the enable')
+check(log[4] == 'send 257 SetEnabled phase=nil noAssignRoute=true enabled=true', 'proxy enable: noAssignRoute = true on the enable: ' .. tostring(log[4]))
+log = {}
+PR.ProxyEnable(0x101, false)
+check(log[4] == 'send 257 SetEnabled phase=nil noAssignRoute=nil enabled=true', 'proxy enable: no noAssignRoute unless asked: ' .. tostring(log[4]))
+env.GameObject = sharedGO
+log = {}
+local sweep = PR.ProxySweep('257,259')
+check(sweep == '3 disabled', 'sweep disables every soldier but the kept ones: ' .. sweep)
+check(log[1] == 'send 256 SetEnabled false ' and log[2] == 'send 258 SetEnabled false ' and log[3] == 'send 260 SetEnabled false ' and log[4] == nil,
+	'sweep keeps 257 and 259: ' .. tostring(log[2]))
+env.vars.playerPhase = nil
+check(PR.ProxyPhase() == '-1', 'no phase: -1')
 
 -- ---- robustness: an empty engine ---------------------------------------------------------------------
 local bare = { math = math, string = string, table = table, pairs = pairs, ipairs = ipairs, type = type, tostring = tostring,

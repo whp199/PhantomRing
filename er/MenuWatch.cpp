@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "Game.h"
 #include "InputBridge.h"
+#include "Kbm.h"
 #include "Log.h"
 
 #include <algorithm>
@@ -94,7 +95,8 @@ namespace phantom::er::MenuWatch
 				const bool  down = (state & 0x8000) != 0;
 				const bool  pressed = (down && !g_keyDown[vk]) || (!down && (state & 0x0001));
 				g_keyDown[vk] = down;
-				if (pressed && ours) {
+				// [Keyboard] (er/Kbm.h) may keep the key from Elden Ring (G is the chord key while Snake plays): no menu then.
+				if (pressed && ours && Kbm::KeyReachesEr(vk)) {
 					++g_keyPresses;
 					InputBridge::NoteMenuPress();
 					Log::Info("menu watch: key {:#04x} ({}) pressed in Elden Ring's window -- counted as a menu press", vk,

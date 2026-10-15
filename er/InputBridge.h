@@ -17,7 +17,8 @@
 //    gets the face buttons, D-pad, Start and View only (UNVERIFIED live), MGSV a neutral pad;
 //  - otherwise (ER menu open, guest not alive, not puppeting): the real state, and MGSV is told to
 //    use a neutral pad (kPadNeutral) while an ER menu or loading owns the controller.
-// Keyboard and mouse are left to Elden Ring for now (phase 5 forwards them to MGSV's raw input).
+// Keyboard and mouse: [Keyboard] (er/Kbm.h, off by default) turns them into this pad while Snake plays (Kbm::Apply, before
+// it is published); tier 2 (MGSV's own raw input) is still open.
 
 #include "Chord.h"
 
@@ -85,6 +86,18 @@ namespace phantom::er
 		// Test automation (console `input virtualpad on|off`): user 0 reports a connected neutral gamepad to Elden Ring's
 		// capability query and polls, and Elden Ring is told devices changed, so it enumerates and polls it.
 		std::string SetVirtualPad(bool a_on);
+
+		// Keyboard and mouse (er/Kbm.h) follow the same modes as the pad.
+		struct Modes
+		{
+			bool          maskEr{ false };       // SetMode: Snake plays, Elden Ring gets the allow-list
+			bool          guestMenu{ false };    // SetGuestMenu
+			bool          buttonsOnly{ false };  // SetButtonsOnly
+			PadGate::Mode pad{ PadGate::Mode::kOff };
+		};
+		Modes         CurrentModes();
+		std::uint64_t LastErPollMs();  // GetTickCount64 of Elden Ring's own last XInputGetState (none: it sees no controller)
+		bool          VirtualPadOn();
 
 		// Forward an MGSV rumble to the real controller (kGEvRumble).
 		void Rumble(std::uint16_t a_low, std::uint16_t a_high);

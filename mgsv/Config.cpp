@@ -37,6 +37,41 @@ namespace phantom::guest
 			}
 			return out;
 		}
+
+		// XInput button names ("rs", "lb+rb", "lb rb lt", "0x0080"); "lt" (a trigger, no button bit) sets a_lt. 0 = none known.
+		std::uint16_t Buttons(const std::string& a_list, bool& a_lt)
+		{
+			static constexpr std::pair<const char*, std::uint16_t> kNames[] = { { "up", 0x0001 }, { "down", 0x0002 }, { "left", 0x0004 },
+				{ "right", 0x0008 }, { "start", 0x0010 }, { "back", 0x0020 }, { "view", 0x0020 }, { "ls", 0x0040 }, { "l3", 0x0040 }, { "rs", 0x0080 },
+				{ "r3", 0x0080 }, { "lb", 0x0100 }, { "rb", 0x0200 }, { "a", 0x1000 }, { "b", 0x2000 }, { "x", 0x4000 }, { "y", 0x8000 } };
+			std::uint16_t out = 0;
+			std::string   item;
+			std::string   list = Lower(a_list);
+			std::ranges::replace(list, '+', ' ');
+			std::ranges::replace(list, ',', ' ');
+			std::stringstream ss(list);
+			while (ss >> item) {
+				if (item == "lt") {
+					a_lt = true;
+					continue;
+				}
+				bool known = false;
+				for (const auto& [name, bit] : kNames) {
+					if (item == name) {
+						out = static_cast<std::uint16_t>(out | bit);
+						known = true;
+					}
+				}
+				if (!known) {
+					try {
+						out = static_cast<std::uint16_t>(out | std::stoul(item, nullptr, 0));
+					} catch (...) {
+						Log::Warn("ini: '{}' is not a pad button", item);
+					}
+				}
+			}
+			return out;
+		}
 	}
 
 	const Config& Cfg() { return g_config; }
@@ -102,6 +137,8 @@ namespace phantom::guest
 		buddyFollowModes = Lower(ini.Get("Buddy", "FollowModes", buddyFollowModes));
 		buddyHorseFollowDistance = static_cast<float>(ini.GetFloat("Buddy", "HorseFollowDistance", buddyHorseFollowDistance));
 		buddyHorseWhistleEveryMs = static_cast<int>(ini.GetInt("Buddy", "HorseWhistleEveryMs", buddyHorseWhistleEveryMs));
+		buddyHorseTreadmill = ini.GetBool("Buddy", "HorseTreadmill", buddyHorseTreadmill);
+		buddyHorseMoveRider = ini.GetBool("Buddy", "HorseMoveRider", buddyHorseMoveRider);
 
 		const auto hold = Lower(ini.Get("Motion", "Hold", "native_treadmill"));
 		holdMode = hold == "off"                ? HoldMode::kOff
@@ -116,6 +153,29 @@ namespace phantom::guest
 		treadmillMovesBuddy = ini.GetBool("Motion", "TreadmillMovesBuddy", treadmillMovesBuddy);
 		velocitySmoothing = static_cast<float>(ini.GetFloat("Motion", "VelocitySmoothing", velocitySmoothing));
 		warpLift = static_cast<float>(ini.GetFloat("Motion", "WarpLift", warpLift));
+		diveFlag = ini.GetBool("Motion", "DiveFlag", diveFlag);
+		diveConfirmMs = static_cast<int>(ini.GetInt("Motion", "DiveConfirmMs", diveConfirmMs));
+		jump = ini.GetBool("Jump", "Enabled", jump);
+		if (const auto button = ini.Get("Jump", "Button", ""); !button.empty()) {
+			bool lt = false;
+			const auto bits = Buttons(button, lt);
+			if (bits && !lt) {
+				jumpButton = bits;
+			} else {
+				Log::Warn("ini: [Jump] Button '{}' is no pad button (ls rs a b x y lb rb up down left right back, or 0x hex) -- keeping {:#06x}", button,
+					jumpButton);
+			}
+		}
+		{
+			bool lt = false;
+			jumpPassWith = Buttons(ini.Get("Jump", "PassWith", "lb rb lt up down left right"), lt);
+			jumpPassAiming = lt;
+		}
+		jumpLift = std::clamp(static_cast<float>(ini.GetFloat("Jump", "Lift", jumpLift)), 0.2f, 1.5f);
+		jumpMaxAirMs = std::clamp(static_cast<int>(ini.GetInt("Jump", "MaxAirMs", jumpMaxAirMs)), 500, 5000);
+		if (jump) {
+			Log::Info("ini: [Jump] button {:#06x} (MGSV's own with {:#06x}{} held), lift {:.2f} m", jumpButton, jumpPassWith, jumpPassAiming ? " or LT" : "", jumpLift);
+		}
 		jobSleepUs = std::clamp(static_cast<int>(ini.GetInt("Pacing", "JobSleepUs", jobSleepUs)), 0, 1000);
 		waitProbe = ini.GetBool("Pacing", "WaitProbe", waitProbe);
 
@@ -148,7 +208,14 @@ namespace phantom::guest
 		blasts = ini.GetBool("Combat", "Blasts", blasts);
 		throws = ini.GetBool("Combat", "Throws", throws);
 		placed = ini.GetBool("Combat", "Placed", placed);
+		decoys = ini.GetBool("Combat", "Decoys", decoys);
+		decoyPopInMgsv = ini.GetBool("Combat", "DecoyPopInMgsv", decoyPopInMgsv);
 		mgsvBlasts = ini.GetBool("Combat", "MgsvBlasts", mgsvBlasts);
+		c4Detonator = ini.GetBool("Combat", "C4Detonator", c4Detonator);
+		c4Backup = ini.GetBool("Combat", "C4Backup", c4Backup);
+		c4Buttons = static_cast<std::uint32_t>(ini.GetInt("Combat", "C4Buttons", c4Buttons));
+		c4GraceMs = std::clamp<std::int64_t>(ini.GetInt("Combat", "C4GraceMs", c4GraceMs), 0, 5000);
+		c4DetonateAll = ini.GetBool("Combat", "C4DetonateAll", c4DetonateAll);
 
 		blockSaves = ini.GetBool("Saves", "Block", blockSaves);
 		saveSinkDir = Widen(ini.Get("Saves", "SinkDir", Narrow(saveSinkDir)));
@@ -176,7 +243,12 @@ namespace phantom::guest
 
 		capture = ini.GetBool("Capture", "Enabled", capture);
 		hud = ini.GetBool("Capture", "Hud", hud);
+		captureRevalidate = ini.GetBool("Capture", "Revalidate", captureRevalidate);
 		hudEvery = static_cast<int>(ini.GetInt("Capture", "HudEvery", hudEvery));
+		projectileMeshes = ini.GetBool("Capture", "ProjectileMeshes", projectileMeshes);
+
+		cigarTimeSkip = ini.GetBool("Cigar", "TimeSkip", cigarTimeSkip);
+		cigarClockScale = std::clamp(static_cast<float>(ini.GetFloat("Cigar", "ClockScale", cigarClockScale)), 0.0f, 10000.0f);
 
 		fultonAnchor = ini.GetBool("Fulton", "Enabled", fultonAnchor);
 		fultonMethod = ini.Get("Fulton", "Method", fultonMethod);
@@ -187,6 +259,23 @@ namespace phantom::guest
 		fultonLeave = std::clamp(static_cast<float>(ini.GetFloat("Fulton", "Leave", fultonLeave)), fultonReach + 0.5f, 20.0f);
 		fultonCandidates = std::clamp(static_cast<float>(ini.GetFloat("Fulton", "CandidateRadius", fultonCandidates)), 10.0f, 300.0f);
 		fultonRise = std::clamp(static_cast<float>(ini.GetFloat("Fulton", "Rise", fultonRise)), 0.5f, 20.0f);
+		cqc = ini.GetBool("Cqc", "Enabled", cqc);
+		cqcMgsvHold = ini.GetBool("Cqc", "MgsvHold", cqcMgsvHold);
+		{
+			const auto u = [&](const char* a_key, std::uint32_t& a_value, std::int64_t a_max) {
+				a_value = static_cast<std::uint32_t>(std::clamp<std::int64_t>(ini.GetInt("Cqc", a_key, a_value), 0, a_max));
+			};
+			u("HoldMs", cqcHoldMs, 5000);
+			u("ChokeMs", cqcChokeMs, 60000);
+			u("MaxHoldMs", cqcMaxHoldMs, 120000);
+			u("CooldownMs", cqcCooldownMs, 10000);
+			u("Buttons", cqcButtons, 0xFFFFFFFF);
+			u("AimButtons", cqcAimButtons, 0xFFFFFFFF);
+			u("InterrogateButtons", cqcInterrogateButtons, 0xFFFFFFFF);
+			u("ChokeButtons", cqcChokeButtons, 0xFFFFFFFF);
+		}
+		cqcThrowStick = std::clamp(static_cast<float>(ini.GetFloat("Cqc", "ThrowStick", cqcThrowStick)), 0.05f, 1.01f);
+		cqcRange = std::clamp(static_cast<float>(ini.GetFloat("Cqc", "Range", cqcRange)), 0.3f, 5.0f);
 		proxies = ini.GetBool("Proxies", "Enabled", proxies);
 		proxyMax = std::clamp(static_cast<int>(ini.GetInt("Proxies", "Max", proxyMax)), 0, 32);
 		proxyMaxDistance = static_cast<float>(ini.GetFloat("Proxies", "MaxDistance", proxyMaxDistance));
@@ -197,6 +286,16 @@ namespace phantom::guest
 		proxyAutoAim = ini.GetBool("Proxies", "AutoAim", proxyAutoAim);
 		proxyKeepMarkers = ini.GetBool("Proxies", "KeepMarkers", proxyKeepMarkers);
 		proxyCaptureRadius = static_cast<float>(ini.GetFloat("Proxies", "CaptureRadius", proxyCaptureRadius));
+		proxyInert = ini.GetBool("Proxies", "Inert", proxyInert);
+		proxyNoAssignRoute = ini.GetBool("Proxies", "NoAssignRoute", proxyNoAssignRoute);
+		proxyPhaseLock = ini.GetBool("Proxies", "PhaseLock", proxyPhaseLock);
+		proxyAlertGiveUpSec = std::clamp(static_cast<float>(ini.GetFloat("Proxies", "AlertGiveUpSec", proxyAlertGiveUpSec)), 2.0f, 600.0f);
+		proxyHeight = ini.Get("Proxies", "Height", proxyHeight);
+		if (proxyHeight != "ground" && proxyHeight != "enemy") {
+			proxyHeight = "ground";
+		}
+		proxyHeightTolerance = std::clamp(static_cast<float>(ini.GetFloat("Proxies", "HeightTolerance", proxyHeightTolerance)), 0.5f, 20.0f);
+		proxyAimHeightFix = ini.GetBool("Proxies", "AimHeightFix", proxyAimHeightFix);
 
 		luaOverride = Widen(ini.Get("Lua", "OverrideFile", Narrow(luaOverride)));
 		dumpDefaultLua = ini.GetBool("Lua", "DumpDefault", dumpDefaultLua);

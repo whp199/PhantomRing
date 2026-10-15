@@ -3,6 +3,7 @@
 #include "Chord.h"
 #include "Config.h"
 #include "Hook.h"
+#include "Kbm.h"
 #include "Link.h"
 #include "Log.h"
 
@@ -266,6 +267,7 @@ namespace phantom::er::InputBridge
 				a_state->dwPacketNumber = 1;
 				raw = ERROR_SUCCESS;
 			}
+			raw = Kbm::Apply(a_index, a_state, raw);  // keyboard and mouse as Snake's pad ([Keyboard]), published and masked as a real one
 			const DWORD result = ApplyInjection(a_index, a_state, raw);
 			g_calls.fetch_add(1, std::memory_order_relaxed);
 			const bool ok = result == ERROR_SUCCESS && a_state;
@@ -483,6 +485,9 @@ namespace phantom::er::InputBridge
 		}
 		g_installed = true;
 		Log::Info("input: XInputGetState hooked (ER pad masked while puppeting; allow-list {:#06x})", Cfg().allowButtons);
+		if (Cfg().keyboard.enabled) {
+			Kbm::Install();  // keyboard and mouse onto this pad (off by default; `input kbm on` installs it later)
+		}
 		return true;
 	}
 
@@ -520,6 +525,18 @@ namespace phantom::er::InputBridge
 	std::uint32_t PromptPresses() { return g_promptPresses.load(std::memory_order_relaxed); }
 	int           PadIndex() { return g_padIndex.load(std::memory_order_relaxed); }
 	std::uint64_t Calls() { return g_calls.load(std::memory_order_relaxed); }
+
+	Modes CurrentModes()
+	{
+		Modes m;
+		m.maskEr = g_maskEr.load(std::memory_order_relaxed);
+		m.guestMenu = g_guestMenu.load(std::memory_order_relaxed);
+		m.buttonsOnly = g_buttonsOnly.load(std::memory_order_relaxed);
+		m.pad = static_cast<PadGate::Mode>(g_padMode.load(std::memory_order_relaxed));
+		return m;
+	}
+	std::uint64_t LastErPollMs() { return g_lastErCall.load(std::memory_order_relaxed); }
+	bool          VirtualPadOn() { return g_virtualPad.load(std::memory_order_relaxed); }
 
 	void Rumble(std::uint16_t a_low, std::uint16_t a_high)
 	{

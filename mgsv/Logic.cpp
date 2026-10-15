@@ -348,6 +348,12 @@ namespace phantom::guest::logic
 			return placed(BlastKind::kLethal, 1500);
 		case 425: case 426: case 427:  // EQP_SWP_ElectromagneticNetMine(_G01, _G02): a net, no blast (its BLA row 0x17: 5.0 m)
 			return placed(BlastKind::kStun, 3000, false, 5.0f);
+		// Decoys: no blast and no trigger of ours (the host makes Elden Ring's enemies stare at them; UNVERIFIED live that
+		// MGSV mirrors a set decoy into placedWeapons like a mine -- the Placed System holds the map's own decoys).
+		case 397: case 398: case 399:                          // EQP_SWP_Decoy(_G01, _G02)
+		case 401: case 402: case 403:                          // EQP_SWP_ActiveDecoy(_G01, _G02): it calls out
+		case 405: case 406: case 407: case 380: case 381:      // EQP_SWP_ShockDecoy(_G01.._G04): it shocks who touches it
+			return Explosive{ ExplosiveUse::kDecoy, BlastKind::kIgnore };  // kIgnore: no blast is ever matched to one (Placed MatchBlast)
 		default:
 			return {};
 		}
@@ -544,4 +550,66 @@ namespace phantom::guest::logic
 			return Pad::kPass;
 		}
 	}
+
+	std::uint16_t JumpButton::Filter(std::uint16_t a_buttons, bool a_aiming, std::uint16_t a_button, std::uint16_t a_passWith, bool a_passAiming, bool& a_jump,
+		bool a_mgsvOwns)
+	{
+		a_jump = false;
+		if (!a_button || (a_buttons & a_button) != a_button) {
+			Reset();
+			return a_buttons;
+		}
+		if (!down_) {
+			// Decided at the press, for the whole hold: MGSV's own (a modifier held) or a jump.
+			down_ = true;
+			swallow_ = !a_mgsvOwns && !(a_buttons & a_passWith & static_cast<std::uint16_t>(~a_button)) && !(a_passAiming && a_aiming);
+			a_jump = swallow_;
+		}
+		return swallow_ ? static_cast<std::uint16_t>(a_buttons & ~a_button) : a_buttons;
+	}
+
+	JumpTracker::Event JumpTracker::Update(bool a_press, bool a_canJump, std::uint64_t a_nowMs, float a_rootY, bool a_fall, std::uint64_t a_maxAirMs)
+	{
+		if (phase_ == Phase::kIdle) {
+			if (!a_press) {
+				return Event::kNone;
+			}
+			const bool cooling = everEnded_ && a_nowMs - ended_ < kCooldownMs;
+			if (!a_canJump || cooling || !std::isfinite(a_rootY)) {
+				return Event::kRefused;
+			}
+			phase_ = Phase::kAir;
+			start_ = a_nowMs;
+			startY_ = maxY_ = lastY_ = a_rootY;
+			rose_ = fell_ = sawFall_ = false;
+			still_ = 0;
+			return Event::kLift;
+		}
+		if (std::isfinite(a_rootY)) {
+			maxY_ = std::max(maxY_, a_rootY);
+			rose_ = rose_ || maxY_ - startY_ >= kRoseM;
+			fell_ = fell_ || (rose_ && maxY_ - a_rootY >= kFellM);
+			still_ = fell_ && std::fabs(a_rootY - lastY_) <= kStillM ? still_ + 1 : 0;
+			lastY_ = a_rootY;
+		}
+		sawFall_ = sawFall_ || a_fall;
+		const std::uint64_t air = a_nowMs - start_;
+		Event               done = Event::kNone;
+		if (!rose_ && air >= kRiseMs) {
+			done = Event::kNoLift;
+		} else if (fell_ && (still_ >= kStillFrames || (sawFall_ && !a_fall))) {
+			done = Event::kLanded;
+		} else if (air >= a_maxAirMs) {
+			done = Event::kTimedOut;
+		}
+		if (done != Event::kNone) {
+			phase_ = Phase::kIdle;
+			ended_ = a_nowMs;
+			everEnded_ = true;
+			return done;
+		}
+		return a_press ? Event::kRefused : Event::kNone;
+	}
+
+	void JumpTracker::Abort() { phase_ = Phase::kIdle; }
 }

@@ -422,6 +422,8 @@ static void TestDebugLayer()
 	CHECK(DebugLayer::Describe() == "debug layer: off");
 }
 
+#include "test_host_materials.inc"
+
 int main()
 {
 	phantom::Log::Init(L"test_render.log", "test");
@@ -434,6 +436,7 @@ int main()
 	TestRetire();
 	TestSunCascadeAtlas();
 	TestDebugLayer();
+	TestMaterialRoles();
 	std::printf("test_render: %s (%d failures)\n", g_failures ? "FAILED" : "ok", g_failures);
 	return g_failures ? 1 : 0;
 }
