@@ -13,8 +13,11 @@ edit that one). The log is `PhantomRingHost.log` next to the DLL.
 
 `DllMain` only starts a thread. That thread runs these steps in order:
 
-1. **Exe identity.** It checks TimeDateStamp `0x6A96B418` and SizeOfImage `0x5E0DA00`. With `verify_sha256`, it also checks the sha256. Any other exe gets one `exe mismatch` line in the log, and the DLL stays inert.
-2. **Address table** (`er/Addresses.cpp`). Each entry is checked against this exe:
+1. **Exe identity.** TimeDateStamp and SizeOfImage pick one of the supported builds (`er/Addresses.h` `kBuilds`): 2.7.2.0
+   (App 1.17.2: `0x6AABF7E7` / `0x5DFD600`) or 2.7.1.0 (App 1.17.1: `0x6A96B418` / `0x5E0DA00`). With `verify_sha256`, it
+   also checks that build's sha256. Any other exe gets one `exe mismatch` line in the log, and the DLL stays inert.
+2. **Address table** (`er/Addresses.cpp`, one per supported build; see *Elden Ring builds* below). Each entry is checked
+   against this exe:
    - globals: a unique AOB that resolves to the expected RVA;
    - functions: the expected bytes at the RVA (for jmp thunks, the jump target too);
    - vtables: the RTTI name behind `vtable[-1]`.
@@ -25,6 +28,33 @@ edit that one). The log is `PhantomRingHost.log` next to the DLL.
 5. **System init.** It waits for `global_hinstance` and the `CSTaskImp` instance, as fromsoftware-rs does.
 6. **FD4 singleton finder** (`er/Singletons.cpp`, TGA's method in-process). It names every singleton slot through the game's own `get_singleton_name`. It cross-checks the AOB-resolved slots by name and gives the console `s.<Name>` symbols.
 7. **Tasks** (`er/Tasks.cpp`). A RecurringTask-shaped object is registered with `register_task` in four groups.
+
+### Elden Ring builds
+
+Each supported `eldenring.exe` has its own address table and `Layout` (`er/Addresses.cpp` `kTables`); the identity check
+picks one. RVAs named elsewhere in these docs and in code comments are 2.7.1.0's (the build PhantomRing 0.1-0.4 was made
+and live-tested on) unless they say otherwise; `tools/er_aob_scan.py verify` prints every catalog entry for whichever
+build it is given.
+
+**2.7.2.0 (App 1.17.2, Steam build 25827938, 2026-10-21).** Ported offline 2026-10-26, byte-verified, then run live the
+same day with both games (me3 0.13.0 unchanged; `address table (eldenring.exe 2.7.2.0): 80/80 verified`; the regression is
+in [STATUS.md](STATUS.md#elden-ring-1172-eldenringexe-2720-2026-10-26-live-regression)). The port:
+- The 2.7.1.0 image was rebuilt from the Ghidra project and diffed against 2.7.2.0. Every function in the table (and the
+  callees whose behaviour PhantomRing relies on) has the same reachable code instruction for instruction, rel32/RIP
+  operands aside; every global is the same FD4 singleton by name (all moved by `0x3020`) or the same site; every vtable is
+  the same RTTI class with the same slots (PlayerCtrl slot 12, CSPlayerDamageModule slot 7, the snipe collector's six).
+- New: FD4PadManager's AOB (2.7.1.0's ran into an Arxan stub, whose bytes differ per build), cast_ray's world-cast call
+  bytes (its rel32), and the RVAs. The task group table (169 groups) is identical.
+- **WorldChrMan grew by 0x10** (WorldChrManImp `0x1F3E0` -> `0x1F3F0` bytes; two new pointers at `+0x1E600`): every field
+  from `+0x1E600` on moved by 0x10, so `chr_cam` is `+0x1ECF0` (was `+0x1ECE0`) and the by-distance list `+0x1F1E0` (was
+  `+0x1F1D0`): `Layout`. `main_player` `+0x1E508` and everything below stayed. Found by the classes' deleting-destructor
+  sizes (the only one of ~4,000 that changed) and the field accesses after every load of each singleton slot the host uses
+  (all identical but WorldChrMan's).
+- Other code changes met on the way (none touches what the host reads): ChrIns::ApplySpEffect's worker calls a function
+  (`0x3F6000`) that now special-cases SpEffects 503041 and 1673020-1673034, and ReceiveDamage's worker (`0x445650`) four
+  attack ids 10673010-10673013.
+- Regulation: one Bullet row changed (20003309, `atk_id_bullet` 0 -> 1); every row PhantomRing reads or patches is
+  byte-identical.
 
 ### Per frame (ER task groups)
 

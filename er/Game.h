@@ -50,9 +50,8 @@ namespace phantom::er::game
 	inline constexpr std::uint32_t kDataMaxHp = 0x13C;        // [V]
 	inline constexpr std::uint32_t kDataDebug = 0x19B;        // bit0 NoDead, bit1 NoDamage [V-src CT, code tests V]
 	// WorldChrMan
-	inline constexpr std::uint32_t kWcmMainPlayer = 0x1E508;  // [V]
-	inline constexpr std::uint32_t kWcmChrCam = 0x1ECE0;      // [V]
-	inline constexpr std::uint32_t kWcmByDistance = 0x1F1D0;  // DLVector<{ChrIns*, f32 dist, u32}> {alloc, first, last, end} [V]
+	inline constexpr std::uint32_t kWcmMainPlayer = 0x1E508;  // [V] (every supported build)
+	// chr_cam and the by-distance list differ between builds: Addr().layout (er/Addresses.h Layout) [V]
 	// CSCamera / CSCam
 	inline constexpr std::uint32_t kCameraPersCam1 = 0x08;    // [V]
 	inline constexpr std::uint32_t kCamMatrix = 0x10;         // rows right, up, forward, position [V layout]

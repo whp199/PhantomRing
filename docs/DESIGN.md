@@ -29,7 +29,7 @@ exceptions are explicit, temporary, and listed in §12.
 
 | Thing | Value | Notes |
 |---|---|---|
-| Elden Ring | 1.17.1 (exe 2.7.1.0, sha256 `1a354710…8b597891`) | Arxan-protected; offline only; loaded through **me3 0.13** `[[natives]]` with `disable_arxan = true`, `start_online = false`, isolated save |
+| Elden Ring | 1.17.2 (exe 2.7.2.0, sha256 `f9118fea…98ffb328`) or 1.17.1 (exe 2.7.1.0, sha256 `1a354710…8b597891`): one address table each | Arxan-protected; offline only; loaded through **me3 0.13** `[[natives]]` with `disable_arxan = true`, `start_online = false`, isolated save |
 | MGSV | TPP 1.0.15.4 (sha256 `085c2f82…bb45`, July 2026 patch) | Denuvo wrapper, game code plain; fixed base 0x140000000; `dinput8.dll` proxy (same as IHHook/tpp-mod/MGS5VR) |
 | Platform | Linux, Steam + Proton Experimental (11.0), each game in **its own prefix** | MGSV runs inside **headless gamescope** (invisible, believes it has focus) |
 | Toolchain | x86_64-w64-mingw32-g++ 16 (C++23), CMake/Ninja, MinHook 1.3.4 | Static runtime, no MSVC needed |

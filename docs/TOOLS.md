@@ -73,7 +73,7 @@ and the game runs it when it next serves its console.
    - Steam is running (`~/.steam/steam.pid`, or a `steam` process). Its folder is `$PHANTOMRING_STEAM`, else the first of `~/.steam/root`, `~/.steam/steam`, `~/.local/share/Steam`, `~/.steam/debian-installation` and Flatpak's `~/.var/app/com.valvesoftware.Steam/.local/share/Steam` (untested) that has `steamapps/libraryfolders.vdf`.
    - Neither `eldenring.exe` nor `mgsvtpp.exe` is running.
    - Both apps have `StateFlags 4`.
-   - The exe sha256 matches the pin: ER `1a354710…8b597891`, MGSV `085c2f82…bb45`.
+   - The exe sha256 matches a pin: ER `f9118fea…98ffb328` (1.17.2 / 2.7.2.0) or `1a354710…8b597891` (1.17.1 / 2.7.1.0), MGSV `085c2f82…bb45`.
    - `build/dinput8.dll` and `build/PhantomRingHost.dll` exist.
    - `MGS_TPP/dinput8.dll` is absent or ours.
    - The Proton and SLR dirs exist, and so does gamescope (a note if its `--help` doesn't list the headless backend).

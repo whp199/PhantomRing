@@ -426,7 +426,7 @@ namespace phantom::er::game
 
 	std::uint8_t* ChrCamObject()
 	{
-		auto* cam = Field(WorldChrMan(), kWcmChrCam);
+		auto* cam = Field(WorldChrMan(), addr().layout.wcmChrCam);
 		return HasVtable(cam, addr()[A::VtChrCam]) ? cam : nullptr;
 	}
 
@@ -522,8 +522,9 @@ namespace phantom::er::game
 		if (!wcm) {
 			return out;
 		}
-		auto*      first = SafePtr(wcm + kWcmByDistance + 0x8);
-		auto*      last = SafePtr(wcm + kWcmByDistance + 0x10);
+		const auto byDistance = addr().layout.wcmByDistance;
+		auto*      first = SafePtr(wcm + byDistance + 0x8);
+		auto*      last = SafePtr(wcm + byDistance + 0x10);
 		if (!first || !last || last < first) {
 			return out;
 		}

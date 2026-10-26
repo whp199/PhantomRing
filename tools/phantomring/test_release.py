@@ -124,8 +124,22 @@ def doctor_on_empty_machine() -> None:
 		log = Path(tmp) / "PhantomRingGuest.log"
 		log.write_text("[1] boot: D-Walker: deploying\n[2] boot: D-Walker: missing: not developed in this save\n")
 		check(doctor.last_buddy_result(log) == "missing: not developed in this save", "the last run's D-Walker result read")
-	exe = b"MZ" + b"\0" * 64 + bytes.fromhex("bd04effe") + b"\0\0\1\0" + (2 << 16 | 7).to_bytes(4, "little") + (1 << 16 | 0).to_bytes(4, "little")
-	check(doctor.pe_file_version(exe) == "2.7.1.0", "PE file version read", doctor.pe_file_version(exe))
+	exe = b"MZ" + b"\0" * 64 + bytes.fromhex("bd04effe") + b"\0\0\1\0" + (2 << 16 | 7).to_bytes(4, "little") + (2 << 16 | 0).to_bytes(4, "little")
+	check(doctor.pe_file_version(exe) == "2.7.2.0", "PE file version read", doctor.pe_file_version(exe))
+
+
+def er_builds() -> None:
+	"""The supported Elden Ring builds agree between the launcher/doctor (launch.py), the host plugin (er/Addresses.h
+	kBuilds: one address table each) and the scanner (tools/er_aob_scan.py BUILDS)."""
+	print("supported Elden Ring builds:")
+	check(list(L.ER_BUILDS.values()) == [("1.17.2", "2.7.2.0"), ("1.17.1", "2.7.1.0")] and L.ER_SHA256 == next(iter(L.ER_BUILDS)),
+		"launch.py: 2.7.2.0 (newest) and 2.7.1.0", L.ER_SUPPORTED)
+	version_re = r'"(\d+\.\d+\.\d+\.\d+)", "(\d+\.\d+\.\d+)", '
+	plugin = re.findall(r"\{ " + version_re + r'0x[0-9A-F]+, 0x[0-9A-F]+, "([0-9a-f]{64})" \}', (ROOT / "er/Addresses.h").read_text())
+	check([(sha, (app, file)) for file, app, sha in plugin] == list(L.ER_BUILDS.items()), "er/Addresses.h kBuilds: the same builds, in order",
+		plugin)
+	scanner = re.findall(r"0x[0-9A-F]{8}: \(" + version_re + r'0x[0-9A-F]+, "([0-9a-f]{64})"\)', (ROOT / "tools/er_aob_scan.py").read_text())
+	check([(sha, (app, file)) for file, app, sha in scanner] == list(L.ER_BUILDS.items()), "tools/er_aob_scan.py BUILDS: the same", scanner)
 
 
 def packages(build: Path) -> None:
@@ -165,7 +179,8 @@ def packages(build: Path) -> None:
 			listed = dict(reversed(line.split()) for line in build_txt.split("sha256:\n", 1)[1].splitlines() if line.strip())
 			ok = all(hashlib.sha256(tar.extractfile(prefix + n).read()).hexdigest() == h for n, h in listed.items())
 			check(ok and len(listed) == len([m for m in members.values() if m.isfile()]) - 1, "BUILD.txt lists every file's sha256", len(listed))
-			check(f"PhantomRing {ver} for Linux" in build_txt and "2.7.1.0" in build_txt and "1.0.15.4" in build_txt, "BUILD.txt: version, game versions")
+			check(f"PhantomRing {ver} for Linux" in build_txt and "2.7.2.0" in build_txt and "2.7.1.0" in build_txt and "1.0.15.4" in build_txt,
+				"BUILD.txt: version, game versions")
 			# The unpacked package's pr knows its version from VERSION + BUILD.txt.
 			unpack = Path(tmp) / "unpacked"
 			tar.extractall(unpack, filter="data")
@@ -245,6 +260,7 @@ def main() -> int:
 	guest_is_ours()
 	redaction()
 	doctor_on_empty_machine()
+	er_builds()
 	packages(build)
 	print("PASS" if not failures else f"FAIL: {failures}")
 	return 1 if failures else 0

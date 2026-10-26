@@ -58,7 +58,7 @@ class Report:
 
 
 def pe_file_version(data: bytes) -> str | None:
-	"""FileVersion from a PE's VS_FIXEDFILEINFO (its 0xFEEF04BD signature), e.g. '2.7.1.0'."""
+	"""FileVersion from a PE's VS_FIXEDFILEINFO (its 0xFEEF04BD signature), e.g. '2.7.2.0'."""
 	i = data.find(struct.pack("<I", 0xFEEF04BD))
 	if i < 0 or i + 16 > len(data):
 		return None
@@ -74,7 +74,8 @@ def run_quiet(cmd: list[str], timeout: float = 10.0) -> str | None:
 	return (r.stdout or "") + (r.stderr or "")
 
 
-def check_game(r: Report, m: L.Machine, appid: int, name: str, exe_rel: str, want_sha: str, want_label: str, want_file: str | None) -> Path | None:
+def check_game(r: Report, m: L.Machine, appid: int, name: str, exe_rel: str, want: dict[str, str], want_label: str, want_file: str | None) -> Path | None:
+	"""want: sha256 -> the label of that supported build."""
 	d = m.app_dir(appid)
 	exe = d / exe_rel if d else None
 	if not exe or not exe.is_file():
@@ -90,8 +91,8 @@ def check_game(r: Report, m: L.Machine, appid: int, name: str, exe_rel: str, wan
 	digest = hashlib.sha256(data).hexdigest()
 	fv = pe_file_version(data)
 	build = state.get("buildid", "?")
-	if digest == want_sha:
-		r.add(OK, f"{name} version", f"{want_label} (exact match, Steam build {build})")
+	if digest in want:
+		r.add(OK, f"{name} version", f"{want[digest]} (exact match, Steam build {build})")
 	else:
 		r.add(FAIL, f"{name} version", f"{exe.name} {fv or '?'} (sha256 {digest[:16]}..., Steam build {build}) is not {want_label}",
 			f"PhantomRing supports {want_label} only{f' ({want_file})' if want_file else ''}: wait for a PhantomRing update for this "
@@ -292,8 +293,9 @@ def diagnose(m: L.Machine | None = None) -> Report:
 		r.add(FAIL, "Steam folder", f"{m.steam} has no steamapps/", "set PHANTOMRING_STEAM to your Steam folder (the one with steamapps/libraryfolders.vdf)")
 	running, detail = L.steam_running(m)
 	r.add(OK if running else WARN, "Steam running", detail, "start Steam and sign in before pr launch (both games need it)")
-	check_game(r, m, L.ER_APPID, "Elden Ring", "Game/eldenring.exe", L.ER_SHA256, "1.17.1 (eldenring.exe 2.7.1.0)", "eldenring.exe 2.7.1.0")
-	mgsv_dir = check_game(r, m, L.MGSV_APPID, "MGSV", "mgsvtpp.exe", L.MGSV_SHA256, "1.0.15.4", None)
+	er_builds = {sha: f"{app} (eldenring.exe {file})" for sha, (app, file) in L.ER_BUILDS.items()}
+	check_game(r, m, L.ER_APPID, "Elden Ring", "Game/eldenring.exe", er_builds, " or ".join(er_builds.values()), None)
+	mgsv_dir = check_game(r, m, L.MGSV_APPID, "MGSV", "mgsvtpp.exe", {L.MGSV_SHA256: "1.0.15.4"}, "1.0.15.4", None)
 	check_proton(r, m)
 	check_gamescope(r)
 	check_me3(r)

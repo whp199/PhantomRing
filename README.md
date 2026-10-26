@@ -21,8 +21,8 @@ player in Skyrim.
 > **Read this first**
 > - **Unofficial fan-made mod.** Not affiliated with, endorsed or sponsored by Konami, FromSoftware or
 >   Bandai Namco.
-> - **No game files are included.** You must own both games on Steam: ELDEN RING (1.17.1) and METAL GEAR
->   SOLID V: THE PHANTOM PAIN (1.0.15.4). Snake's models, textures, animation and sound are read at runtime
+> - **No game files are included.** You must own both games on Steam: ELDEN RING (1.17.2 or 1.17.1) and METAL
+>   GEAR SOLID V: THE PHANTOM PAIN (1.0.15.4). Snake's models, textures, animation and sound are read at runtime
 >   from your own MGSV install.
 > - **Play offline only.** PhantomRing always starts Elden Ring offline through Mod Engine 3, which
 >   neutralises Arxan and never loads Easy Anti-Cheat. Never take a PhantomRing save or setup online.
@@ -40,7 +40,8 @@ game runs as usual.
 
 | | Version | |
 |---|---|---|
-| ELDEN RING | **1.17.1** (`eldenring.exe` 2.7.1.0) | sha256 `1a354710…8b597891` |
+| ELDEN RING | **1.17.2** (`eldenring.exe` 2.7.2.0, Steam's current build) | sha256 `f9118fea…98ffb328` |
+| | **1.17.1** (`eldenring.exe` 2.7.1.0) | sha256 `1a354710…8b597891` |
 | METAL GEAR SOLID V: THE PHANTOM PAIN | **1.0.15.4** | sha256 `085c2f82…c5e9bb45` |
 | Mod Engine 3 | **0.13.0** (`me3-linux-amd64.tar.gz`, you download it) | sha256 `f31579de…e1e93fc1` |
 | PhantomRing | see `tools/pr --version` | both plugins must come from the same release |
@@ -87,7 +88,7 @@ Details: [docs/DESIGN.md](docs/DESIGN.md). The shared layout: [protocol/phantomr
 |---|---|
 | Linux | Tested on Gentoo with KDE Plasma (Wayland) and an NVIDIA RTX 50-series GPU. Untested: AMD/Intel GPUs, Steam Deck, other desktops |
 | Steam | the native client, running and signed in (both games check it). Flatpak Steam is untested |
-| ELDEN RING | **1.17.1** (`eldenring.exe` 2.7.1.0), installed through Steam, run with Proton (Proton Experimental is what was tested) |
+| ELDEN RING | **1.17.2** (`eldenring.exe` 2.7.2.0) or **1.17.1** (2.7.1.0), installed through Steam, run with Proton (Proton Experimental is what was tested) |
 | METAL GEAR SOLID V: THE PHANTOM PAIN | **1.0.15.4**, installed through Steam (Proton) |
 | An Elden Ring character | in your normal save, `ER0000.sl2`: PhantomRing makes its own copy of it |
 | An MGSV save | that can load **Africa free roam** (Snake is parked on the Nova Braga Airport apron); D-Walker developed if you want him (optional) |
@@ -438,6 +439,9 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   rockets in flight are simple shapes (`[Render] projectile_meshes` + `[Capture] ProjectileMeshes` learned no model live: off).
 - C4 goes off by PhantomRing's backup (MGSV's own detonator never answers); next to a supply box a tap of Y with C4 in hand
   may set one off too (untested).
+- Throwing or placing (grenades, C4, decoys): aim with LT, then hold RT about a second before letting go. In the 2026-10-26
+  run MGSV ignored most shorter RT presses (one of ~20 threw); held ~1.5 s it threw or placed every time (5 of 5). An unaimed
+  RT with a grenade or C4 in hand is MGSV's punch.
 - Decoys are thrown (LT, then RT); a popped or dropped one stays standing in MGSV's own sandbox (`DecoyPopInMgsv` off), which
   holds 32 placed objects (live: 9 decoys out, still throwing).
 - CQC holds, throws and chokes are Elden Ring's own reactions (a hold in place, a knockdown, sleep), not MGSV's paired
@@ -479,8 +483,8 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   whole; `tools/pr --version` shows what you have.
 - **"Steam folder ... has no steamapps/"**: set `PHANTOMRING_STEAM` to your Steam folder (the one holding
   `steamapps/libraryfolders.vdf`).
-- **"eldenring.exe is not 1.17.1" / "mgsvtpp.exe is not 1.0.15.4"**: Steam updated the game. PhantomRing
-  needs an update for the new version.
+- **"eldenring.exe is not 1.17.2 (2.7.2.0) or 1.17.1 (2.7.1.0)" / "mgsvtpp.exe is not 1.0.15.4"**: Steam updated the
+  game. PhantomRing needs an update for the new version (each Elden Ring build gets its own address table).
 - **MGSV never takes over**: `tools/pr status` shows what MGSV is doing, and the top-right corner of Elden Ring
   says it too. `tools/pr logs` shows both plugins' logs. MGSV's save must be able to load Africa free roam.
 - **Something is stuck after quitting**: `tools/pr stop` (`--kill` if it reports leftovers).
@@ -550,6 +554,23 @@ run the offline tests above first, and keep to the project's rules:
 | 6 | MGSV collision from Elden Ring (vault, climb, cover), proxies for native MGSV combat | Fulton of sleeping enemies done (through MGSV's own Fulton); full proxies experimental, off |
 | 7 | Windows players ([docs/WINDOWS.md](docs/WINDOWS.md)) | built, tested under Wine; not yet run on Windows |
 | 8 | Seamless Co-op | planned |
+
+## Changes
+
+**0.4.1-alpha (2026-10-26).** Elden Ring 1.17.2 (`eldenring.exe` 2.7.2.0, Steam build 25827938, released 2026-10-21).
+- Supported versions: ELDEN RING **1.17.2** (2.7.2.0) and **1.17.1** (2.7.1.0), METAL GEAR SOLID V: THE PHANTOM PAIN
+  **1.0.15.4**, Mod Engine 3 **0.13.0** (unchanged: it runs 1.17.2 as it ran 1.17.1). The Elden Ring plugin has one
+  byte-verified address table per build and picks it by the exe's identity; any other build leaves it inert.
+- WorldChrMan grew by 0x10 in 1.17.2: the camera field the compass uses and the by-distance character list moved
+  (`er/Addresses.cpp` `Layout`). Nothing else PhantomRing uses changed.
+- Run live on 1.17.2 with both games: Snake, his rendering, camera and compass, movement on Stormveil's wooden walkway and
+  stairs, jumps and dive hops, every weapon kind, CQC, Fulton, C4, decoys, Elden Ring's hits and deaths, menus, the iDroid,
+  Tarnished mode, graces, fast travel, D-Walker and a buddy change, marking, the Phantom Cigar, night vision
+  ([docs/STATUS.md](docs/STATUS.md)). No code change was needed for it.
+- `pr launch` and `pr doctor` accept either build; `tools/er_aob_scan.py verify` checks either exe.
+
+**0.4.0-alpha (2026-10-15).** Live passes A and B with both games: every round-1 feature tried, CQC holds, the Phantom Cigar's
+time skip and the D-Horse treadmill on by default ([docs/FEATURES-1.md](docs/FEATURES-1.md)). Elden Ring 1.17.1 only.
 
 ## Layout
 

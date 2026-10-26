@@ -7,7 +7,8 @@ Defaults: $ER_EXE / $MGSV_EXE, else the Steam installs (tools/game_paths.py).
 
 ER patterns use er_aob_scan.py's matcher (supports ?? and the pelite `$ { ' }` subset), so RVAs are
 reported; MGSV patterns are plain byte/?? patterns reported as VAs. Each entry states the expected
-count and address; the script exits 1 if anything drifts. Static and read-only.
+count and address (ER: per supported build, er_aob_scan.BUILDS; another build gets counts only); the script
+exits 1 if anything drifts. Static and read-only.
 """
 import argparse
 import os
@@ -21,27 +22,28 @@ import er_aob_scan as er  # noqa: E402
 
 import game_paths  # noqa: E402
 
-# (name, pattern, expected count, expected RVA of the match (or capture 1 when the pattern has one))
+# (name, pattern, expected count, expected RVA of the match (or capture 1 when the pattern has one) per build)
 ER_AOBS = [
 	("E1 PlayerCtrl::ModifyRootMotion (twin with EnemyCtrl)", "48 8b c4 48 89 58 18 48 89 78 20 55 48 8d 68 a1 48 81 ec b0 00 00 00 0f 29 70 e8 0f 29 78 d8 44 0f 29 40 c8 44 0f 29 48 b8 48 8b 05 ?? ?? ?? ?? 48 33 c4 48 89 45 07 48 8b 41 10 48 8b fa", 2, None),
-	("E1 rootmotion vcall site [rax+0x60]", "0f 29 07 48 8b 03 48 8b d7 48 8b cb ff 50 60 48 8b 43 10", 1, 0x3CC85C),
-	("E1 ChrCtrl::UpdateRootMotion", "40 53 48 81 ec 80 00 00 00 48 8b 05 ?? ?? ?? ?? 48 33 c4 48 89 44 24 60", 1, 0x3CC6D0),
-	("E1 Physics::PrepareStep", "48 8b c4 56 57 41 56 48 83 ec 70 48 c7 40 a0 fe ff ff ff 48 89 58 08 48 89 68 10", 1, 0x4609C0),
-	("E1 rootmotion->velocity", "4c 8b dc 55 57 41 56 49 8d ab 58 ff ff ff", 1, 0x467280),
-	("E1 CsChrProxy::SetVelocity", "48 8b 81 a0 00 00 00 48 85 c0 74 06 0f 28 02 0f 29 00", 1, 0xC5DB30),
-	("E2 CSPlayerDamageModule::ReceiveDamage", "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 41 0f b6 80 15 01 00 00", 1, 0x44D050),
-	("E2 ProcessChrHit", "48 8b c4 55 56 57 41 56 41 57 48 8d a8 78 fc ff ff", 1, 0x44AE70),
-	("E4 IsMenuOrCutsceneSuppressing", "48 89 5c 24 08 57 48 83 ec 20 48 8b 05 ?? ?? ?? ?? 32 db", 1, 0x80E490),
-	("E4 CSRemo slot (CT)", "48 85 C0 74 ?? 80 B8 ?? ?? ?? ?? 00 0F B6 DB 0F 45 DF 48 8B 0D $ { ' }", 1, 0x3D72AC8),
-	("E6 CSActionButtonMan slot", "48 8b 0d $ { ' } 80 79 2b 00 75 14", 1, 0x3D72478),
-	("E6 ActionButton select", "40 57 48 83 ec 40 48 c7 44 24 20 fe ff ff ff 48 89 5c 24 50 0f 29 7c 24 30 48 8b fa 48 8b d9", 1, 0xA65AB0),
-	("E6 ActionButton input", "48 8b c4 41 56 48 83 ec 60 48 c7 40 b8 fe ff ff ff 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 0f 29 78 e8", 1, 0xA655D0),
+	("E1 rootmotion vcall site [rax+0x60]", "0f 29 07 48 8b 03 48 8b d7 48 8b cb ff 50 60 48 8b 43 10", 1, {"2.7.2.0": 0x3CC85C, "2.7.1.0": 0x3CC85C}),
+	("E1 ChrCtrl::UpdateRootMotion", "40 53 48 81 ec 80 00 00 00 48 8b 05 ?? ?? ?? ?? 48 33 c4 48 89 44 24 60", 1, {"2.7.2.0": 0x3CC6D0, "2.7.1.0": 0x3CC6D0}),
+	("E1 Physics::PrepareStep", "48 8b c4 56 57 41 56 48 83 ec 70 48 c7 40 a0 fe ff ff ff 48 89 58 08 48 89 68 10", 1, {"2.7.2.0": 0x460AA0, "2.7.1.0": 0x4609C0}),
+	("E1 rootmotion->velocity", "4c 8b dc 55 57 41 56 49 8d ab 58 ff ff ff", 1, {"2.7.2.0": 0x467360, "2.7.1.0": 0x467280}),
+	("E1 CsChrProxy::SetVelocity", "48 8b 81 a0 00 00 00 48 85 c0 74 06 0f 28 02 0f 29 00", 1, {"2.7.2.0": 0xC5DFF0, "2.7.1.0": 0xC5DB30}),
+	("E2 CSPlayerDamageModule::ReceiveDamage", "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 41 0f b6 80 15 01 00 00", 1, {"2.7.2.0": 0x44D130, "2.7.1.0": 0x44D050}),
+	("E2 ProcessChrHit", "48 8b c4 55 56 57 41 56 41 57 48 8d a8 78 fc ff ff", 1, {"2.7.2.0": 0x44AF50, "2.7.1.0": 0x44AE70}),
+	("E4 IsMenuOrCutsceneSuppressing", "48 89 5c 24 08 57 48 83 ec 20 48 8b 05 ?? ?? ?? ?? 32 db", 1, {"2.7.2.0": 0x80E940, "2.7.1.0": 0x80E490}),
+	("E4 CSRemo slot (CT)", "48 85 C0 74 ?? 80 B8 ?? ?? ?? ?? 00 0F B6 DB 0F 45 DF 48 8B 0D $ { ' }", 1, {"2.7.2.0": 0x3D75AE8, "2.7.1.0": 0x3D72AC8}),
+	("E6 CSActionButtonMan slot", "48 8b 0d $ { ' } 80 79 2b 00 75 14", 1, {"2.7.2.0": 0x3D75498, "2.7.1.0": 0x3D72478}),
+	("E6 ActionButton select", "40 57 48 83 ec 40 48 c7 44 24 20 fe ff ff ff 48 89 5c 24 50 0f 29 7c 24 30 48 8b fa 48 8b d9", 1, {"2.7.2.0": 0xA65F70, "2.7.1.0": 0xA65AB0}),
+	("E6 ActionButton input", "48 8b c4 41 56 48 83 ec 60 48 c7 40 b8 fe ff ff ff 48 89 58 08 48 89 68 10 48 89 70 18 48 89 78 20 0f 29 78 e8", 1, {"2.7.2.0": 0xA65A90, "2.7.1.0": 0xA655D0}),
 ]
-# (class mangled name, slot index, expected RVA of the slot's function)
+# (class mangled name, slot index, expected RVA of the slot's function per build; CSChrDamageModule's: the damage
+# worker, which 2.7.2.0 changed (a branch for attack ids 10673010-10673013))
 ER_VTABLE_SLOTS = [
-	(".?AVPlayerCtrl@CS@@", 12, 0x3DE610),
-	(".?AVCSPlayerDamageModule@CS@@", 7, 0x44D050),
-	(".?AVCSChrDamageModule@CS@@", 7, 0x4455C0),
+	(".?AVPlayerCtrl@CS@@", 12, {"2.7.2.0": 0x3DE610, "2.7.1.0": 0x3DE610}),
+	(".?AVCSPlayerDamageModule@CS@@", 7, {"2.7.2.0": 0x44D130, "2.7.1.0": 0x44D050}),
+	(".?AVCSChrDamageModule@CS@@", 7, {"2.7.2.0": 0x445650, "2.7.1.0": 0x4455C0}),
 ]
 
 MGSV_AOBS = [
@@ -112,9 +114,11 @@ def main():
 	a.mgsv = game_paths.require(a.mgsv or game_paths.mgsv_exe(), "mgsvtpp.exe", "MGSV_EXE (or --mgsv)")
 	bad = 0
 	pe = er.PEImage(a.er)
-	print("ER", a.er)
+	build = er.build_of(pe)
+	print("ER", a.er, f"({build})" if build else "(not a supported build: counts only)")
 	matcher = er.Matcher(pe)
-	for name, pat, cnt, exp in ER_AOBS:
+	for name, pat, cnt, exps in ER_AOBS:
+		exp = exps.get(build) if exps else None
 		hits = [caps[1] if len(caps) > 1 else rva for rva, caps in matcher.scan(pat, None, limit=0)]
 		ok = len(hits) == cnt and (exp is None or exp in hits)
 		bad += not ok
@@ -123,11 +127,12 @@ def main():
 	for row in er.rtti_classes(pe):
 		if row["offset"] == 0:
 			vts.setdefault(row["mangled"], []).append(row["vftable_rva"])
-	for mangled, slot, exp in ER_VTABLE_SLOTS:
+	for mangled, slot, exps in ER_VTABLE_SLOTS:
+		exp = exps.get(build)
 		cand = vts.get(mangled, [])
 		vt = cand[0] if len(cand) == 1 else None
 		got = pe.u64(vt + 8 * slot) - pe.image_base if vt is not None else None
-		ok = got == exp
+		ok = got is not None and (exp is None or got == exp)
 		bad += not ok
 		print("  [%s] %-52s vtbl=%s slot %d -> %s" % ("OK " if ok else "BAD", mangled, hex(vt) if vt else None, slot, hex(got) if got is not None else None))
 	m = Raw(a.mgsv)

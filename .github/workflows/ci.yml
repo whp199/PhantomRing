@@ -178,7 +178,7 @@ jobs:
             echo
             echo "- **Linux**: \`$(basename "$linux")\`. Unpack it, then follow README.md's *Install* (\`tools/pr doctor\`, \`tools/pr install-me3\`, \`tools/pr launch\`)."
             echo "- **Windows**: \`$(basename dist/*-windows.zip)\`: built and tested under Wine only, never run on Windows (README-WINDOWS.md inside)."
-            echo "- Supported game versions: ELDEN RING 1.17.1 (eldenring.exe 2.7.1.0) and METAL GEAR SOLID V: THE PHANTOM PAIN 1.0.15.4; the plugins stay inert on any other."
+            echo "- Supported game versions: ELDEN RING 1.17.2 (eldenring.exe 2.7.2.0) or 1.17.1 (2.7.1.0), and METAL GEAR SOLID V: THE PHANTOM PAIN 1.0.15.4; the plugins stay inert on any other."
             echo "- Elden Ring always runs offline through Mod Engine 3 (me3 0.13.0, downloaded by you). Never take a PhantomRing setup online."
             echo
             echo "Check the downloads with \`sha256sum -c SHA256SUMS\`. Each package's BUILD.txt lists its version, commit and the sha256 of every file."

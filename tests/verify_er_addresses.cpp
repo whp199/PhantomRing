@@ -29,13 +29,14 @@ int main(int argc, char** argv)
 		return 1;
 	}
 	if (!er::UseImageForVerification(image)) {
-		std::printf("FAIL: not eldenring.exe 2.7.1.0\n");
+		std::printf("FAIL: not a supported eldenring.exe (%s)\n", er::SupportedBuilds().c_str());
 		return 1;
 	}
 	const int failures = er::ResolveAddresses();
 	// The singleton finder's scan (naming needs the running game). The static port in
-	// tools/er_aob_scan.py finds 216 slots in this exe.
+	// tools/er_aob_scan.py finds 216 slots in 2.7.1.0 and in 2.7.2.0.
 	const auto slots = er::FindSingletons(false);
-	std::printf("%d failures, %zu singleton slots (details in verify_er_addresses.log)\n", failures, slots);
+	std::printf("eldenring.exe %s: %d failures, %zu singleton slots (details in verify_er_addresses.log)\n", er::Addr().build->file, failures,
+		slots);
 	return failures || slots < 200 ? 1 : 0;
 }

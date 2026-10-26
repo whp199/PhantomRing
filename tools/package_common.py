@@ -24,7 +24,7 @@ FIXED_EPOCH = 1767225600
 DLLS = ("PhantomRingHost.dll", "dinput8.dll")
 
 SUPPORTED = [
-	f"ELDEN RING 1.17.1 (eldenring.exe 2.7.1.0, sha256 {L.ER_SHA256})",
+	*(f"ELDEN RING {app} (eldenring.exe {file}, sha256 {sha})" for sha, (app, file) in L.ER_BUILDS.items()),
 	f"METAL GEAR SOLID V: THE PHANTOM PAIN 1.0.15.4 (mgsvtpp.exe sha256 {L.MGSV_SHA256})",
 	f"Mod Engine 3 (me3) 0.13.0 (not included: the player downloads it; tools/pr install-me3 checks sha256 {L.ME3_SHA256})",
 ]

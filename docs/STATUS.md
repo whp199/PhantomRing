@@ -1,4 +1,4 @@
-# Status (2026-10-15, 0.4.0-alpha)
+# Status (2026-10-26, 0.4.1-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,70 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## Elden Ring 1.17.2 (eldenring.exe 2.7.2.0), 2026-10-26: live regression
+
+Steam updated Elden Ring on 2026-10-21. The host has a 2.7.2.0 address table next to the 2.7.1.0 one (picked by the exe's
+identity): 80/80 entries verified on the 2.7.2.0 exe (`verify_er_addresses.exe`, `er_aob_scan.py verify` 103/103), every
+function diffed against 2.7.1.0's, and WorldChrMan's two moved fields (`chr_cam`, the by-distance list: +0x10) per build.
+The regulation's only change (Bullet 20003309) is not a row PhantomRing uses. Details: [HOST.md](HOST.md#elden-ring-builds).
+Everything in the older sections below was live-tested on 1.17.1.
+
+Then, the same day, both real games on the default mapping (`pr launch --er-headless 3840x2160`, `pr er-continue`, the
+virtual pad; ~75 minutes, one Elden Ring launch and one MGSV restart), the player's save at Stormveil Cliffside, then
+Gatefront (fast travel); the saves taken at the start were put back afterwards. Nothing the update could have moved broke:
+no code change was needed, and the host log has 0 warnings and 0 errors.
+
+- **Launch.** me3 0.13.0 as before: `Attaching to ELDEN RING(TM) 1.17.2.0 Worldwide`, dearxan `1597 stubs found`,
+  `2956 patches` (2944 on 1.17.1), `Arxan is now neutered`, online off, the profile's native loaded; its INFO lines are the
+  1.17.1 run's apart from the version and ids, and there is no "could not detect game version" or asset-hook failure. Host:
+  `exe identity OK: eldenring.exe 2.7.2.0 (App 1.17.2 WW)`, `address table (eldenring.exe 2.7.2.0): 80/80 verified`,
+  `216 singletons named`, all eight tasks registered: not inert.
+- **Boot.** The guest attached 0.15 s after the host; Africa and D-Walker ready 2 min 21 s after the host plugin loaded ->
+  `in game, Snake driving`, "Snake is in control" in the corner.
+- **Rendering.** Stage C into Elden Ring's G-buffer from the first frame (236,912 frames, 0 stage C fallbacks, 0 missing or
+  bad draws; its view constants matched 7891 of 7891 checks), Snake in the sun's shadow atlas, solid in every frame looked
+  at; MGSV's HUD layer and the corner text; night vision on and off; the cardboard box with its poster.
+- **Camera and compass.** `compass follows MGSV's camera (chr_cam ... rewritten before ER's compass update)` -- `chr_cam` is
+  one of the two moved fields -- and the compass turned with the camera in every frame.
+- **Movement.** Walk and run (6.3 m in 1.5 s at full stick); walls stop him. Stormveil's cliffside: two running jumps (R3,
+  `1.20 m up`) up the rock steps; from Tarnished mode set on the plank walkway (`below the start: -0.02 m (ground_filter)`),
+  he stood 25 s and walked it at 15.08-15.09 m, then climbed the wooden stairs to the 19.9 m landing (15.09 -> 19.92 m) with
+  no `left the ground`. Dive = hop: `hop #1: 0.60 m up`. A walk off the cliff (a world shift had moved the coordinates the
+  test script steered by): `left the ground`, `landed at 18.1 m/s -> fall damage 77%`.
+- **Combat.** Rifle: headshot, `bullet route CONFIRMED`, the soldier killed. Rocket: the round hit an enemy 50.9 m away,
+  Elden Ring's blast (Bullet 10030001), killed, +64 runes. Sleep grenade: Elden Ring's Sleep Pot mist, r 9 m. Two hand
+  grenades: `lethal blast r 7.0 m`, Elden Ring's fireballs. Tranquilizer headshot `sleep +249 (resist 226)` -> asleep (his
+  threshold raised to 268). CQC: strike -> `grab -> hold` -> `choke -> sleep +249` -> asleep, then MGSV's Fulton on his stand-in
+  -> `kGEvFulton a=1` -> `out of Elden Ring's world`, +64 runes. C4 placed and set off by the guest's backup: `lethal r 8.0 m
+  where it lies`. The E-STUN decoy thrown: `shock decoy 5 set`; a console decoy: `hears the active decoy ... stops to stare`.
+- **Elden Ring's hits.** `hit hook 79 HP -> kHEvHurt 227` twice: Snake 7801 -> 5998. Seven deaths (soldiers' hits; one a torch
+  that set him on fire): `Snake died` -> `ChrIns::Kill` -> YOU DIED (or the revival choice) -> respawn,
+  `kHEvRested 1`, life and ammo refilled.
+- **Menus.** Start -> Elden Ring's menu, B closes it; View tapped -> the map; View held -> MGSV's iDroid, Start closes it; the
+  View + Start chord 22 times both ways; fast travel from the map's grace list (Stormveil Cliffside -> Gatefront).
+- **Interactions.** Rest at a grace -> `kHEvRested 0`, ammo refilled; lost runes picked up twice (ActionButtonParam 1000).
+- **Buddies.** D-Walker followed and was placed next to Snake at both places; ridden (`Snake mounted`, 18 m in 2.5 s,
+  dismounted with Y held); changed to D-Dog in session (`D-Dog deployed`, drawn), D-Walker again after an MGSV restart (the
+  guest re-attached, attach #2, Snake driving 2 min 25 s later).
+- **Also.** Binocular marking (`marked ... at 28 m`, the red triangle, kept after the binoculars); the Phantom Cigar
+  (`+722 min` -> Elden Ring `09:18 -> 21:20`, 145 writes); 4 minutes of random play (104 actions: walks, runs, camera,
+  stances, weapon switches, aim and fire, maps, iDroids, chords, jumps), Snake driving after every one, 0 warnings.
+- **Not run:** a boss's mist (the only one on this save's reachable graces is Godrick's, left alone), a ground item other
+  than lost runes, keyboard and mouse, D-Horse, full proxies; 2.7.1.0's table (its exe is no longer installed).
+
+Seen during the run, none of it from the update (MGSV, the guest and these code paths are unchanged):
+- MGSV ignored short RT presses for a throw or a placement: about 20 grenade, C4 and decoy attempts with 0.15-0.8 s presses
+  threw once; RT held ~1.5 s while aiming (LT), then let go, threw or placed 5 times out of 5. An unaimed RT with C4 or a
+  grenade in hand is MGSV's punch.
+- A C4 placed in the very frame Snake died was announced after the respawn and kept at the grace (`mines: mine 4 placed`)
+  instead of being discarded as one placed before a load.
+- A move refused by a ceiling fired the bump breaker once through (0, 0, 0) (the bump's wall point was never set).
+- A Fultoned soldier was picked by the decoy-stare rule during his lift (he left the world 0.3 s later).
+- Each Stormveil or Gatefront soldier's hit costs Snake ~11.6% of his life (79 of the Tarnished's 680 HP; `hurt_share`):
+  standing in a camp's open he dies in seconds.
+- `pr er chr`'s distance column is the by-distance list's own value: the distance less 5 m for active characters, stale for
+  far inactive ones (the actor table filters on it).
 
 ## Live passes A and B, 2026-10-14/15 night (real MGSV + Elden Ring, both on the default mapping; 0.4.0-alpha)
 

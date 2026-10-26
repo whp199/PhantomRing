@@ -21,7 +21,7 @@ Fan project, not affiliated with Konami, FromSoftware or Bandai Namco. You need 
 |---|---|
 | Windows | 10 or 11, 64-bit |
 | Steam | installed, running and signed in (both games check it) |
-| Elden Ring | **1.17.1** (eldenring.exe 2.7.1.0), installed through Steam |
+| Elden Ring | **1.17.2** (eldenring.exe 2.7.2.0) or **1.17.1** (2.7.1.0), installed through Steam |
 | MGSV: The Phantom Pain | **1.0.15.4** (the July 2026 patch), installed through Steam |
 | Mod Engine 3 | **me3 0.13 or newer** for Windows (github.com/garyttierney/me3, its installer registers `.me3` files) |
 | A controller | Xbox-style (XInput). Keyboard and mouse don't drive Snake yet |
@@ -102,7 +102,7 @@ a short system summary, into `PhantomRing-logs-<date>.zip` on your Desktop. Doub
 
 | Log line | Meaning / fix |
 |---|---|
-| `exe mismatch` (host) | Elden Ring isn't 1.17.1: PhantomRing stays off |
+| `exe mismatch` (host) | Elden Ring isn't 1.17.2 or 1.17.1: PhantomRing stays off |
 | `launcher: MGSV not found through Steam` | set `[Launch] MgsvExe = C:\...\MGS_TPP\mgsvtpp.exe` |
 | `guest: ...dinput8.dll exists and is not PhantomRing's` | another mod's `dinput8.dll` is in MGSV's folder: move it away |
 | `mgsvtpp.exe is running ... but no PhantomRing guest answers` | MGSV was started normally (from Steam): close it, restart Elden Ring |

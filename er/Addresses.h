@@ -1,10 +1,10 @@
 #pragma once
 
-// Every Elden Ring address the host uses, in one table (er/Addresses.cpp), each with the check that
-// proves it on this exe: a unique AOB that resolves to the expected RVA (globals), the expected
-// bytes at the function's RVA (functions), or the RTTI name behind a vtable. Target: eldenring.exe
-// 2.7.1.0 (App 1.17.1 WW), sha256 1a354710...8b597891, TimeDateStamp 0x6A96B418. Sources and
-// evidence: docs/research/elden-ring-runtime-re.md, tools/er_aob_scan.py (catalog).
+// Every Elden Ring address the host uses, in one table per supported eldenring.exe build (er/Addresses.cpp),
+// each entry with the check that proves it on that exe: a unique AOB that resolves to the expected RVA
+// (globals), the expected bytes at the function's RVA (functions), or the RTTI name behind a vtable. The
+// build is told by its PE identity (kBuilds); anything else leaves the host inert. Sources and evidence:
+// docs/research/elden-ring-runtime-re.md, tools/er_aob_scan.py (catalog, expectations for every build).
 //
 // A failed entry is logged and left null; features check what they need (Has*) and disable
 // themselves instead of guessing.
@@ -12,6 +12,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 
 namespace phantom::er
@@ -39,7 +40,7 @@ namespace phantom::er
 		CSActionButtonMan,   // interaction prompts (re-backlog E6)
 		SoloParamRepository, // regulation params (combat: bullet/AtkParam rows, sleep SpEffects)
 		CSBulletManager,     // combat: SpawnBullet's this
-		TeamRelationTable,   // CSTeamTypeBase* [79][79] (who may hit whom), read by 0x51B5D0
+		TeamRelationTable,   // CSTeamTypeBase* [79][79] (who may hit whom), read by 0x51B870 (2.7.1.0: 0x51B5D0)
 		KeyGuideState,       // the key guide object (0x88C bytes, no vtable): +4 = glyph device, 0 pad / 1 keyboard (er/KeyGuide.h)
 		GlobalHinstance,
 		// functions
@@ -66,7 +67,7 @@ namespace phantom::er
 		// hits Elden Ring's snipe collector drops (wooden planks: material class 5xx) can be kept for his ground.
 		CastRayQuery,        // cast_ray's query build (the hknpRayCastQuery layout: material 0xFFFF, +0x20 = 2, +0x24 = 0xFB)
 		CastRayCalls,        // ... its filter/codec/ignore fields and the collector ctor, set-ignore and world-cast calls
-		WorldCastRay,        // hknpWorld cast ray (0x187F7D0: [world+0x4D8] vfunc 0x80)
+		WorldCastRay,        // hknpWorld cast ray ([world+0x4D8] vfunc 0x80)
 		SnipeCollectorCtor,  // CS::CSClosestHitCollectorForSnipe ctor
 		SnipeCollectorDtor,
 		SnipeAddHit,         // its addHit (vfunc 4): the mount skip, then the raycast collector's (the material-class drop)
@@ -101,19 +102,41 @@ namespace phantom::er
 		VtParamResCap,
 		VtTeamTypeEnemy,
 		VtTeamTypeRival,
-		VtGameRend,          // FieldArea+0x20: its +0x18 CSPersCam is the camera ER's HUD compass reads (MoveMapStep 0xB01FC0 -> 0x7774A0)
+		VtGameRend,          // FieldArea+0x20: its +0x18 CSPersCam is the camera ER's HUD compass reads (2.7.1.0: MoveMapStep 0xB01FC0 -> 0x7774A0)
 		VtSnipeCollector,    // CS::CSClosestHitCollectorForSnipe (game::CastRayKeep copies it, addHit replaced)
 		Count
 	};
 
-	inline constexpr std::uint32_t kExpectedTimeDateStamp = 0x6A96B418;
-	inline constexpr std::uint32_t kExpectedSizeOfImage = 0x5E0DA00;
-	inline constexpr char          kExpectedSha256[] = "1a3547101327f65d0c76da2f9190ac0aa66871ea42bae2aecc61e11a8b597891";
+	// The eldenring.exe builds PhantomRing supports (newest first). Each has its own address table and Layout;
+	// TimeDateStamp + SizeOfImage pick it, the sha256 (verify_sha256) proves it.
+	struct ExeBuild
+	{
+		const char*   file;  // FileVersion
+		const char*   app;   // App version (TGA mapping 1.(10*(major-1)+minor).release)
+		std::uint32_t timeDateStamp;
+		std::uint32_t sizeOfImage;
+		const char*   sha256;
+	};
+	inline constexpr ExeBuild kBuilds[] = {
+		{ "2.7.2.0", "1.17.2", 0x6AABF7E7, 0x5DFD600, "f9118fea2cfd8fa3901e8060bfadb1552cb2471771ded8a5b662c4e298ffb328" },
+		{ "2.7.1.0", "1.17.1", 0x6A96B418, 0x5E0DA00, "1a3547101327f65d0c76da2f9190ac0aa66871ea42bae2aecc61e11a8b597891" },
+	};
+
+	// The struct offsets that differ between the supported builds (er/Game.h holds the ones they share).
+	// 2.7.2.0 put 0x10 bytes into WorldChrMan at +0x1E600 (WorldChrManImp 0x1F3E0 -> 0x1F3F0 bytes; its ctor
+	// and every +0x1E600.. access moved by 0x10; main_player +0x1E508 and everything below stayed).
+	struct Layout
+	{
+		std::uint32_t wcmChrCam{ 0 };      // WorldChrMan -> ChrCam*
+		std::uint32_t wcmByDistance{ 0 };  // WorldChrMan -> DLVector<{ChrIns*, f32 dist, u32}> {alloc, first, last, end}
+	};
 
 	struct Addresses
 	{
-		std::uint8_t* base{ nullptr };
-		std::size_t   size{ 0 };
+		std::uint8_t*   base{ nullptr };
+		std::size_t     size{ 0 };
+		const ExeBuild* build{ nullptr };  // the identified build (null: none, the host stays inert)
+		Layout          layout{};
 		std::array<std::uint8_t*, static_cast<std::size_t>(A::Count)> at{};
 
 		[[nodiscard]] std::uint8_t* operator[](A a_id) const { return at[static_cast<std::size_t>(a_id)]; }
@@ -142,8 +165,8 @@ namespace phantom::er
 
 	const Addresses& Addr();
 
-	// Exe identity: TimeDateStamp + SizeOfImage of the main module (+ the file's sha256 if asked).
-	// Returns false (and logs why) for anything that isn't the exact supported build.
+	// Exe identity: TimeDateStamp + SizeOfImage of the main module pick one of kBuilds (+ the file's sha256 if
+	// asked). Returns false (and logs why) for anything that isn't exactly one of the supported builds.
 	bool CheckExeIdentity(bool a_sha256);
 
 	// Resolves and verifies the whole table; logs one line per entry. Returns the number of failures.
@@ -151,8 +174,11 @@ namespace phantom::er
 
 	// Offline verification only (tests/verify_er_addresses.cpp): use an image mapped with
 	// LoadLibraryEx(DONT_RESOLVE_DLL_REFERENCES) instead of the main module, after the same
-	// TimeDateStamp/SizeOfImage check.
+	// TimeDateStamp/SizeOfImage check (which picks the build and its table).
 	bool UseImageForVerification(void* a_base);
+
+	// "2.7.2.0 (App 1.17.2) / 2.7.1.0 (App 1.17.1)": the supported builds, for messages.
+	std::string SupportedBuilds();
 
 	std::string_view Name(A a_id);
 }

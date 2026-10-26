@@ -4,7 +4,7 @@ NVG only darkens the picture: recreate it on Elden Ring's frame from the guest's
 layer); an option for Elden Ring levels / weapons to scale Snake's damage (2.12); the mist step-aside and the boss-bar-after-
 cutscene fix (both UNVERIFIED live); never build while the player plays (builds dropped Elden Ring to ~10 fps). -->
 
-# PhantomRing next-steps roadmap (written 2026-10-12, HEAD `654c760`; status rows updated 2026-10-15, 0.4.0-alpha)
+# PhantomRing next-steps roadmap (written 2026-10-12, HEAD `654c760`; status rows updated 2026-10-26, 0.4.1-alpha)
 
 Everything below comes from README (Status, Known issues, How to play), docs/DESIGN.md (§12–14c), HOST.md, GUEST.md, COMBAT.md, WINDOWS.md, docs/research/re-backlog.md, the code (`er/`, `mgsv/`, `protocol/`) and the git log. I worked read-only and did not touch the games, `build/` or `/dev/shm`.
 
@@ -59,6 +59,7 @@ and Margit's arena; details in docs/STATUS.md):**
 | Features round 1b (2026-10-14, after session 7) | **merged; live pass A the same night** | solid ground on objects (five ground probes, the characters' collision layer: Stormveil's scaffold) **works live**, Snake's jump (R3, protocol v14 `kGuestJumping`; one air with the dive's hop) **works live**, decoys (2.8) not set live yet: docs/FEATURES-1.md "Round 1b" and "Live pass A" |
 | Live pass A (2026-10-14 night) | **done** | ground, jump, dive = hop (now on), binocular marking (works; MGSV's lens no longer leaks into the HUD layer), material colours (no false colours), C4 (works with `C4Backup`, now on: MGSV's own detonator never answers); projectile meshes and muzzle flashes don't work yet (off); Snake's own ray query for the ground (diagnostics, off): docs/FEATURES-1.md "Live pass A" |
 | Live pass B (2026-10-15 night) | **done; 0.4.0-alpha** | keyboard and mouse (works with injected input; opt-in; Tarnished-mode G tap = the pad's View, as Elden Ring's own map key may not be G), CQC holds/choke/throw/interrogate (now on), Phantom Cigar (Elden Ring 12:14 -> 18:02 -> 02:14; now on; R3 in MGSV's item wheel no longer jumps; the cigar is put into an item slot at boot), D-Horse treadmill (300 m straight, 307 moves followed; now on), full proxies (phase 0 for 11 min, but no aim assist: stay off), decoys (thrown with LT+RT, stared at, popped; set down on Elden Ring's ground), README regression and 10 minutes of play; Tarnished mode keeps the chord after a HUD hide no screen explains; a stale melee centre: docs/FEATURES-1.md "Live pass B" |
+| Elden Ring 1.17.2 (2026-10-26) | **done; 0.4.1-alpha** | a second address table (2.7.2.0) picked by the exe's identity, WorldChrMan's two moved fields per build; run live with both games the same day, no code change needed: docs/STATUS.md "Elden Ring 1.17.2" |
 
 | # | Item | Why (grounded) | Effort | Deps | Risk | How to verify |
 |---|---|---|---|---|---|---|

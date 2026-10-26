@@ -24,7 +24,7 @@ Search scope: by default all executable sections (.text, .interpr, second .text)
 Sub-commands (run with -h for details):
     info        version resource, sha256, sections, App version (TGA mapping 1.(10*(maj-1)+min).rel)
     scan        scan one pattern; optional RIP-relative resolution (--rip DISP[,END])
-    verify      run the built-in PhantomRing catalog (the RVAs the host DLL needs); exit 1 on drift
+    verify      run the built-in PhantomRing catalog (the RVAs the host DLL needs, per supported build); exit 1 on drift
     rtti        find vftables by RTTI class name (MSVC CompleteObjectLocator walk), --vfuncs N
     singletons  static FD4Singleton finder (TGA null-check pattern) named via DLRF RTTI / initialisers
     disasm      disassemble at an RVA (needs capstone)
@@ -35,10 +35,10 @@ Sub-commands (run with -h for details):
 
 Examples:
     python3 er_aob_scan.py info
-    python3 er_aob_scan.py verify                 # 100 catalog entries, all must be [OK ]
+    python3 er_aob_scan.py verify                 # 103 catalog entries, all must be [OK ] (2.7.2.0 or 2.7.1.0)
     python3 er_aob_scan.py scan "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 0F 48 39 88" --rip 3
     python3 er_aob_scan.py singletons --grep Camera
-    python3 er_aob_scan.py fieldref 0x3d69ff8 0x1e508 0x1ece0
+    python3 er_aob_scan.py fieldref 0x3d6d018 0x1e508 0x1ecf0   # 2.7.2.0 (2.7.1.0: 0x3d69ff8 0x1e508 0x1ece0)
 The exe: --exe, else $ER_EXE, else the Steam install (tools/game_paths.py). capstone is imported from site-packages
 (pip install capstone), or from $CAPSTONE_PATH when set.
 """
@@ -659,14 +659,34 @@ def fd4_singletons(pe: PEImage, rtti_rows=None):
 
 # --------------------------------------------------------------------------------------
 # Built-in catalog: everything the PhantomRing ER host DLL needs.  Each entry is checked
-# by `verify`; "expect" values are this exe's RVAs (2.7.1.0 / App 1.17.1,
-# sha256 1a354710...7891) so a silent pattern drift is caught.
+# by `verify`; "expect" values are RVAs in the supported builds (BUILDS: 2.7.2.0 in the
+# catalog itself, 2.7.1.0 in OLDER_EXPECT) so a silent pattern drift is caught.
 #   resolve: "match"            -> RVA of the match start (function start / code site)
 #            ("rip", d, e)      -> RIP-relative target of disp at match+d, insn end match+e
 #            ("cap", i)         -> pelite capture slot i
 #            ("call", d)        -> target of E8 rel32 at match+d
 # --------------------------------------------------------------------------------------
 CATALOG: list[dict] = []   # filled in at the bottom of this file (see _build_catalog)
+
+# Supported eldenring.exe builds by PE TimeDateStamp: (FileVersion, App version, SizeOfImage, sha256).
+BUILDS = {
+    0x6AABF7E7: ("2.7.2.0", "1.17.2", 0x5DFD600, "f9118fea2cfd8fa3901e8060bfadb1552cb2471771ded8a5b662c4e298ffb328"),
+    0x6A96B418: ("2.7.1.0", "1.17.1", 0x5E0DA00, "1a3547101327f65d0c76da2f9190ac0aa66871ea42bae2aecc61e11a8b597891"),
+}
+CATALOG_BUILD = "2.7.2.0"   # the build the catalog's own `expect` values are for
+
+
+def build_of(pe: PEImage) -> str | None:
+    """FileVersion of a supported build (by TimeDateStamp + SizeOfImage), else None."""
+    b = BUILDS.get(pe.timestamp)
+    return b[0] if b and b[2] == pe.size_of_image else None
+
+
+def expect_for(e: dict, build: str | None):
+    """The entry's expected RVA in `build` (None: no expectation, e.g. an unknown build)."""
+    if build == CATALOG_BUILD:
+        return e.get("expect")
+    return OLDER_EXPECT.get(build, {}).get(e["name"]) if build else None
 
 
 def resolve_entry(pe: PEImage, e: dict, rva: int, caps: list[int]) -> int:
@@ -684,6 +704,7 @@ def resolve_entry(pe: PEImage, e: dict, rva: int, caps: list[int]) -> int:
 
 def run_verify(pe: PEImage, names: list[str] | None = None):
     m = Matcher(pe)
+    build = build_of(pe)
     results = []
     rtti = None
     singles = None
@@ -734,8 +755,9 @@ def run_verify(pe: PEImage, names: list[str] | None = None):
                     res["rva"] = None
             else:
                 res["rva"] = None
-        exp = e.get("expect")
+        exp = expect_for(e, build)
         res["expect"] = exp
+        res["build"] = build
         if e.get("kind") == "count":
             res["rva"] = res.get("targets", [None])[0]
             res["ok"] = res["matches"] == e["expect_matches"]
@@ -948,7 +970,9 @@ def cmd_verify(pe: PEImage, a):
                 extra = " " + " ".join(f"{k}={_hex(v)}" for k, v in r["vfuncs"].items())
             exp = "" if r["expect"] is None else f" expect={_hex(r['expect'])}"
             print(f"[{flag}] {r['name']:<40} rva={_hex(r['rva'])!s:<11} matches={r['matches']}{exp}{extra}")
-        print(f"\n{len(res) - bad}/{len(res)} entries resolved uniquely and match expectations")
+        build = build_of(pe)
+        print(f"\n{len(res) - bad}/{len(res)} entries resolved uniquely and match expectations"
+              + (f" (eldenring.exe {build})" if build else " (not a supported build: uniqueness only, no RVA expectations)"))
         if bad:
             sys.exit(1)
 
@@ -1125,8 +1149,10 @@ def main(argv=None):
 
 
 # ======================================================================================
-# PhantomRing catalog.  `expect` = RVA in eldenring.exe 2.7.1.0 (App 1.17.1, WW/EN),
-# sha256 1a3547101327f65d0c76da2f9190ac0aa66871ea42bae2aecc61e11a8b597891.
+# PhantomRing catalog.  `expect` = RVA in eldenring.exe 2.7.2.0 (App 1.17.2, WW/EN),
+# sha256 f9118fea2cfd8fa3901e8060bfadb1552cb2471771ded8a5b662c4e298ffb328; OLDER_EXPECT below has 2.7.1.0's.
+# 2.7.2.0 moved every global by 0x3020 (.data) and code piecewise; the code is the same (diffed function by
+# function), except WorldChrMan: 0x10 bytes inserted at +0x1E600 (chr_cam +0x1ECE0 -> +0x1ECF0).
 # Sources: "CT" = TGA Cheat Table (elden-ring-ct-src .cea, v1.19.1 for App 1.17.1);
 #          "fsrs" = fromsoftware-rs mapper-profile.toml / rva tables;
 #          "PR" = found for PhantomRing by disassembly of this exe (see docs/research/elden-ring-runtime-re.md).
@@ -1157,61 +1183,62 @@ def _v(name, cls, expect, notes="", vfunc=None):
 
 CATALOG.extend([
     # ---- static singleton pointers (value at RVA is the instance pointer; may be null early) ----
-    _g("WorldChrMan", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 0F 48 39 88", 0x3D69FF8, "CT baseData (commented) / fsrs singleton",
+    _g("WorldChrMan", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 0F 48 39 88", 0x3D6D018, "CT baseData (commented) / fsrs singleton",
        fields="+0x10EE0 player_chr_set(ChrSet<PlayerIns>, entries* @+0x18); +0x10F90 summon_buddy_chr_set; "
               "+0x11040 open_field_chr_set; +0x1CC58 chr_set_holder_count; +0x1CC60 chr_set_holders[196] (0x18 each); "
-              "+0x1DED8 chr_sets[196] (ChrSet*); +0x1E508 main_player (PlayerIns*); +0x1ECE0 chr_cam (ChrCam*)"),
-    _g("GameDataMan", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 05 48 8B 40 58 C3 C3", 0x3D61F98, "CT baseData",
+              "+0x1DED8 chr_sets[196] (ChrSet*); +0x1E508 main_player (PlayerIns*); +0x1ECF0 chr_cam (ChrCam*; 2.7.1.0: +0x1ECE0)"),
+    _g("GameDataMan", "48 8B 05 ?? ?? ?? ?? 48 85 C0 74 05 48 8B 40 58 C3 C3", 0x3D64FB8, "CT baseData",
        fields="+0x08 main_player_game_data (PlayerGameData*)"),
-    _g("GameMan", "48 8B 05 ?? ?? ?? ?? 80 B8 ?? ?? ?? ?? 0D 0F 94 C0 C3", 0x3D6D988, "CT baseData",
+    _g("GameMan", "48 8B 05 ?? ?? ?? ?? 80 B8 ?? ?? ?? ?? 0D 0F 94 C0 C3", 0x3D709A8, "CT baseData",
        fields="+0x10 warp_requested; +0xBC4 (CT freecam: 1 while debug-cam active); +0xD60 party_member_info"),
-    _g("FieldArea", "48 8B 3D ???????? 49 8B D8 48 8B F2 4C 8B F1 48 85 FF", 0x3D6D248, "CT baseData",
+    _g("FieldArea", "48 8B 3D ???????? 49 8B D8 48 8B F2 4C 8B F1 48 85 FF", 0x3D70268, "CT baseData",
        fields="+0x20 GameRend*: +0x18/+0x20/+0x28 CSPersCam0/1/2, +0xC8 free-cam mode (int), +0xD0 CSDebugCam*"),
-    _g("SoloParamRepository", "48 89 5C 24 48 8B FA 48 8B D9 C7 44 24 20 00 00 00 00 48", 0x3D85F58,
+    _g("SoloParamRepository", "48 89 5C 24 48 8B FA 48 8B D9 C7 44 24 20 00 00 00 00 48", 0x3D88F78,
        "CT baseData (offset 18)", rip=(21, 25)),
-    _g("CSMenuMan", "48 8B 05 ?? ?? ?? ?? 33 DB 48 89 74 24", 0x3D6F820, "CT baseData",
+    _g("CSMenuMan", "48 8B 05 ?? ?? ?? ?? 33 DB 48 89 74 24", 0x3D72840, "CT baseData",
        fields="+0x80 popup_menu*; +0x90 ui_states[0x46] (bit0 created, bit1 visible); +0x13C disable_save_menu"),
-    _g("CSFlipper", "48 8B 0D ?? ?? ?? ?? 80 BB ?? ?? ?? ?? 00 0F 84", 0x458DB58, "CT baseData",
+    _g("CSFlipper", "48 8B 0D ?? ?? ?? ?? 80 BB ?? ?? ?? ?? 00 0F 84", 0x4590B78, "CT baseData",
        fields="+0x264 last_frame_time; +0x268 task_delta (s); +0x2CC game_speed (dt = task_delta*game_speed)"),
-    _g("CSRegulationManager", "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 0B 4C 8B C0 48 8B D7", 0x3D8ACD8, "CT baseData"),
-    _g("DmgMan", "48 8B 05 ?? ?? ?? ?? 49 8B D9 49 8B F8 48 8B F2 48 85 C0 75 2E", 0x3D6A3E8, "CT baseData (DamageCtrl)"),
-    _g("CSWindow", "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? 48 83 C1 ?? 48 8D 45", 0x458F910, "CT baseData",
+    _g("CSRegulationManager", "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 0B 4C 8B C0 48 8B D7", 0x3D8DCF8, "CT baseData"),
+    _g("DmgMan", "48 8B 05 ?? ?? ?? ?? 49 8B D9 49 8B F8 48 8B F2 48 85 C0 75 2E", 0x3D6D408, "CT baseData (DamageCtrl)"),
+    _g("CSWindow", "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 ?? 48 83 C1 ?? 48 8D 45", 0x4592930, "CT baseData",
        fields="+0x08 HWND; +0x28/+0x2C screen width/height"),
-    _g("WorldChrManDbg", "48 8B 0D ?? ?? ?? ?? 89 5C 24 20 48 85 C9 74 12 B8 ?? ?? ?? ?? 8B D8", 0x3D6A208, "CT baseData"),
-    _g("CSLuaEventMan", "48 83 3D ?? ?? ?? ?? 00 48 8B F9 0F 84 ?? ?? ?? ?? 48", 0x3D6BEB8, "CT baseData", rip=(3, 8)),
-    _g("CSEventFlagMan", "48 8B 3D ???????? 48 85 FF 74 ?? 48 8B 49", 0x3D6C4B8, "CT baseData (CSFD4VirtualMemoryFlag)"),
-    _g("CSNetMan", "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 5E 48 8B 89 ?? ?? ?? ?? B2 01", 0x3D5EEC0, "CT baseData"),
-    _g("CSCamera", "48 8b 0d ?? ?? ?? ?? 48 8d 97 e0 00 00 00", 0x3D669C8, "PR mkpattern (this exe only)",
+    _g("WorldChrManDbg", "48 8B 0D ?? ?? ?? ?? 89 5C 24 20 48 85 C9 74 12 B8 ?? ?? ?? ?? 8B D8", 0x3D6D228, "CT baseData"),
+    _g("CSLuaEventMan", "48 83 3D ?? ?? ?? ?? 00 48 8B F9 0F 84 ?? ?? ?? ?? 48", 0x3D6EED8, "CT baseData", rip=(3, 8)),
+    _g("CSEventFlagMan", "48 8B 3D ???????? 48 85 FF 74 ?? 48 8B 49", 0x3D6F4D8, "CT baseData (CSFD4VirtualMemoryFlag)"),
+    _g("CSNetMan", "48 8B 0D ?? ?? ?? ?? 48 85 C9 74 5E 48 8B 89 ?? ?? ?? ?? B2 01", 0x3D61EE0, "CT baseData"),
+    _g("CSCamera", "48 8b 0d ?? ?? ?? ?? 48 8d 97 e0 00 00 00", 0x3D699E8, "PR mkpattern (this exe only)",
        fields="+0x08 pers_cam_1 (final render cam); +0x10 pers_cam_2; +0x18 pers_cam_3; +0x20 pers_cam_4; +0x28 camera_mask"),
-    _g("CSTask(CSTaskImp)", "48 8b 0d ?? ?? ?? ?? 4c 8b c3 ba 9c 00 00 00", 0x458FE88, "PR mkpattern (this exe only)"),
-    _g("CSTaskGroup", "48 8b 0d ?? ?? ?? ?? 49 8b 1f ba 32 00 00 00", 0x458FF08, "PR mkpattern (this exe only)"),
-    _g("FD4PadManager", "48 8b 0d ?? ?? ?? ?? e9 ?? ?? ?? ?? b0 01 c3 90 8b d1", 0x4861D30, "PR mkpattern (this exe only)",
+    _g("CSTask(CSTaskImp)", "48 8b 0d ?? ?? ?? ?? 4c 8b c3 ba 9c 00 00 00", 0x4592EA8, "PR mkpattern (this exe only)"),
+    _g("CSTaskGroup", "48 8b 0d ?? ?? ?? ?? 49 8b 1f ba 32 00 00 00", 0x4592F28, "PR mkpattern (this exe only)"),
+    _g("FD4PadManager", "48 8b 0d ?? ?? ?? ?? 33 d2 e8 ?? ?? ?? ?? 4c 8b f0", 0x4864D50,
+       "PR (unique in 2.7.1.0 and 2.7.2.0; 2.7.1.0's mkpattern ran into an Arxan stub's per-build bytes)",
        fields="+0x48 pad_entry_map_list (DLFixedVector<DLMap*,4>); +0x2F8 exit_foreground_signaled; +0x2F9 is_back_ground_window"),
-    _g("CSHavokMan", "48 8b 0d ?? ?? ?? ?? 48 8b 9d 80 00 00 00", 0x3D7A0D0, "PR mkpattern (this exe only)",
+    _g("CSHavokMan", "48 8b 0d ?? ?? ?? ?? 48 8b 9d 80 00 00 00", 0x3D7D0F0, "PR mkpattern (this exe only)",
        fields="+0x98 CSPhysWorld* (arg0 of cs_phys_world_cast_ray)"),
-    _g("CSGraphics", "48 8b 05 ?? ?? ?? ?? 48 8b 48 58 48 85 c9", 0x3D75CB8, "PR mkpattern (this exe only)"),
-    _g("RendMan", "48 8b 05 ?? ?? ?? ?? 48 8b 48 10 48 85 c9 75 0d 48 8b cb", 0x3D7F130, "PR mkpattern (this exe only)"),
-    _g("CSFade", "48 8b 0d ?? ?? ?? ?? 0f 10 00 0f 11 44 24 40", 0x3D763B0, "PR mkpattern (this exe only)"),
-    _g("CSNowLoadingHelper", "48 8b 0d ?? ?? ?? ?? b8 e8 03 00 00", 0x3D64F28, "PR mkpattern (this exe only)"),
-    _g("CSFeMan", "48 8b 0d ?? ?? ?? ?? 44 0f b6 cd 44 8b c6", 0x3D6F8F0, "PR mkpattern (this exe only)"),
-    _g("LockTgtMan", "48 8b 05 ?? ?? ?? ?? 0f b6 5b 0c 48 85 c0", 0x3D6E278, "PR mkpattern (this exe only)"),
-    _g("CSBulletManager", "48 8b 0d ?? ?? ?? ?? 8b 3b 48 85 c9", 0x3D667A8, "PR mkpattern (this exe only)"),
-    _g("CSSessionManager", "48 8b 0d ?? ?? ?? ?? 83 79 0c 03 75 1f", 0x3D7E540, "PR mkpattern (this exe only; CT AOB has 0 matches)"),
+    _g("CSGraphics", "48 8b 05 ?? ?? ?? ?? 48 8b 48 58 48 85 c9", 0x3D78CD8, "PR mkpattern (this exe only)"),
+    _g("RendMan", "48 8b 05 ?? ?? ?? ?? 48 8b 48 10 48 85 c9 75 0d 48 8b cb", 0x3D82150, "PR mkpattern (this exe only)"),
+    _g("CSFade", "48 8b 0d ?? ?? ?? ?? 0f 10 00 0f 11 44 24 40", 0x3D793D0, "PR mkpattern (this exe only)"),
+    _g("CSNowLoadingHelper", "48 8b 0d ?? ?? ?? ?? b8 e8 03 00 00", 0x3D67F48, "PR mkpattern (this exe only)"),
+    _g("CSFeMan", "48 8b 0d ?? ?? ?? ?? 44 0f b6 cd 44 8b c6", 0x3D72910, "PR mkpattern (this exe only)"),
+    _g("LockTgtMan", "48 8b 05 ?? ?? ?? ?? 0f b6 5b 0c 48 85 c0", 0x3D71298, "PR mkpattern (this exe only)"),
+    _g("CSBulletManager", "48 8b 0d ?? ?? ?? ?? 8b 3b 48 85 c9", 0x3D697C8, "PR mkpattern (this exe only)"),
+    _g("CSSessionManager", "48 8b 0d ?? ?? ?? ?? 83 79 0c 03 75 1f", 0x3D81560, "PR mkpattern (this exe only; CT AOB has 0 matches)"),
     # fsrs pelite-style patterns (captures via ')
     {"name": "FieldArea(fsrs)", "kind": "global", "pattern": "48 8b 05 ${ ' } 48 85 c0 48 0f 44 c6",
-     "resolve": ("cap", 1), "expect": 0x3D6D248, "source": "fsrs field_area_ptr"},
+     "resolve": ("cap", 1), "expect": 0x3D70268, "source": "fsrs field_area_ptr"},
     {"name": "GameDataMan(fsrs)", "kind": "global", "pattern": "48 89 05 ${ ' } 48 83 c4 38 e9 ${}",
-     "resolve": ("cap", 1), "expect": 0x3D61F98, "source": "fsrs game_data_man"},
+     "resolve": ("cap", 1), "expect": 0x3D64FB8, "source": "fsrs game_data_man"},
     {"name": "global_hinstance", "kind": "global", "pattern": "48 8b ce 48 8b f8 e8 $ { 48 89 0d $ { ' } c3 }",
-     "resolve": ("cap", 1), "expect": 0x3D89708, "source": "fsrs (non-zero once CSWindow created; wait_for_system_init)"},
+     "resolve": ("cap", 1), "expect": 0x3D8C728, "source": "fsrs (non-zero once CSWindow created; wait_for_system_init)"},
     {"name": "world_chr_man_dbg_flags", "kind": "global", "pattern": "80 3d $ { ? ' } 00 0f 85 [4] 32 c0 ",
-     "resolve": ("cap", 1), "expect": 0x3D6A210, "source": "fsrs"},
+     "resolve": ("cap", 1), "expect": 0x3D6D230, "source": "fsrs"},
     # ---- functions ----
     {"name": "register_task", "kind": "function", "pattern": "e8 ? ? ? ? 48 8b 0d ? ? ? ? 4c 8b c7 8b d3 e8 $ { ' }",
-     "resolve": ("cap", 1), "expect": 0xEB3E50, "source": "fsrs (Ww2710 override)",
+     "resolve": ("cap", 1), "expect": 0xEB5540, "source": "fsrs (Ww2710 override)",
      "notes": "void(CSTaskImp* (ignored), u32 CSTaskGroupIndex, FD4TaskBase* task); task vtable {get_runtime_class, dtor, execute(FD4TaskData*)}"},
     {"name": "cs_phys_world_cast_ray", "kind": "function", "pattern": "ba 58 00 00 02 e8 $ { ' }",
-     "resolve": ("cap", 1), "expect": 0xC71E00, "source": "fsrs (Ww2710 override)",
+     "resolve": ("cap", 1), "expect": 0xC722C0, "source": "fsrs (Ww2710 override)",
      "notes": "bool(CSPhysWorld*, u32 filter, const hkVector4* origin, const hkVector4* extent, hkVector4* hit_out, ChrIns* ignore)"},
     _f("cs_bullet_manager_spawn_bullet", "40 53 55 56 57 48 81 ec 98 07 00 00 48 c7 44 24 50 fe ff ff ff", 0x3A2CB0,
        "fsrs + CT Bullet_code", notes="(CSBulletManager*, i32* out_handle, BulletSpawnData* (0x110 bytes), i32* out)"),
@@ -1220,24 +1247,24 @@ CATALOG.extend([
     {"name": "chr_ins_remove_speffect", "kind": "function", "pattern": "ba 1c 00 00 00 48 8b ce 84 c0 74 ? e8 $ { ' } eb ?",
      "resolve": ("cap", 1), "expect": 0x3EE2E0, "source": "fsrs", "notes": "(ChrIns*, i32 speffect_id)"},
     {"name": "cs_menu_man_imp_display_status_message", "kind": "function", "pattern": "ba d0 07 00 00 48 83 c4 28 e9 $ { ' }",
-     "resolve": ("cap", 1), "expect": 0x7671F0, "source": "fsrs", "notes": "bool(CSMenuManImp*, i32 msg) e.g. 5 = YOU DIED"},
+     "resolve": ("cap", 1), "expect": 0x7676A0, "source": "fsrs", "notes": "bool(CSMenuManImp*, i32 msg) e.g. 5 = YOU DIED"},
     {"name": "cs_ez_draw_draw_line", "kind": "function",
      "pattern": "40 57 48 83 ec 40 48 c7 44 24 20 fe ff ff ff 48 89 5c 24 50 48 89 6c 24 58 48 89 74 24 60 49 8b f0 48 8b fa 48 8b d9 48 8d 69 28",
-     "resolve": "match", "expect": 0x2652640, "source": "fsrs (Ww2710 override)", "notes": "debug draw (RendMan CSEzDraw)"},
+     "resolve": "match", "expect": 0x2653D70, "source": "fsrs (Ww2710 override)", "notes": "debug draw (RendMan CSEzDraw)"},
     _f("ChrIns::SetPosition (warp)", "48 8b 49 58 e9 $ { 48 89 5c 24 08 57 48 83 ec 20 48 8b 41 10 48 8b d9 48 8b 88 90 01 00 00 48 8b 49 68 e8 }",
        0x3F2690, "PR", notes="void(ChrIns*, const hkVector4* havok_pos) -> ChrCtrl(+0x58) -> 0x3C7680"),
     _f("ChrCtrl::SetPosition", "48 89 5c 24 08 57 48 83 ec 20 48 8b 41 10 48 8b d9 48 8b 88 90 01 00 00 48 8b 49 68 e8 ?? ?? ?? ?? 48 8b 43 10",
        0x3C7680, "PR", notes="(ChrCtrl*, const hkVector4*): physics SetPosition then model-matrix refresh if physics+0x90"),
     _f("CSChrPhysicsModule::SetPosition", "0f 28 02 0f 11 41 70 0f 28 02 0f 11 81 80 00 00 00 66 c7 81 90 00 00 00 01 01 c6 81 de 01 00 00 01 e9",
-       0x45EEF0, "PR", notes="writes +0x70 pos, +0x80 last pos, +0x90/+0x91=1, +0x1DE=1, tail-jumps SyncProxyPosition"),
+       0x45EFD0, "PR", notes="writes +0x70 pos, +0x80 last pos, +0x90/+0x91=1, +0x1DE=1, tail-jumps SyncProxyPosition"),
     _f("CSChrPhysicsModule::SyncProxyPosition", "40 53 48 83 ec 40 48 8b 05 ?? ?? ?? ?? 48 33 c4 48 89 44 24 30 80 b9 91 00 00 00 00 48 8b d9",
-       0x45C910, "PR", notes="if +0x91: push +0x70 into char proxies +0x98/+0xA0 (0xC5D860), clear +0x91"),
+       0x45C9F0, "PR", notes="if +0x91: push +0x70 into char proxies +0x98/+0xA0 (0xC5D860), clear +0x91"),
     _f("ChrIns::SetYaw", "48 8b 49 58 e9 $ { 48 8b 41 10 48 8b 88 90 01 00 00 48 8b 49 68 e9 $ { 40 53 48 83 ec 30 4c 8b c2 48 8b d9 48 8d 54 24 20 e8 } }",
-       0x3F6180, "PR", notes="void(ChrIns*, const float* yaw_rad) -> ChrCtrl 0x3C7EE0 -> physics 0x45FD00 (quat from yaw*0.5 -> +0x50, +0x60 recomputed)"),
+       0x3F6210, "PR", notes="void(ChrIns*, const float* yaw_rad) -> ChrCtrl 0x3C7EE0 -> physics 0x45FD00 (quat from yaw*0.5 -> +0x50, +0x60 recomputed)"),
     _f("CSChrPhysicsModule::SetOrientation", "40 53 48 83 ec 30 0f 28 02 48 8b d9 48 8d 54 24 20 0f 29 44 24 20 66 0f 7f 41 50 e8",
-       0x45FEE0, "PR", notes="(physics*, const hkQuaternion* q): +0x50 = q, +0x60 = 0x463FA0(this,q)"),
+       0x45FFC0, "PR", notes="(physics*, const hkQuaternion* q): +0x50 = q, +0x60 = 0x463FA0(this,q)"),
     _f("CSChrPhysicsModule::SetPositionAndYaw", "48 89 5c 24 08 57 48 83 ec 30 0f 28 02 48 8b da 0f 11 41 70 48 8b f9 0f 28 02",
-       0x45FC80, "PR", notes="(physics*, const hkVector4* pos, const float* yaw): SetPosition fields + yaw quat; no proxy sync call"),
+       0x45FD60, "PR", notes="(physics*, const hkVector4* pos, const float* yaw): SetPosition fields + yaw quat; no proxy sync call"),
     _f("ChrCtrl::RequestProxyPosition", "83 89 fc 00 00 00 01 0f 28 02 0f 11 81 00 01 00 00 c3", 0x3C9270, "PR",
        notes="ChrCtrl+0xFC |= 1; ChrCtrl+0x100 = pos"),
     _f("ChrIns::GetTeamType", "48 89 5c 24 10 57 48 83 ec 20 0f b6 41 6c 48 8b f9 88 02 48 8b da 48 8b 89 78 01 00 00",
@@ -1245,71 +1272,178 @@ CATALOG.extend([
     _f("ChrIns::Kill", "48 89 5c 24 08 57 48 83 ec 30 f3 0f 10 05 ?? ?? ?? ?? 48 8b d9 48 8b 89 90 01 00 00 0f b6 fa",
        0x3EE730, "PR", notes="(ChrIns*, bool): data module ChangeHp(0) then ChrIns+0x1C5 |= 0x80 (death flag)"),
     _f("CSChrDataModule::ChangeHp", "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 40 0f 29 74 24 30 0f 28 f3 41 0f b6 f0 8b da 48 8b f9 85 d2 7f 0e",
-       0x438810, "PR", notes="(data*, i32 hp, bool, f32, ..., bool) -> 0x437450 writes +0x138 clamped to +0x13C"),
-    _f("CSChrDataModule::SetMaxHp", "89 54 24 10 c7 44 24 18 ff ff 07 00 c7 44 24 08 01 00 00 00", 0x438870, "PR",
+       0x4388A0, "PR", notes="(data*, i32 hp, bool, f32, ..., bool) -> 0x437450 writes +0x138 clamped to +0x13C"),
+    _f("CSChrDataModule::SetMaxHp", "89 54 24 10 c7 44 24 18 ff ff 07 00 c7 44 24 08 01 00 00 00", 0x438900, "PR",
        notes="clamps to [1,0x7FFFF], writes +0x13C then re-clamps +0x138"),
     _f("CSCamera::ApplyCameraMask", "8b 41 28 4c 8b c9 a8 20 74 ?? 48 8b 51 20 4c 8b 41 08", 0x3BB3E0, "PR",
        notes="copies pers_cam_{2,3,4} -> pers_cam_1 (fov/aspect/near/far +0x50..+0x5C, matrix +0x10..+0x4F) by mask bits, clears mask&0x3F"),
-    _f("hkbCharacter::FireEvent (CT PlayAnimation)", "74 ?? 48 85 d2 74 ?? 48 8d 4c 24 50", 0xC15AB0, "CT PlayAnimation_code",
+    _f("hkbCharacter::FireEvent (CT PlayAnimation)", "74 ?? 48 85 d2 74 ?? 48 8d 4c 24 50", 0xC15F70, "CT PlayAnimation_code",
        offset=-0xD, notes="(hkbCharacter*, const wchar_t* event) ; hkbCharacter = [[ChrIns+0x190]+0x28]+0x10 -> +0x30"),
     _f("D3D12CreateDevice call site", "4c 8b cb 4c 8d 05 ?? ?? ?? ?? 8b d0 48 8b ce e8 ?? ?? ?? ?? 85 c0 74 0c 8b c8 e8",
-       0x1EA2822, "PR", notes="inside 0x1EA2730 (ID3D12Device** out, IDXGIAdapter*, cfg*); informational only"),
+       0x1EA3F12, "PR", notes="inside 0x1EA2730 (ID3D12Device** out, IDXGIAdapter*, cfg*); informational only"),
     {"name": "Arxan code-restoration jb sites (count)", "kind": "count",
      "pattern": "B9 ? ? ? ? E8 ? ? ? ? F3 0F 11 05 ? ? ? ? [0-128] ' 72 ? 48 8D ? ? ? ? ?",
      "resolve": ("cap", 1), "expect_matches": 181, "source": "fsrs shared/src/arxan.rs (tremwil/Yui)",
      "notes": "capture = the `jb` byte that fsrs patches to `jmp` (0xEB) to disable code restoration"},
     # ---- singletons resolved by name (robust across patches) ----
-    _s("singleton:WorldChrMan", "CS::WorldChrMan", 0x3D69FF8),
-    _s("singleton:CSCamera", "CS::CSCamera", 0x3D669C8),
-    _s("singleton:CSMenuMan", "CS::CSMenuMan", 0x3D6F820),
-    _s("singleton:CSFlipper", "CS::CSFlipper", 0x458DB58),
-    _s("singleton:CSTask", "CS::CSTask", 0x458FE88),
-    _s("singleton:CSTaskGroup", "CS::CSTaskGroup", 0x458FF08),
-    _s("singleton:CSRegulationManager", "CS::CSRegulationManager", 0x3D8ACD8),
-    _s("singleton:SoloParamRepository", "CS::SoloParamRepository", 0x3D85F58),
-    _s("singleton:CSHavokMan", "CS::CSHavokMan", 0x3D7A0D0),
-    _s("singleton:CSGraphics", "CS::CSGraphics", 0x3D75CB8),
-    _s("singleton:RendMan", "CS::RendMan", 0x3D7F130),
-    _s("singleton:CSFade", "CS::CSFade", 0x3D763B0),
-    _s("singleton:CSNowLoadingHelper", "CS::CSNowLoadingHelper", 0x3D64F28),
-    _s("singleton:CSFeMan", "CS::CSFeMan", 0x3D6F8F0),
-    _s("singleton:CSWindow", "CS::CSWindow", 0x458F910),
-    _s("singleton:DmgMan", "CS::DmgMan", 0x3D6A3E8),
-    _s("singleton:CSBulletManager", "CS::CSBulletManager", 0x3D667A8),
-    _s("singleton:FD4PadManager", "FD4PadManager", 0x4861D30),
-    _s("singleton:FD4TaskManager", "FD4TaskManager", 0x4861280),
-    _s("singleton:FD4ParamRepository", "FD4ParamRepository", 0x4861FB0),
+    _s("singleton:WorldChrMan", "CS::WorldChrMan", 0x3D6D018),
+    _s("singleton:CSCamera", "CS::CSCamera", 0x3D699E8),
+    _s("singleton:CSMenuMan", "CS::CSMenuMan", 0x3D72840),
+    _s("singleton:CSFlipper", "CS::CSFlipper", 0x4590B78),
+    _s("singleton:CSTask", "CS::CSTask", 0x4592EA8),
+    _s("singleton:CSTaskGroup", "CS::CSTaskGroup", 0x4592F28),
+    _s("singleton:CSRegulationManager", "CS::CSRegulationManager", 0x3D8DCF8),
+    _s("singleton:SoloParamRepository", "CS::SoloParamRepository", 0x3D88F78),
+    _s("singleton:CSHavokMan", "CS::CSHavokMan", 0x3D7D0F0),
+    _s("singleton:CSGraphics", "CS::CSGraphics", 0x3D78CD8),
+    _s("singleton:RendMan", "CS::RendMan", 0x3D82150),
+    _s("singleton:CSFade", "CS::CSFade", 0x3D793D0),
+    _s("singleton:CSNowLoadingHelper", "CS::CSNowLoadingHelper", 0x3D67F48),
+    _s("singleton:CSFeMan", "CS::CSFeMan", 0x3D72910),
+    _s("singleton:CSWindow", "CS::CSWindow", 0x4592930),
+    _s("singleton:DmgMan", "CS::DmgMan", 0x3D6D408),
+    _s("singleton:CSBulletManager", "CS::CSBulletManager", 0x3D697C8),
+    _s("singleton:FD4PadManager", "FD4PadManager", 0x4864D50),
+    _s("singleton:FD4TaskManager", "FD4TaskManager", 0x48642A0),
+    _s("singleton:FD4ParamRepository", "FD4ParamRepository", 0x4864FD0),
     # ---- vftables (RTTI) ----
-    _v("vft:CS::ChrIns", "CS::ChrIns", 0x2A310C8),
-    _v("vft:CS::PlayerIns", "CS::PlayerIns", 0x2A7FBB0, vfunc={"get_player_game_data(+0x580)": 45}),
-    _v("vft:CS::EnemyIns", "CS::EnemyIns", 0x2A47090),
-    _v("vft:CS::ChrCtrl", "CS::ChrCtrl", 0x2A2C6A0),
-    _v("vft:CS::CSChrPhysicsModule", "CS::CSChrPhysicsModule", 0x2A3C890),
-    _v("vft:CS::CSChrDataModule", "CS::CSChrDataModule", 0x2A380B8),
-    _v("vft:CS::CSChrDamageModule", "CS::CSChrDamageModule", 0x2A39A90),
-    _v("vft:CS::CSPlayerDamageModule", "CS::CSPlayerDamageModule", 0x2A3A3E0),
-    _v("vft:CS::CSEnemyDamageModule", "CS::CSEnemyDamageModule", 0x2A3A0D8),
-    _v("vft:CS::ChrCam", "CS::ChrCam", 0x2A2AA08),
-    _v("vft:CS::CSCam", "CS::CSCam", 0x2AA0A18),
-    _v("vft:CS::CSPersCam", "CS::CSPersCam", 0x2AA0A40),
-    _v("vft:CS::CSDebugCam", "CS::CSDebugCam", 0x2B672C0),
-    _v("vft:CS::CSInGamePad_UserInput1", "CS::CSInGamePad_UserInput1", 0x2BE35E8),
-    _v("vft:CS::CSDebugCamPad", "CS::CSDebugCamPad", 0x2BE2EF0),
-    _v("vft:CS::NearEnemyFinder", "CS::NearEnemyFinder", 0x2A282D0, vfunc={"run": 2}),
-    _v("vft:CS::ChrSet", "CS::ChrSet", 0x2A41348),
-    _v("vft:CS::OpenFieldChrSet", "CS::OpenFieldChrSet", 0x2A4B620),
-    _v("vft:CS::CSPhysWorld", "CS::CSPhysWorld", 0x2B96978),
-    _v("vft:CS::CSHavokManImp", "CS::CSHavokManImp", 0x2B934E8),
-    _v("vft:CS::CSGraphicsImp", "CS::CSGraphicsImp", 0x2B68558),
-    _v("vft:CS::RendManImp", "CS::RendManImp", 0x2BA2238),
-    _v("vft:GXBS::GXCommandQueue", "GXBS::GXCommandQueue", 0x2F274C8),
-    _v("vft:GXBS::GXSwapChainOperatorForMultiWindow", "GXBS::GXSwapChainOperatorForMultiWindow", 0x2F07CB8),
-    _v("vft:CS::CSTaskImp", "CS::CSTaskImp", 0x2C04B00),
-    _v("vft:CS::CSEzTask", "CS::CSEzTask", 0x2C048A0),
-    _v("vft:CS::CSInGamePad", "CS::CSInGamePad", 0x2A2AA40),
-    _v("vft:CS::CSPad", "CS::CSPad", 0x2BE3A70),
-    _v("vft:CS::CSMenuViewerPad", "CS::CSMenuViewerPad", 0x2BE4778),
+    _v("vft:CS::ChrIns", "CS::ChrIns", 0x2A330D8),
+    _v("vft:CS::PlayerIns", "CS::PlayerIns", 0x2A81CB0, vfunc={"get_player_game_data(+0x580)": 45}),
+    _v("vft:CS::EnemyIns", "CS::EnemyIns", 0x2A49090),
+    _v("vft:CS::ChrCtrl", "CS::ChrCtrl", 0x2A2E6B0),
+    _v("vft:CS::CSChrPhysicsModule", "CS::CSChrPhysicsModule", 0x2A3E890),
+    _v("vft:CS::CSChrDataModule", "CS::CSChrDataModule", 0x2A3A0C8),
+    _v("vft:CS::CSChrDamageModule", "CS::CSChrDamageModule", 0x2A3BA90),
+    _v("vft:CS::CSPlayerDamageModule", "CS::CSPlayerDamageModule", 0x2A3C3E0),
+    _v("vft:CS::CSEnemyDamageModule", "CS::CSEnemyDamageModule", 0x2A3C0D8),
+    _v("vft:CS::ChrCam", "CS::ChrCam", 0x2A2CA18),
+    _v("vft:CS::CSCam", "CS::CSCam", 0x2AA2B08),
+    _v("vft:CS::CSPersCam", "CS::CSPersCam", 0x2AA2B30),
+    _v("vft:CS::CSDebugCam", "CS::CSDebugCam", 0x2B693A0),
+    _v("vft:CS::CSInGamePad_UserInput1", "CS::CSInGamePad_UserInput1", 0x2BE5898),
+    _v("vft:CS::CSDebugCamPad", "CS::CSDebugCamPad", 0x2BE51A0),
+    _v("vft:CS::NearEnemyFinder", "CS::NearEnemyFinder", 0x2A2A2E0, vfunc={"run": 2}),
+    _v("vft:CS::ChrSet", "CS::ChrSet", 0x2A43348),
+    _v("vft:CS::OpenFieldChrSet", "CS::OpenFieldChrSet", 0x2A4D620),
+    _v("vft:CS::CSPhysWorld", "CS::CSPhysWorld", 0x2B98A68),
+    _v("vft:CS::CSHavokManImp", "CS::CSHavokManImp", 0x2B955D8),
+    _v("vft:CS::CSGraphicsImp", "CS::CSGraphicsImp", 0x2B6A638),
+    _v("vft:CS::RendManImp", "CS::RendManImp", 0x2BA44E8),
+    _v("vft:GXBS::GXCommandQueue", "GXBS::GXCommandQueue", 0x2F29768),
+    _v("vft:GXBS::GXSwapChainOperatorForMultiWindow", "GXBS::GXSwapChainOperatorForMultiWindow", 0x2F09F58),
+    _v("vft:CS::CSTaskImp", "CS::CSTaskImp", 0x2C06DB0),
+    _v("vft:CS::CSEzTask", "CS::CSEzTask", 0x2C06B50),
+    _v("vft:CS::CSInGamePad", "CS::CSInGamePad", 0x2A2CA50),
+    _v("vft:CS::CSPad", "CS::CSPad", 0x2BE5D20),
+    _v("vft:CS::CSMenuViewerPad", "CS::CSMenuViewerPad", 0x2BE6A28),
 ])
+
+# 2.7.1.0 (App 1.17.1, sha256 1a3547101327f65d0c76da2f9190ac0aa66871ea42bae2aecc61e11a8b597891): the same catalog's
+# RVAs in the build PhantomRing 0.1-0.4 was made on (every entry resolves there too).
+OLDER_EXPECT: dict[str, dict[str, int]] = {"2.7.1.0": {
+    'WorldChrMan': 0x3D69FF8,
+    'GameDataMan': 0x3D61F98,
+    'GameMan': 0x3D6D988,
+    'FieldArea': 0x3D6D248,
+    'SoloParamRepository': 0x3D85F58,
+    'CSMenuMan': 0x3D6F820,
+    'CSFlipper': 0x458DB58,
+    'CSRegulationManager': 0x3D8ACD8,
+    'DmgMan': 0x3D6A3E8,
+    'CSWindow': 0x458F910,
+    'WorldChrManDbg': 0x3D6A208,
+    'CSLuaEventMan': 0x3D6BEB8,
+    'CSEventFlagMan': 0x3D6C4B8,
+    'CSNetMan': 0x3D5EEC0,
+    'CSCamera': 0x3D669C8,
+    'CSTask(CSTaskImp)': 0x458FE88,
+    'CSTaskGroup': 0x458FF08,
+    'FD4PadManager': 0x4861D30,
+    'CSHavokMan': 0x3D7A0D0,
+    'CSGraphics': 0x3D75CB8,
+    'RendMan': 0x3D7F130,
+    'CSFade': 0x3D763B0,
+    'CSNowLoadingHelper': 0x3D64F28,
+    'CSFeMan': 0x3D6F8F0,
+    'LockTgtMan': 0x3D6E278,
+    'CSBulletManager': 0x3D667A8,
+    'CSSessionManager': 0x3D7E540,
+    'FieldArea(fsrs)': 0x3D6D248,
+    'GameDataMan(fsrs)': 0x3D61F98,
+    'global_hinstance': 0x3D89708,
+    'world_chr_man_dbg_flags': 0x3D6A210,
+    'register_task': 0xEB3E50,
+    'cs_phys_world_cast_ray': 0xC71E00,
+    'cs_bullet_manager_spawn_bullet': 0x3A2CB0,
+    'chr_ins_apply_speffect': 0x3E8DC0,
+    'chr_ins_remove_speffect': 0x3EE2E0,
+    'cs_menu_man_imp_display_status_message': 0x7671F0,
+    'cs_ez_draw_draw_line': 0x2652640,
+    'ChrIns::SetPosition (warp)': 0x3F2690,
+    'ChrCtrl::SetPosition': 0x3C7680,
+    'CSChrPhysicsModule::SetPosition': 0x45EEF0,
+    'CSChrPhysicsModule::SyncProxyPosition': 0x45C910,
+    'ChrIns::SetYaw': 0x3F6180,
+    'CSChrPhysicsModule::SetOrientation': 0x45FEE0,
+    'CSChrPhysicsModule::SetPositionAndYaw': 0x45FC80,
+    'ChrCtrl::RequestProxyPosition': 0x3C9270,
+    'ChrIns::GetTeamType': 0x3F1C90,
+    'ChrIns::Kill': 0x3EE730,
+    'CSChrDataModule::ChangeHp': 0x438810,
+    'CSChrDataModule::SetMaxHp': 0x438870,
+    'CSCamera::ApplyCameraMask': 0x3BB3E0,
+    'hkbCharacter::FireEvent (CT PlayAnimation)': 0xC15AB0,
+    'D3D12CreateDevice call site': 0x1EA2822,
+    'singleton:WorldChrMan': 0x3D69FF8,
+    'singleton:CSCamera': 0x3D669C8,
+    'singleton:CSMenuMan': 0x3D6F820,
+    'singleton:CSFlipper': 0x458DB58,
+    'singleton:CSTask': 0x458FE88,
+    'singleton:CSTaskGroup': 0x458FF08,
+    'singleton:CSRegulationManager': 0x3D8ACD8,
+    'singleton:SoloParamRepository': 0x3D85F58,
+    'singleton:CSHavokMan': 0x3D7A0D0,
+    'singleton:CSGraphics': 0x3D75CB8,
+    'singleton:RendMan': 0x3D7F130,
+    'singleton:CSFade': 0x3D763B0,
+    'singleton:CSNowLoadingHelper': 0x3D64F28,
+    'singleton:CSFeMan': 0x3D6F8F0,
+    'singleton:CSWindow': 0x458F910,
+    'singleton:DmgMan': 0x3D6A3E8,
+    'singleton:CSBulletManager': 0x3D667A8,
+    'singleton:FD4PadManager': 0x4861D30,
+    'singleton:FD4TaskManager': 0x4861280,
+    'singleton:FD4ParamRepository': 0x4861FB0,
+    'vft:CS::ChrIns': 0x2A310C8,
+    'vft:CS::PlayerIns': 0x2A7FBB0,
+    'vft:CS::EnemyIns': 0x2A47090,
+    'vft:CS::ChrCtrl': 0x2A2C6A0,
+    'vft:CS::CSChrPhysicsModule': 0x2A3C890,
+    'vft:CS::CSChrDataModule': 0x2A380B8,
+    'vft:CS::CSChrDamageModule': 0x2A39A90,
+    'vft:CS::CSPlayerDamageModule': 0x2A3A3E0,
+    'vft:CS::CSEnemyDamageModule': 0x2A3A0D8,
+    'vft:CS::ChrCam': 0x2A2AA08,
+    'vft:CS::CSCam': 0x2AA0A18,
+    'vft:CS::CSPersCam': 0x2AA0A40,
+    'vft:CS::CSDebugCam': 0x2B672C0,
+    'vft:CS::CSInGamePad_UserInput1': 0x2BE35E8,
+    'vft:CS::CSDebugCamPad': 0x2BE2EF0,
+    'vft:CS::NearEnemyFinder': 0x2A282D0,
+    'vft:CS::ChrSet': 0x2A41348,
+    'vft:CS::OpenFieldChrSet': 0x2A4B620,
+    'vft:CS::CSPhysWorld': 0x2B96978,
+    'vft:CS::CSHavokManImp': 0x2B934E8,
+    'vft:CS::CSGraphicsImp': 0x2B68558,
+    'vft:CS::RendManImp': 0x2BA2238,
+    'vft:GXBS::GXCommandQueue': 0x2F274C8,
+    'vft:GXBS::GXSwapChainOperatorForMultiWindow': 0x2F07CB8,
+    'vft:CS::CSTaskImp': 0x2C04B00,
+    'vft:CS::CSEzTask': 0x2C048A0,
+    'vft:CS::CSInGamePad': 0x2A2AA40,
+    'vft:CS::CSPad': 0x2BE3A70,
+    'vft:CS::CSMenuViewerPad': 0x2BE4778,
+}}
 
 if __name__ == "__main__":
     main()

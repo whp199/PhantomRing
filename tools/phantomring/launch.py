@@ -39,7 +39,14 @@ GUEST_RECORD = LOGS / "guest-install.json"
 
 ER_APPID = 1245620
 MGSV_APPID = 287700
-ER_SHA256 = "1a3547101327f65d0c76da2f9190ac0aa66871ea42bae2aecc61e11a8b597891"   # 1.17.1 / 2.7.1.0
+# The eldenring.exe builds the host plugin has an address table for (er/Addresses.h kBuilds), newest first:
+# sha256 -> (App version, FileVersion). Any other exe: PhantomRing refuses to launch (the plugin would stay inert).
+ER_BUILDS = {
+	"f9118fea2cfd8fa3901e8060bfadb1552cb2471771ded8a5b662c4e298ffb328": ("1.17.2", "2.7.2.0"),
+	"1a3547101327f65d0c76da2f9190ac0aa66871ea42bae2aecc61e11a8b597891": ("1.17.1", "2.7.1.0"),
+}
+ER_SHA256 = next(iter(ER_BUILDS))  # the newest supported build
+ER_SUPPORTED = " or ".join(f"{app} ({file})" for app, file in ER_BUILDS.values())  # "1.17.2 (2.7.2.0) or 1.17.1 (2.7.1.0)"
 MGSV_SHA256 = "085c2f82d1c963c40b3d2d55786661dfee2b18cbbf388a710c00fa76c5e9bb45"  # TPP 1.0.15.4
 ER_SAVE_NAME = "PhantomRing0000.sl2"
 # PhantomRing0000.sl2 is created once as a copy of an existing save (never modified): `pr launch --seed-save` or
@@ -829,7 +836,8 @@ def build_plan(opts: LaunchOptions, m: Machine | None = None) -> Plan:
 			state = m.app_manifest(ER_APPID)[1]
 			plan.check("Elden Ring fully installed (StateFlags 4)", state.get("StateFlags") == "4", f"StateFlags {state.get('StateFlags')}")
 			digest = sha256(exe)
-			plan.check("eldenring.exe is 1.17.1 (2.7.1.0)", digest == ER_SHA256, digest)
+			build = ER_BUILDS.get(digest)
+			plan.check(f"eldenring.exe is {ER_SUPPORTED}", build is not None, f"{build[0]} ({build[1]}), {digest}" if build else digest)
 		host = BUILD / "PhantomRingHost.dll"
 		plan.check("build/PhantomRingHost.dll built", host.is_file(), str(host) + ("" if host.is_file() else " (build with -B build, see README)"))
 		problems = check_profile()
