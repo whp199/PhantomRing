@@ -320,6 +320,8 @@ namespace phantom::er::Cqc
 
 	bool IsHeld(std::uint64_t a_handle) { return g_held && g_held->handle == a_handle; }
 
+	bool IsBossHp(std::int32_t a_maxHp) { return cqc::IsBoss(a_maxHp, Combat::CurrentRules().scaling, MakeRules()); }
+
 	std::string Describe()
 	{
 		using R = cqc::Response;

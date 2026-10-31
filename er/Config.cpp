@@ -122,6 +122,23 @@ namespace phantom::er
 		ladderPressDelayMs = static_cast<int>(ini.GetInt("Input", "ladder_press_delay_ms", ladderPressDelayMs));
 		ladderWaitMs = static_cast<int>(ini.GetInt("Input", "ladder_wait_ms", ladderWaitMs));
 		ladderSettleMs = static_cast<int>(ini.GetInt("Input", "ladder_settle_ms", ladderSettleMs));
+		ladderSnake = ini.Get("Ladder", "snake", ladderSnake);
+		if (ladderSnake != "on" && ladderSnake != "auto" && ladderSnake != "off") {
+			Log::Warn("[Ladder] snake = {} is not on|auto|off; using on", ladderSnake);
+			ladderSnake = "on";
+		}
+		ladderClimbSpeed = std::clamp(static_cast<float>(ini.GetFloat("Ladder", "climb_speed", ladderClimbSpeed)), 0.1f, 10.0f);
+		ladderGuestWaitMs = static_cast<int>(ini.GetInt("Ladder", "guest_wait_ms", ladderGuestWaitMs));
+		{
+			float off[3]{ ladderOffset[0], ladderOffset[1], ladderOffset[2] };
+			Floats(ini.Get("Ladder", "offset"), off, 3);
+			if (off[0] == ladderOffset[0] && off[1] == ladderOffset[1]) {
+				Floats(ini.Get("Ladder", "offset"), off, 2);  // "toward, up" alone
+			}
+			std::copy(off, off + 3, ladderOffset);
+		}
+		ladderDescendPrompt = static_cast<int>(ini.GetInt("Ladder", "descend_prompt", ladderDescendPrompt));
+		ladderTopStand = std::clamp(static_cast<float>(ini.GetFloat("Ladder", "top_stand", ladderTopStand)), 0.0f, 2.0f);
 		IntList(ini, "Input", "menu_ui_states", menuUiStates, 0x45);
 
 		hideMode = ini.Get("Puppet", "hide_mode", hideMode);
@@ -182,6 +199,59 @@ namespace phantom::er
 		jumpAirControl = std::clamp(static_cast<float>(ini.GetFloat("Puppet", "jump_air_control", jumpAirControl)), 0.0f, 50.0f);
 		jumpAirStep = std::clamp(static_cast<float>(ini.GetFloat("Puppet", "jump_air_step", jumpAirStep)), 0.05f, 0.6f);
 		jumpCameraHold = ini.GetBool("Puppet", "jump_camera_hold", jumpCameraHold);
+
+		mantle = ini.GetBool("Mantle", "enabled", mantle);
+		{
+			auto& m = mantleParams;
+			auto  mf = [&](const char* a_key, float& a_v, float a_lo, float a_hi) {
+                a_v = std::clamp(static_cast<float>(ini.GetFloat("Mantle", a_key, a_v)), a_lo, a_hi);
+			};
+			mf("min_height", m.minHeight, 0.3f, 1.5f);
+			mf("max_height", m.maxHeight, 0.6f, 2.5f);
+			mf("reach", m.reach, 0.1f, 1.5f);
+			mf("vault_max_height", m.vaultMaxHeight, 0.3f, 2.0f);
+			mf("vault_max_depth", m.vaultMaxDepth, 0.1f, 1.5f);
+			mf("vault_max_drop", m.vaultMaxDrop, 0.0f, 4.0f);
+			mf("climb_room", m.climbRoom, 0.5f, 2.0f);
+			mf("climb_base_s", m.climbBaseS, 0.2f, 3.0f);
+			mf("climb_per_m", m.climbPerM, 0.0f, 2.0f);
+			mf("vault_base_s", m.vaultBaseS, 0.2f, 3.0f);
+			mf("vault_per_m", m.vaultPerM, 0.0f, 2.0f);
+		}
+		mantleY = ini.GetBool("Mantle", "y", mantleY);
+		mantleRunInto = ini.Get("Mantle", "run_into", mantleRunInto);
+		if (mantleRunInto != "off" && mantleRunInto != "low" && mantleRunInto != "all") {
+			Log::Warn("[Mantle] run_into = {} is not off|low|all; using low", mantleRunInto);
+			mantleRunInto = "low";
+		}
+		mantleRunIntoMax = static_cast<float>(ini.GetFloat("Mantle", "run_into_max", mantleRunIntoMax));
+		mantleRunSpeed = static_cast<float>(ini.GetFloat("Mantle", "run_speed", mantleRunSpeed));
+		mantleRunBlockedS = static_cast<float>(ini.GetFloat("Mantle", "run_blocked_s", mantleRunBlockedS));
+		mantleWaitMs = static_cast<int>(ini.GetInt("Mantle", "wait_ms", mantleWaitMs));
+		mantlePromptQuietMs = static_cast<int>(ini.GetInt("Mantle", "prompt_quiet_ms", mantlePromptQuietMs));
+		mantleBuddyClear = static_cast<float>(ini.GetFloat("Mantle", "buddy_clear", mantleBuddyClear));
+
+		hints = ini.GetBool("Hints", "enabled", hints);
+		hintCount = static_cast<int>(ini.GetInt("Hints", "count", hintCount));
+		hintBlockedS = static_cast<float>(ini.GetFloat("Hints", "blocked_s", hintBlockedS));
+
+		{
+			const auto b = ini.Get("Jump", "button", "r3");
+			if (b == "r3" || b == "rs" || b.empty()) {
+				jumpButton = 0x0080;
+				jumpButtonName = "R3";
+			} else if (b == "a") {
+				jumpButton = 0x1000;
+				jumpButtonName = "A";
+			} else if (b == "l3" || b == "ls") {
+				jumpButton = 0x0040;
+				jumpButtonName = "L3";
+			} else {
+				Log::Warn("[Jump] button = {} is not r3|a|l3; using r3", b);
+				jumpButton = 0x0080;
+				jumpButtonName = "R3";
+			}
+		}
 
 		mirrorX = Sign(ini.GetFloat("Axes", "mirror_x", mirrorX));
 		mgsvYawSign = Sign(ini.GetFloat("Axes", "mgsv_yaw_sign", mgsvYawSign));

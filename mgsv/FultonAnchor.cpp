@@ -193,7 +193,7 @@ namespace phantom::guest::fulton
 			return;
 		}
 		const bool riding = lua.ridden != 0xFFFF || (lua.flags & state::kLVehicle);
-		const bool busy = riding || (lua.flags & (state::kLDead | state::kLDemo)) || state::Parked() || !link::HostAlive();
+		const bool busy = riding || (lua.flags & (state::kLDead | state::kLDemo)) || state::Parked() || state::Staged() || !link::HostAlive();
 		if (g_records.size() < proto::kMaxActors) {
 			g_records.resize(proto::kMaxActors);
 		}

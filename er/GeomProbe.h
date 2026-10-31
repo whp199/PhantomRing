@@ -22,6 +22,7 @@ namespace phantom::er::GeomProbe
 		std::uint8_t  flags{ 0 };     // param bits_3b: bit0 breaks by the player's body, bit1 by an enemy's
 		Vec3          pos;            // Elden Ring world (Havok) when found
 		bool          posValid{ false };
+		Vec3          fwd;            // its matrix's third row (a ladder's: the way a climber faces it; Ladders() only)
 		bool          broken{ false };
 	};
 

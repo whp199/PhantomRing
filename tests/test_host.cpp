@@ -11,6 +11,7 @@
 #include "CombatLogic.h"
 #include "Fulton.h"
 #include "Kinematic.h"
+#include "Mantle.h"
 #include "DiveHop.h"
 #include "Link.h"
 #include "Revival.h"
@@ -648,6 +649,7 @@ static void TestMenuGroups()
 #include "test_host_marking.inc"
 #include "test_host_timeskip.inc"
 #include "test_host_hop.inc"
+#include "test_host_mantle.inc"
 
 // The real host link + console (er/Link.cpp, er/Console.cpp) against a live guest on a_where -- fake_mgsv.py
 // or the real guest link -- driven by tools/phantomring/test_plugins.py. Prints one "PEER {json}" line.
@@ -754,6 +756,8 @@ int main(int argc, char** argv)
 	TestChord();
 	TestFallWatch();
 	TestLadder();
+	TestClimbPace();
+	TestMantle();
 	TestSupportedStart();
 	TestCeiling();
 	TestGround();
@@ -767,6 +771,8 @@ int main(int argc, char** argv)
 	TestJump();
 	TestScaffold();
 	TestJumpReview();
+	TestJumpUphill();
+	TestNearerOf();
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

@@ -19,6 +19,7 @@
 #include "Kinematic.h"
 
 #include <string>
+#include <vector>
 
 namespace phantom::er
 {
@@ -31,6 +32,12 @@ namespace phantom::er
 
 		void OnGuestDied(const Frame& a_frame);    // kGEvDied
 		void OnWorldShift(const Vec3& a_delta);    // er/WorldShift.h: the puppet's own stored positions move with the world
+
+		// Elden Ring's world for what Snake throws or sets down (er/Throw.cpp's arcs, er/Decoys.cpp's set-down; review 2026-10-31):
+		// ray_filter (the world, enemies' hit capsules) and his body's ground filter (the floors and walls only characters meet:
+		// Stormveil's scaffold, whose planks ray_filter passes through), the nearer hit. a_groundOnly: the ground filter alone (a
+		// decoy stands on the floor, never on an enemy's hit capsule). Without the collision layer table: ray_filter alone.
+		bool CastWorld(const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit, const std::uint8_t* a_ignore, bool a_groundOnly = false);
 
 		[[nodiscard]] bool          Active();
 		[[nodiscard]] const Anchor& CurrentAnchor();  // valid while Active()
@@ -67,9 +74,19 @@ namespace phantom::er
 		};
 		void               SetHold(Hold a_reason, bool a_on);
 		[[nodiscard]] bool Held(Hold a_reason);
+		// Ladders (er/Ladder.h, [Ladder] snake): while Elden Ring climbs one with the Tarnished (Hold::kLadder: the puppet is off,
+		// Elden Ring has the pad and its camera), Snake is drawn on it instead. a_on (FrameBegin, before Decide, every frame): the
+		// Tarnished stays hidden through the puppet's stop and after it, and the renderer draws Snake at the anchor SetClimbAnchor
+		// gives (his feet where the Tarnished's are, facing the ladder); false shows the Tarnished again (unless the puppet runs).
+		void               SetClimbVisual(bool a_on);
+		void               SetClimbAnchor(const Anchor& a_anchor);  // after Elden Ring's physics, every frame of the climb
+		[[nodiscard]] bool ClimbVisual();  // Snake is drawn on a ladder (the puppet off): RenderScene, Hud
 		// Console `puppet motion kinematic|root_motion`: switches [Puppet] motion live (the root-motion hook installed or
 		// removed on the running puppet).
 		std::string SetMotion(std::string_view a_mode, const Frame& a_frame);
+		// Console `mantle [plan [yaw_deg] | go [yaw_deg] | on|off | run off|low|all | hints reset]`: what a climb up / vault would do in
+		// front of Snake (plan), one started as Y would (go), [Mantle] switched live.
+		std::string MantleCommand(const std::vector<std::string>& a_words, const Frame& a_frame);
 		std::string Describe();
 	}
 }

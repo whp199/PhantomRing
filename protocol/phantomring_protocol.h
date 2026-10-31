@@ -28,7 +28,7 @@
 namespace phantom::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x47524850;  // "PHRG"
-	inline constexpr std::uint32_t kVersion = 14;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
+	inline constexpr std::uint32_t kVersion = 15;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
 	                                              // v5: kGEvThrow, kGEvPlaced, kGEvPlacedGone, kHEvDetonate;
 	                                              // v6: GuestState aimThrow* (0xA8..0xC4) + kGuestThrowAim; v7: kGEvBuddyOrder;
 	                                              // v8: kGuestInBox, kGuestBoxPoster, kGEvFire pad[1] = MGSV damage share;
@@ -38,7 +38,8 @@ namespace phantom::proto
 	                                              // v12: kGEvFulton;
 	                                              // v13: kGuestBinoculars, kGuestDiving, kGEvTimeSkip, kGEvCqc, kAmmoDecoy,
 	                                              //      kOwnerProjectile;
-	                                              // v14: kGuestJumping
+	                                              // v14: kGuestJumping;
+	                                              // v15: kGuestClimbing, kGuestMantling, kHEvClimb, kHEvMantle
 	inline constexpr wchar_t       kDefaultMapping[] = L"file:Z:\\dev\\shm\\phantomring_v1";
 
 	// ---- region offsets ---------------------------------------------------------------------
@@ -160,6 +161,9 @@ namespace phantom::proto
 		kGuestDiving = 1u << 18,     // (v13) Snake is in MGSV's dive (X): the host may carry the puppet over short gaps/ledges
 		kGuestJumping = 1u << 19,    // (v14) Snake jumps ([Jump] button, MGSV has no jump): set from the press until he lands in MGSV; the host
 		                             // gives the puppet an Elden Ring-like jump through its collision on the rising edge
+		kGuestClimbing = 1u << 20,   // (v15) MGSV plays Snake's own ladder climb for an Elden Ring ladder (after kHEvClimb a = 1): the host
+		                             // draws him on that ladder instead of showing the Tarnished
+		kGuestMantling = 1u << 21,   // (v15) MGSV plays Snake's climb-up / vault (after kHEvMantle) until it ends
 	};
 
 	struct GuestState
@@ -385,6 +389,10 @@ namespace phantom::proto
 		                    // flasks then, so the guest refills Snake's ammo (and life) the same way; a = 0 rest, 1 respawn
 		kHEvTarnished = 8,  // (v10) "Tarnished mode": a = 1 the player took the Tarnished (Snake parks: neutral pad, no follow
 		                    // whistles), a = 0 Snake is back
+		kHEvClimb = 9,      // (v15) an Elden Ring ladder climb: a = 1 started / 0 ended, b = 0 going up / 1 going down, v0[0] = the
+		                    // climb's vertical speed (m/s, for the animation's pace); the guest plays MGSV's own ladder climb meanwhile
+		kHEvMantle = 10,    // (v15) Snake climbs onto / vaults over an Elden Ring ledge in front of him: a = its height (cm), b = 0 climb
+		                    // up / 1 vault over, v0[0] = the move's duration (s); the guest plays MGSV's matching move
 	};
 
 	enum HurtKind : std::uint32_t

@@ -1,4 +1,4 @@
-# Status (2026-10-26, 0.4.1-alpha)
+# Status (2026-10-31, 0.5.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,45 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## 0.5.0-alpha, 2026-10-31: ladders, climb-ups, vaults and the uphill jump with both games
+
+Both real games on the default mapping (`pr launch --er-headless 3840x2160`, `pr er-continue`, the virtual pad; Elden Ring
+1.17.2, MGSV 1.0.15.4; ~2 h, four launches as fixes went in), the player's save at Stormveil, then Stormveil Cliffside, the
+Church of Elleh, Agheel Lake North and Fort Haight. The saves taken at the start (`backups/20261031-172409`) were put back
+afterwards, sha256 equal file by file; MGSV's saves were unchanged by the session.
+
+- **Ladders, Snake on them himself** (`[Ladder] snake = on`; the guest stages Snake at an airport wall ladder in MGSV and plays
+  its own climb, GUEST.md 22): Stormveil's AEG219_067_4000 (14.5 m) up in 15.4 s and down in 16.5 s; Fort Haight's tower
+  ladder AEG030_902_2001 up +18.9 m in 17.8 s and down -18.9 m in 18.8 s. Each time: `ladder: the climb started (484-516 ms
+  after the press)`, `MGSV plays Snake's climb (kGuestClimbing) 33-34 ms after kHEvClimb`, MGSV on its ladder 0.13-0.5 s after Y,
+  1-2 loops per climb, back on the sandbox 0.18-0.23 s after the end (1.6 s once: the end came in the middle of a mount from the
+  roof), `Snake was drawn on it (MGSV played the climb)`, "Descend" started 484-500 ms after the press. Frames at 3-4 points of
+  each climb: Snake in MGSV's climbing pose, hands and feet on Elden Ring's ladder, the Tarnished nowhere, Elden Ring's ladder
+  camera; Snake in control at the top and the bottom.
+- **Climb up / vault** (`[Mantle]`): Church of Elleh, D-Walker following ~2.4 m away in MGSV. Y onto a 1.09 m ruined wall:
+  `kHEvMantle a=109 b=0 1.24 s` -> `MGSV plays it (kGuestMantling)` 16 ms later -> on top, +1.31 m; Y over a 0.52 m ledge: 0.68 s,
+  then 1.23 s once paced to MGSV's vault (MGSV 1.19 s from its Y). Found and fixed: Y there mounted D-Walker at Stormveil
+  (it now never reaches MGSV while a ledge fits: `1 Y presses kept from MGSV`), and MGSV's jersey barrier, where the guest stages
+  the vault, was drawn in Elden Ring under Snake (`staging-site props dropped 335`, gone from the frames). Running into a ledge
+  at a slant slid along it (not re-verified with MGSV; the stand-in climbed it straight on).
+- **Jump** (R3): up 17, 14 and 24 degree slopes at Stormveil Cliffside, running: +0.90, +1.22 and +1.21 m over the take-off
+  (before the fix such a jump ended on its first frame, 2 cm up); standing 1.20 m; refused under a ceiling (`a ceiling lower
+  than him`).
+- **Hints**: "R3: jump onto it -- Y: climb up" in the corner walking into the 1.03 m wall (now one per encounter, 20 s apart).
+- **Regression** (README How to play, one control at a time): run, camera, A crouch / stand, R3, X dive (`hop #1: 0.60 m up`),
+  LT aim + RT fire (7 -> 6 rounds), B reload, D-pad up / down (weapon 0x7 <-> 0x24), RB binoculars (`kGuestBinoculars`), LB
+  call menu, Start (Elden Ring's menu) and B, View tap (its map) and B, View held (MGSV's iDroid, `kGuestInMenu`) and Start,
+  View + Start (Tarnished mode on and off). Quick throws: 4 of 4 sleep grenades on 50 ms RT taps with LT held
+  (`RT taps held to 120 ms while aiming`).
+- **10 minutes of continuous play** (Fort Haight and Agheel Lake North; 253 actions: runs, jumps, crouches, dives, aim and fire,
+  throws, Y, binoculars, the map): both sides alive throughout (heartbeats 2-29 ms), one death to Fort Haight's soldiers ->
+  YOU DIED -> respawn 18.7 s later with life and ammo refilled (`the Tarnished has 0 HP ... Snake waits` in between), one 17 m
+  fall (62% of his life); **0 errors and 0 warnings** in either log.
+- Also found: Elden Ring's origin shifted 32 m mid-climb and the ladder summary read "-13.1 m up" (fixed); `call setpos` into a
+  spot not yet streamed dropped the (puppet-less) Tarnished through the ground twice (a dev-console path, not play).
+- Not done: Elden Ring's grass over Snake, C4 placed in the frame Snake dies, D-Walker's footstep volume; MGSV has one climb-up
+  for every height.
 
 ## Elden Ring 1.17.2 (eldenring.exe 2.7.2.0), 2026-10-26: live regression
 
@@ -334,11 +373,13 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
   sleep lasts ~50 s, and a soldier that wakes meanwhile can't be fultoned.
 - Full proxies (`[Proxies] Enabled`, off by default): inert since round 1 -- live pass B kept MGSV at alert phase 0 for 11
   minutes, no stand-in shot Snake -- but LT never swung the aim onto a stand-in: not worth turning on yet.
-- Ladders: walking on into the hole at a ladder's top drops Snake down the shaft (face it and press Y on "Descend").
-- Flasks, spirit ashes and Torrent need Tarnished mode (ladders: Snake's Y hands the climb to Elden Ring).
+- Ladders: walking on into the hole at a ladder's top drops Snake down the shaft (face it and press Y on "Descend"). Snake climbs
+  them himself since 0.5.0; MGSV's 8 m ladder loops every ~5.5 m of a longer climb (a ~1 s seam in his pose).
+- Flasks, spirit ashes and Torrent need Tarnished mode.
 - Snake's jump (R3, protocol v14 `kGuestJumping`: the guest lifts him in MGSV, the host jumps the puppet; HOST.md "Jumps",
   GUEST.md §6): live pass A 2026-10-14: 1.2 m, onto 1.1-1.3 m rock steps and a plank walkway at Stormveil's cliffside (the
-  way in that needed it), the camera rides with him; MGSV's look is a short fall. A gap and a 1.7 m wall not tried live.
+  way in that needed it), the camera rides with him; MGSV's look is a short fall. Uphill fixed in 0.5.0 (it ended 2 cm up).
+  A gap and a 1.7 m wall not tried live.
 - Back to Snake on a wooden scaffold: he fell through and died (player, 2026-10-14). Fixed (the characters' collision layer
   for his ground rays, five rays under his body) and verified live the same night on that scaffold: he stands, walks its
   landings and stairs; the old filter saw its planks 0.5-1.4 m too low (docs/FEATURES-1.md "Live pass A").

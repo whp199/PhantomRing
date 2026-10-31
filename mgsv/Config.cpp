@@ -38,6 +38,31 @@ namespace phantom::guest
 			return out;
 		}
 
+		// "a, b, c" -> a_out[0..a_n) when it has exactly a_n numbers (an empty value keeps the defaults; "0" or "off" clears them).
+		void Floats(const std::string& a_text, float* a_out, int a_n, const char* a_key, const char* a_form)
+		{
+			if (a_text.empty()) {
+				return;
+			}
+			if (Lower(a_text) == "off" || a_text == "0") {
+				std::fill_n(a_out, a_n, 0.0f);
+				return;
+			}
+			std::string list = a_text;
+			std::ranges::replace(list, ',', ' ');
+			std::stringstream ss(list);
+			float             v[8]{};
+			int               n = 0;
+			while (n < 8 && ss >> v[n]) {
+				++n;
+			}
+			if (n != a_n || !ss.eof()) {
+				Log::Warn("ini: {} '{}' is not '{}' -- keeping the default", a_key, a_text, a_form);
+				return;
+			}
+			std::copy_n(v, a_n, a_out);
+		}
+
 		// XInput button names ("rs", "lb+rb", "lb rb lt", "0x0080"); "lt" (a trigger, no button bit) sets a_lt. 0 = none known.
 		std::uint16_t Buttons(const std::string& a_list, bool& a_lt)
 		{
@@ -176,6 +201,13 @@ namespace phantom::guest
 		if (jump) {
 			Log::Info("ini: [Jump] button {:#06x} (MGSV's own with {:#06x}{} held), lift {:.2f} m", jumpButton, jumpPassWith, jumpPassAiming ? " or LT" : "", jumpLift);
 		}
+		climb = ini.GetBool("Climb", "Enabled", climb);
+		Floats(ini.Get("Climb", "Ladder", ""), climbLadder, 4, "[Climb] Ladder", "x, y, z, yaw");
+		mantle = ini.GetBool("Mantle", "Enabled", mantle);
+		Floats(ini.Get("Mantle", "Vault", ""), mantleVault, 5, "[Mantle] Vault", "x, y, z, yaw, cm");
+		Floats(ini.Get("Mantle", "Low", ""), mantleLow, 5, "[Mantle] Low", "x, y, z, yaw, cm");
+		Floats(ini.Get("Mantle", "High", ""), mantleHigh, 5, "[Mantle] High", "x, y, z, yaw, cm");
+		mantleLowMaxCm = std::clamp(static_cast<int>(ini.GetInt("Mantle", "LowMaxCm", mantleLowMaxCm)), 0, 300);
 		jobSleepUs = std::clamp(static_cast<int>(ini.GetInt("Pacing", "JobSleepUs", jobSleepUs)), 0, 1000);
 		waitProbe = ini.GetBool("Pacing", "WaitProbe", waitProbe);
 
@@ -183,6 +215,7 @@ namespace phantom::guest
 		padDuringBoot = ini.GetBool("Input", "PadDuringBoot", padDuringBoot);
 		hideDirectInputControllers = ini.GetBool("Input", "HideDirectInputControllers", hideDirectInputControllers);
 		rumble = ini.GetBool("Input", "Rumble", rumble);
+		rtTapMs = std::clamp(static_cast<int>(ini.GetInt("Input", "RtTapMs", rtTapMs)), 0, 500);
 		guardWindow = ini.GetBool("Input", "GuardWindow", guardWindow);
 
 		filmHeightMm = static_cast<float>(ini.GetFloat("Camera", "FilmHeightMm", filmHeightMm));

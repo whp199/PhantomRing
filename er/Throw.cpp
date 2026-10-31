@@ -69,13 +69,15 @@ namespace phantom::er::Throw
 			return p;
 		}
 
-		// Elden Ring's world as the simulation sees it: cs_phys_world_cast_ray (the puppet ignored), and the surface's
-		// normal from two parallel rays beside the hit (the cast returns only the point).
+		// Elden Ring's world as the simulation sees it: cs_phys_world_cast_ray (the puppet ignored) through ray_filter and Snake's
+		// ground filter, the nearer hit (Puppet::CastWorld; review 2026-10-31: ray_filter alone passed through the character-only
+		// floors Snake stands on -- Stormveil's scaffold -- and a grenade dropped there went off on the ground below), and the
+		// surface's normal from two parallel rays beside the hit (the cast returns only the point).
 		throwing::RayFn GameRay(const Frame& a_f)
 		{
 			return [chr = a_f.player.chr](const Vec3& a_from, const Vec3& a_delta) -> std::optional<RayHit> {
 				Vec3 hit;
-				if (!game::CastRay(a_from, a_delta, hit, chr, Cfg().rayFilter)) {
+				if (!Puppet::CastWorld(a_from, a_delta, hit, chr)) {
 					return std::nullopt;
 				}
 				const Vec3 d = Normalize(a_delta);
@@ -84,7 +86,7 @@ namespace phantom::er::Throw
 				const Vec3 fallback = d.y < -0.3f ? Vec3{ 0, 1, 0 } : -d;
 				Vec3       h1, h2;
 				const Vec3 back = hit - d * 0.4f;
-				if (game::CastRay(back + u * 0.15f, d * 0.8f, h1, chr, Cfg().rayFilter) && game::CastRay(back + w * 0.15f, d * 0.8f, h2, chr, Cfg().rayFilter)) {
+				if (Puppet::CastWorld(back + u * 0.15f, d * 0.8f, h1, chr) && Puppet::CastWorld(back + w * 0.15f, d * 0.8f, h2, chr)) {
 					return RayHit{ hit, throwing::PlaneNormal(hit, h1, h2, -d, fallback) };
 				}
 				return RayHit{ hit, fallback };

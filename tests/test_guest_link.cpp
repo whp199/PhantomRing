@@ -71,6 +71,11 @@ static void TestShippedIni(const wchar_t* a_path)
 	      d.jumpPassWith == 0x030F && shipped.jumpPassAiming == d.jumpPassAiming && d.jumpPassAiming && shipped.jumpLift == d.jumpLift &&
 	      shipped.jumpMaxAirMs == d.jumpMaxAirMs);
 	CHECK(shipped.jobSleepUs == d.jobSleepUs && shipped.waitProbe == d.waitProbe);
+	// v15 climbs and climb-ups (docs/GUEST.md 22), the quick-throw RT tap
+	CHECK(shipped.climb == d.climb && d.climb && std::equal(d.climbLadder, d.climbLadder + 4, shipped.climbLadder));
+	CHECK(shipped.mantle == d.mantle && std::equal(d.mantleVault, d.mantleVault + 5, shipped.mantleVault) &&
+	      std::equal(d.mantleLow, d.mantleLow + 5, shipped.mantleLow) && std::equal(d.mantleHigh, d.mantleHigh + 5, shipped.mantleHigh) &&
+	      shipped.mantleLowMaxCm == d.mantleLowMaxCm && shipped.rtTapMs == d.rtTapMs);
 	CHECK(shipped.padDuringBoot == d.padDuringBoot && shipped.hideDirectInputControllers == d.hideDirectInputControllers && shipped.rumble == d.rumble &&
 	      shipped.guardWindow == d.guardWindow);
 	CHECK(shipped.filmHeightMm == d.filmHeightMm && shipped.fovOverrideDeg == d.fovOverrideDeg && shipped.nearPlane == d.nearPlane);

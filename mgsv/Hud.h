@@ -45,6 +45,9 @@ namespace phantom::guest::capture::hud
 	// a full-screen quad inside a UI job (pixel shader kNvgOverlayPs); it stays out of the layer while they are on, so
 	// Elden Ring doesn't get a darker, noisy picture -- the host draws its own night vision from kGuestNvg (docs/GUEST.md 18.12).
 	void SetNightVision(bool a_on);
+	// A climb or climb-up is staged at real MGSV geometry (Climb.h): the layer keeps its last frame (MGSV's "Y" prompt and ladder
+	// icon there are no Elden Ring business).
+	void SetFrozen(bool a_frozen);
 
 	// "!capture hud [on|off|every N|skip <ps hash>]" (Capture.cpp forwards).
 	std::string Command(std::string_view a_args);

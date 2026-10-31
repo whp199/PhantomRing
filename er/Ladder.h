@@ -69,4 +69,59 @@ namespace phantom::er
 	std::string_view Name(LadderHandOver::Event a_event);
 	// fromsoftware-rs LadderState names (common_define.hks), for the log; "?" for others.
 	std::string_view LadderStateName(int a_state);
+
+	// How a ladder state moves the climber: +1 up (StartBottom, Up*, EndTop), -1 down (StartTop, Down*, EndBottom, the coast =
+	// the slide down), 0 still on it (Idle*, Attack*, Damage*, unknown), and none (-1 state) = 0 too.
+	int LadderMotion(int a_state);
+
+	// Snake climbs the ladder himself (protocol v15 kHEvClimb, [Ladder] snake): Elden Ring still moves the hidden Tarnished up or
+	// down it, and MGSV plays Snake's own ladder climb at the climb's pace. This says when to tell the guest: a = 1 when the climb
+	// starts and again whenever it turns (up / down / still on it for kStillMs) or its pace changes by more than kPaceChange
+	// (never more often than kMinGapMs); a = 0 when it ends. b = 0 up / 1 down (a still climber keeps the last direction); v0[0] = the vertical
+	// speed (m/s): the Tarnished's own, measured (eased over kSpeedTauS), or a_defaultSpeed until a measure exists (its first
+	// kWarmupMs of moving). Pure (tests/test_host_chord.inc TestClimbPace).
+	class ClimbPace
+	{
+	public:
+		static constexpr std::uint64_t kMinGapMs = 200;
+		static constexpr std::uint64_t kPaceGapMs = 1000;   // a pace change alone waits this long after the last event
+		static constexpr std::uint64_t kWarmupMs = 500;
+		static constexpr std::uint64_t kStillMs = 300;      // a stop on the rungs counts once it lasted this long (Elden Ring's climb
+		                                                    // passes through its idle states between two pushes of the stick)
+		static constexpr float         kSpeedTauS = 0.8f;   // Elden Ring climbs rung by rung: 0.76-1.72 m/s over 0.3 s windows (live)
+		static constexpr float         kPaceChange = 0.5f;  // share of the speed last sent
+		struct Out
+		{
+			bool  send{ false };   // push a kHEvClimb now
+			bool  on{ false };     // a
+			bool  down{ false };   // b
+			float speed{ 0 };      // v0[0]
+			int   motion{ 0 };     // +1 up, -1 down, 0 still (what changed)
+		};
+		// Each frame while Elden Ring has the Tarnished on a ladder (its state != -1; a single -1 frame between two states may
+		// come too): the state, his feet's height, now.
+		Out Update(std::uint64_t a_nowMs, int a_state, float a_y, float a_defaultSpeed);
+		// The hand-over ended (off the ladder, a load, a death): a = 0 if a = 1 went out.
+		Out End();
+		[[nodiscard]] bool  Started() const { return started_; }
+		[[nodiscard]] float Speed() const { return speed_; }  // measured |vy| (m/s), eased
+		[[nodiscard]] std::uint32_t Sent() const { return sent_; }
+		void Reset() { *this = ClimbPace(); }
+
+	private:
+		bool          started_{ false };
+		bool          down_{ false };
+		int           motionSent_{ 0 };
+		float         speedSent_{ 0 };
+		float         moveSent_{ 0 };   // the last moving speed sent (a climb resumed goes on at it until a measure is warm)
+		std::uint64_t sentMs_{ 0 };
+		bool          haveY_{ false };
+		float         lastY_{ 0 };
+		std::uint64_t lastMs_{ 0 };
+		float         speed_{ 0 };
+		std::uint64_t movingSince_{ 0 };
+		std::uint64_t stillSince_{ 0 };
+		bool          pending_{ false };  // a turn within kMinGapMs of the last event: sent once the gap is over
+		std::uint32_t sent_{ 0 };
+	};
 }

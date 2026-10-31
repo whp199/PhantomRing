@@ -1,6 +1,7 @@
 #include "Actors.h"
 
 #include "Combat.h"
+#include "Cqc.h"
 #include "Config.h"
 #include "Game.h"
 #include "Host.h"
@@ -45,8 +46,10 @@ namespace phantom::er::Actors
 			}
 			if (c.dead) {
 				r.flags |= proto::kActorDead;
-			} else if (Combat::Asleep(c.chr)) {
-				r.flags |= proto::kActorAsleep;  // the guest's Fulton anchor stands a sleeping soldier in for him (docs/GUEST.md 20)
+			} else if (Combat::Asleep(c.chr) && !Cqc::IsBossHp(c.maxHp)) {
+				// The guest's Fulton anchor stands a sleeping soldier in for him (docs/GUEST.md 20). Never for a boss (review
+				// 2026-10-31): MGSV then offers no Fulton for him at all (er/Fulton.cpp refuses one anyway).
+				r.flags |= proto::kActorAsleep;
 			}
 			const Vec3 p = anchor.PointToMgsv(c.pos);
 			r.pos[0] = p.x;

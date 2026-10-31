@@ -67,6 +67,13 @@ namespace phantom::guest::logic
 			}
 		}
 
+		// Snake is away on purpose (a staged climb, Climb.h): nothing he does counts, and he isn't moving as far as anyone knows.
+		void Still(const Vec3& a_root)
+		{
+			Rebase(a_root);
+			velocity_ = {};
+		}
+
 		[[nodiscard]] const std::array<double, 3>& Odo() const { return odo_; }
 		[[nodiscard]] Vec3                          Velocity() const { return velocity_; }
 		[[nodiscard]] bool                          Primed() const { return primed_; }

@@ -166,16 +166,28 @@ Start it (`tools/pr launch`, see [Install](#install)), load your character in El
 as usual while MGSV boots hidden (2-4 minutes; the top-right corner says what it is doing). "Snake is in control" means
 your controller now plays Venom Snake. Use an Xbox-style pad.
 
+**Getting over things -- jump, climb, vault, ladders** (new in 0.5.0, tried live with both games):
+- **R3 (click the right stick): jump**, ~1.2 m up: onto a ledge about a metre high, and now uphill too (before 0.5.0 a jump
+  up a slope or across a curb ended after 2 cm, so R3 often seemed to do nothing). Rather have it on A,
+  as in Elden Ring? `[Jump] button = a` in `PhantomRingHost.ini` (then R3 crouches; `l3` is the other choice).
+- **Y at a ledge or a wall 0.5-1.8 m high: Snake climbs up** onto it with MGSV's own climb. **Y at a fence or a low wall: he
+  vaults over** it. Running into one up to ~1.1 m high does it by itself. While a ledge that fits is in front of him, Y is the
+  climb's alone: D-Walker following him is not mounted, C4 in hand is not set off.
+- **Ladders: Snake climbs them himself.** Y on Elden Ring's "Climb" / "Descend" prompt, then the left stick up / down. MGSV
+  plays Snake's own ladder climb on Elden Ring's ladder, and the Tarnished never shows.
+- The first few times Snake keeps walking into something he could get over, the top-right corner says how ("R3: jump onto it
+  -- Y: climb up", "Y: vault over -- or run into it").
+
 **Snake's controls are MGSV's own**, with three exceptions for Elden Ring and one addition (R3: jump):
 
 | Button | What it does |
 |---|---|
 | Left stick / right stick | move (tilt = walk or run) / camera |
-| **R3 (click the right stick)** | **jump** (MGSV has none): standing, walking or running on foot, ~1.2 m up; up onto a ledge about a metre high (Stormveil's rock steps and its wooden walkway), over a gap of two metres or more running. Not crouched, prone, aiming or riding. With LB held (D-Walker's orders), a D-pad direction held (MGSV's weapon and item wheels: R3 = Use there, e.g. the Phantom Cigar), while aiming, riding, in a menu or the binoculars R3 is MGSV's own |
+| **R3 (click the right stick)** | **jump** (MGSV has none): standing, walking or running on foot, ~1.2 m up; up onto a ledge about a metre high (Stormveil's rock steps and its wooden walkway), over a gap of two metres or more running. Not crouched, prone, aiming or riding. With LB held (D-Walker's orders), a D-pad direction held (MGSV's weapon and item wheels: R3 = Use there, e.g. the Phantom Cigar), while aiming, riding, in a menu or the binoculars R3 is MGSV's own. `[Jump] button = a` (or `l3`) in `PhantomRingHost.ini` moves the jump -- and those R3 uses -- to A (L3), and A's crouch (L3's sprint) to R3 |
 | A | tap: crouch / stand up, hold: lie down |
 | X | dive (running: the dive hops Snake over a short gap or onto a knee-high ledge, see below; `[Puppet] hop = false` turns the hop off) |
 | B | reload |
-| Y | MGSV's action (next to D-Walker: get on; riding: hold to get off; pick up a supply box; next to a sleeping enemy: hold for MGSV's Fulton), **or Elden Ring's** whenever Elden Ring shows its own prompt ("Y: Rest at site of grace", "Y: Retrieve lost runes", items) |
+| Y | MGSV's action: at a ledge **climb up**, at a low fence **vault over** (above: then the Y is the climb's only); next to D-Walker: get on; riding: hold to get off; pick up a supply box; next to a sleeping enemy: hold for MGSV's Fulton -- **or Elden Ring's** whenever Elden Ring shows its own prompt ("Y: Rest at site of grace", "Y: Retrieve lost runes", items, a ladder's "Climb" / "Descend") |
 | LT / RT | aim / fire; RT without LT, standing, next to an enemy = CQC strike; **held** = grab him (keep holding: choke him out, LB: interrogate, let go: release), with the left stick pushed = throw him (CQC holds and throws, below) |
 | D-pad | tap up: primary weapons (by default an SVG-76 assault rifle at the hip and an FB MR R-LAUNCHER rocket launcher on the back: hold up and push the right stick to switch), down: handgun (a WU S.PISTOL with tranquilizer darts), right: support items (grenades, mines, C4: Y sets it off), left: items -- hold it and push the right stick to pick one (the cardboard box, the night-vision goggles), a quick tap uses the one picked |
 | RB (while aiming) | first person / down the scope: you aim with the gun's own sights (MGSV shows no reticle there) |
@@ -236,10 +248,23 @@ in PhantomRingHost.ini, or `pr er "puppet hop off"`, turns it off).
 A dive ends with Snake on the ground, as in MGSV: A gets him up. A wall 1 m high stops him, and under a low ceiling
 the hop is lower or doesn't happen. He lands as from any fall (a hop off a cliff hurts like the fall).
 
-**Ladders.** Y on a ladder's "Climb" prompt: the Tarnished takes the ladder and you climb it with the left stick, as in Elden
-Ring; Snake is back where the Tarnished gets off (let go of the stick first: Snake doesn't run on with it). To go down, stand at
-the top next to the hole and turn Snake to face it (a light touch of the stick turns him): "Descend" shows, Y. Walking on into
-the hole drops Snake down the shaft, as it would the Tarnished (a 19 m tower costs ~90% of his life).
+**Ladders.** Y on a ladder's "Climb" prompt and Snake climbs it himself: the left stick climbs up and down as in Elden Ring.
+Elden Ring moves him on its ladder, MGSV plays his own ladder climb, and Elden Ring's ladder camera follows. He steps off at the
+top or the bottom; let go of the stick first, because Snake doesn't run on with it. To go down, walk up to the hole at the top
+until "Descend" shows, then press Y. Walking on into the hole drops Snake down the shaft, as it would the Tarnished (a 19 m tower
+costs ~90% of his life). Tried live with both games on Fort Haight's 19 m tower ladder (+18.9 m up in 17.8 s, -18.9 m down in
+18.8 s) and a 14.5 m Stormveil ladder (up and down). MGSV's own ladder is only 8 m long, so on a long climb Snake's hands miss a
+rung or two for about a second every ~5.5 m while MGSV starts its climb again. `[Ladder] snake = off` in `PhantomRingHost.ini`
+brings back the old way: the Tarnished climbs, and Snake is back at the end.
+
+**Climbing up and vaulting.** Y at a ledge or a wall 0.5-1.8 m high in front of Snake climbs him onto it, if there is room to
+stand up there. Y at a fence or a low wall up to ~1.2 m with ground behind it vaults him over. MGSV plays its own climb-up and
+vault for both. Running into one up to ~1.1 m high does it without Y (`[Mantle] run_into = low`; `off` = Y only, `all` = any
+height). It doesn't work prone, aiming, riding or in the box. With D-Walker right beside him (closer than 1.3 m), Y mounts it as
+usual; any further away, Y climbs. A wall too high, a ledge with no room on top, a fence over a drop: nothing happens
+(`[Mantle]` in `PhantomRingHost.ini`). Tried live with both games at the Church of Elleh: Y onto a 1.09 m ruined wall (MGSV
+played the climb 16 ms after the press, Snake on top 1.24 s later, D-Walker 2.4 m away not mounted) and over a 0.52 m ledge
+(1.23 s).
 
 **Ordering D-Walker.** Hold **LB**: MGSV's call menu opens. Push the **right stick** toward an order (Whistle up-right,
 the modes to the right; your current mode is greyed out), **let the stick go** (the order stays selected), then **click the
@@ -278,7 +303,7 @@ darts in the body, or sleep gas), walk right up to him -- MGSV's Fulton prompt s
 and **hold Y** for about two seconds. Snake attaches the balloon; a few seconds later Elden Ring lifts the enemy away under a
 balloon, "Fulton: the enemy is on its way to Mother Base", and you get the runes he would have dropped. He stays gone until you
 rest at a grace (as if killed, without a death or a drop). Be quick: Elden Ring's sleep lasts about 50 s, and an enemy that wakes
-can't be fultoned. Not for bosses.
+can't be fultoned (if he wakes before MGSV's balloon goes up, nothing happens). Never a boss: MGSV is not offered one.
 
 **Marking with the binoculars.** Hold **RB** (not aiming) to look through Snake's binoculars and keep an Elden Ring character
 near the middle of the view for about half a second, as you would an MGSV soldier: he is marked. A marked character carries a
@@ -290,7 +315,8 @@ show (`distance = always | centre | off`), or turns it off (`enabled = false`). 
 
 **Phantom Cigar** (on; tried live 2026-10-15: Elden Ring went 12:14 -> 18:02 -> 02:14 in two smokes, and at night Renna stood
 at the Church of Elleh after a fast travel). It changes Elden Ring's time of day, which Elden Ring saves. PhantomRing puts the
-cigar into a free item slot if your MGSV save carries none. **Hold D-pad left** (MGSV's item wheel), **point the right stick at
+cigar into a free item slot if your MGSV save carries none (only while MGSV can't save, which is the default `[Saves] Block`:
+it never reaches your MGSV save). **Hold D-pad left** (MGSV's item wheel), **point the right stick at
 the Phantom Cigar and click it in (R3) while still pointing**: Snake smokes, MGSV's time-lapse runs, and the same game time
 passes in Elden Ring, its sky following along while he smokes. A tap of D-pad left puts it out (the cigar is then the item
 picked: the next tap lights it again). `[Cigar] TimeSkip = false` in `PhantomRingGuest.ini` turns it off.
@@ -327,9 +353,13 @@ round on a soldier did 35 off, 31 with `level`. Try it while you play: `tools/pr
 **Life.** Elden Ring's hits take Snake's life as MGSV's own would, and he recovers as in MGSV: nothing for ~2.4 s after a hit,
 then slowly, then faster (full ~7 s after a 20% hit, ~12 s after a 65% one). Each new hit starts it again, so standing in a
 boss's combo kills him (`[Combat] RegenGate` in `PhantomRingGuest.ini`; `false` brings back the old instant regeneration).
+Each hit costs Snake the share of the Tarnished's HP it would cost him (a Limgrave soldier's: ~11.6% at level 15), but Snake has
+no flask: if camps are too deadly, `[Combat] hurt_mult = 0.6` in `PhantomRingHost.ini` makes every Elden Ring hit on Snake 60%
+as strong (try it live: `tools/pr er "combat set hurt_mult 0.6"`).
 
 **Grenades and mines.** D-pad right picks the support item, hold LT: the throw arc shows (dots and a ring where it lands,
-in Elden Ring's world); press RT while still holding LT to throw (letting both go together throws nothing). Sleep gas puts enemies to sleep, stun grenades stagger them, frag grenades and molotovs
+in Elden Ring's world); tap or press RT while still holding LT to throw (letting both go together throws nothing; live
+2026-10-31: 4 of 4 quick 50 ms taps threw). Sleep gas puts enemies to sleep, stun grenades stagger them, frag grenades and molotovs
 hurt. Mines (LT+RT places them) lie where you put them with a blinking light and go off when an Elden Ring enemy walks
 into them. They stay while you play on; a death or fast travel clears them (MGSV takes them back).
 
@@ -348,7 +378,7 @@ while still holding LT** (let go of both together and nothing is thrown). Where 
 inflates, set down on Elden Ring's ground. An Elden Ring enemy within 15 m that sees it stops and stares at it for a few
 seconds -- slip past behind him (live: two soldiers stared, one at 11.8 m right after being shot at); the active decoy calls
 out, so enemies hear it within 25 m even without seeing it. One fighting Snake right next to him doesn't fall for it. An enemy
-that walks into a decoy knocks it over (live: the shock decoy's blast staggered him). Decoys stay until a load (fast travel, a
+that walks into a decoy knocks it over (live: the shock decoy's blast staggered him). Bosses never stop to stare. Decoys stay until a load (fast travel, a
 death). `[Decoys]` in `PhantomRingHost.ini`; `[Combat] Decoys` in `PhantomRingGuest.ini`.
 
 **The cardboard box.** Hold D-pad left, push the right stick to the box, let go: Snake is in it (RT takes it off, X dives
@@ -439,9 +469,9 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   rockets in flight are simple shapes (`[Render] projectile_meshes` + `[Capture] ProjectileMeshes` learned no model live: off).
 - C4 goes off by PhantomRing's backup (MGSV's own detonator never answers); next to a supply box a tap of Y with C4 in hand
   may set one off too (untested).
-- Throwing or placing (grenades, C4, decoys): aim with LT, then hold RT about a second before letting go. In the 2026-10-26
-  run MGSV ignored most shorter RT presses (one of ~20 threw); held ~1.5 s it threw or placed every time (5 of 5). An unaimed
-  RT with a grenade or C4 in hand is MGSV's punch.
+- Throwing or placing (grenades, C4, decoys): keep LT held until the throw has left; a quick RT tap is enough now (0.5.0: 4 of 4
+  50 ms taps threw live, where 0.4.1 needed RT held about a second). Letting LT and RT go together throws nothing, and an
+  unaimed RT with a grenade or C4 in hand is MGSV's punch.
 - Decoys are thrown (LT, then RT); a popped or dropped one stays standing in MGSV's own sandbox (`DecoyPopInMgsv` off), which
   holds 32 placed objects (live: 9 decoys out, still throwing).
 - CQC holds, throws and chokes are Elden Ring's own reactions (a hold in place, a knockdown, sleep), not MGSV's paired
@@ -449,8 +479,10 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   be held. The punch that comes with each RT press sometimes costs a soldier a second ~25 HP a moment later (seen twice on a
   held or guarding soldier: 82 -> 4 HP over one punch, a hold and an interrogation); the hold and the throw themselves take 1.
 - After loading a save Elden Ring wrote while the Tarnished was dying (the game killed during or right after a death, not quit
-  from its menu), its black "Choose revival location" screen can come up with Snake already in control: the pad then plays
-  Snake. Hold View + Start (Tarnished mode), choose, and hold them again once Snake's world is back.
+  from its menu), its black "Choose revival location" screen could come up with Snake already in control: the pad then played
+  Snake. Snake now waits while the Tarnished has 0 HP (seen live 2026-10-31 on two deaths: Snake waited, then took over after
+  the respawn; the revival screen itself not reproduced). If it still happens: hold View + Start (Tarnished mode), choose, and
+  hold them again once Snake's world is back.
 - Elden Ring opens no map while an enemy is after Snake (its own rule): View then seems to do nothing.
 - With the camera pushed into Snake (a wall, an enemy right behind him) his see-through model can show magenta and green tints.
 - Sturdy objects (Limgrave's palisade fences) don't break, even in a blast.
@@ -459,13 +491,24 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   Elden Ring's window; the mouse turns the camera like a stick (no native mouse aim yet). The middle mouse button is R3: Snake's
   jump. In Tarnished mode a G tap opens the map as the pad's View does (`chord_tap = view`): this save had Elden Ring's map on M.
 - Flasks, spirit ashes and Torrent need Tarnished mode (View + Start held 1 s).
-- Snake's jump (R3; live 2026-10-14: 1.2 m, onto 1.1-1.3 m rock steps and a wooden walkway at Stormveil's cliffside, not
-  crouched, not under a walkway's edge) looks like MGSV's short fall, not a jump. `[Jump] Button` in `PhantomRingGuest.ini`
-  moves it to another button (L3 is MGSV's sprint). R3 with a D-pad direction held is MGSV's (its wheels' Use): no jump then.
+- Teleport-style travel into a spot Elden Ring hasn't loaded yet (the dev console's `call setpos`; not fast travel) can drop
+  Snake through the ground before its collision streams in.
+- Snake's jump (R3) looks like MGSV's short fall, not a jump (MGSV has none). Not crouched, prone or under something lower than
+  his head. `[Jump] button = a` (or `l3`) in `PhantomRingHost.ini` moves it (A's crouch, L3's sprint then go to R3). R3 with a
+  D-pad direction held is MGSV's (its wheels' Use): no jump then.
+- Climbing up and vaulting: MGSV has one climb-up for every height (its climb over a 1 m barrier, cut once he is on top), so
+  a 1.8 m ledge looks the same as a 0.6 m one. Rough rocks and rubble often read as "no room" or "nothing to stand on" and
+  refuse: Y then does nothing (jump instead). Running into a ledge at a slant, Snake slides along it instead of climbing: face
+  it, or press Y. At the very start of a climb MGSV's HUD layer may still show its last prompt (e.g. D-Walker's ride icon) for
+  ~1.5 s.
+- Ladders: Snake is drawn on the ladder where the Tarnished would be. MGSV's own ladder is 8 m, so every ~5.5 m of a longer
+  climb his hands and feet lose the rungs for ~1 s while MGSV mounts it again. His hands may sit a little off Elden Ring's
+  rungs (`[Ladder] offset`). Going down a narrow shaft, Elden Ring's camera hangs close over his head; inside dark towers at
+  night he is hard to see.
 - Snake's life can tick up by up to ~2% for a moment after a hit before MGSV's recovery curve holds it back again.
 - D-Horse: galloping in Limgrave's broken ground often ends at a wall or off a cliff (three fall deaths around Agheel Lake in
   pass B); the road east from Gatefront is a good 300 m run. Quiet is untested.
-- At a ladder's top, walking into the hole drops Snake down the shaft (face the hole and press Y on "Descend" instead).
+- At a ladder's top, walking into the hole drops Snake down the shaft (press Y on "Descend" instead).
 - `[Puppet] motion = root_motion` (Elden Ring's own movement for the hidden Tarnished) is there to try
   (`tools/pr er "puppet motion root_motion"`); `kinematic` stays the default: neither is clearly better yet.
 - Skipping a boss's intro cutscene with Start: fixed and unit-tested, not yet re-tried in the game (Margit's plays only
@@ -551,11 +594,29 @@ run the offline tests above first, and keep to the project's rules:
 | 3 | Fight (shots/CQC/stun hit Elden Ring enemies; grenades, mines, tranq darts; their hits drain Snake's life; death/respawn) | done, live (C4 detonation built, UNVERIFIED live) |
 | 4 | D-Walker (deployed, following, drawn, rideable, flamethrower) | done, live |
 | 5 | Polish: MGSV HUD layer, Elden Ring lighting, interaction prompts, audio (done); keyboard and mouse | mostly done |
-| 6 | MGSV collision from Elden Ring (vault, climb, cover), proxies for native MGSV combat | Fulton of sleeping enemies done (through MGSV's own Fulton); full proxies experimental, off |
+| 6 | MGSV collision from Elden Ring (vault, climb, cover), proxies for native MGSV combat | done, live (0.5.0): climb up / vault over Elden Ring's ledges and Snake on its ladders with MGSV's own moves; Fulton of sleeping enemies done; cover not yet; full proxies experimental, off |
 | 7 | Windows players ([docs/WINDOWS.md](docs/WINDOWS.md)) | built, tested under Wine; not yet run on Windows |
 | 8 | Seamless Co-op | planned |
 
+## What's new in 0.5.0
+
+From the feedback on the video ("Snake can't jump", "it switches back to the Tarnished to climb ladders"):
+- **Snake climbs ladders himself.** MGSV plays his own ladder climb on Elden Ring's ladder; the Tarnished never shows
+  (Fort Haight's 19 m tower and Stormveil, up and down, with both games).
+- **Y climbs up ledges and vaults fences** with MGSV's own moves, or just run into a low one. With D-Walker following, Y at a
+  ledge now climbs instead of mounting it.
+- **The jump works uphill.** R3 up a slope or across a curb used to end after 2 cm; live it now rises 1.2 m on 14-24 degree
+  slopes. The corner tells new players about R3 and Y the first times Snake walks into something he could get over.
+- **Quick throws:** a short RT tap while aiming a grenade throws it.
+- Fixes: a Fulton takes only the sleeping enemy it was meant for and never a boss; decoys and the box poster no longer freeze
+  bosses; grenades and decoys land on the wooden floors Snake stands on; MGSV's save never gets the Phantom Cigar, the box or
+  its poster while saves could go through; Elden Ring and MGSV no longer crash at start under Proton Experimental's Wine 11.
+- Protocol v15: both plugins must come from this release.
+
 ## Changes
+
+**0.5.0-alpha (2026-10-31).** Ladders, climb-ups, vaults and the uphill jump ([What's new in 0.5.0](#whats-new-in-050)); protocol v15.
+Run live with both games on Elden Ring 1.17.2 ([docs/STATUS.md](docs/STATUS.md)).
 
 **0.4.1-alpha (2026-10-26).** Elden Ring 1.17.2 (`eldenring.exe` 2.7.2.0, Steam build 25827938, released 2026-10-21).
 - Supported versions: ELDEN RING **1.17.2** (2.7.2.0) and **1.17.1** (2.7.1.0), METAL GEAR SOLID V: THE PHANTOM PAIN

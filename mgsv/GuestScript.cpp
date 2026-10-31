@@ -297,6 +297,13 @@ function PR.Run(commands)
 			-- Rest at a grace / respawn (kHEvRested): the magazine sizes of Snake's three weapons; the C++ side (Ammo.cpp) then
 			-- fills the magazines and every ammo/item stock natively, through MGSV's own setters
 			if w[1] == 'refill' then return PR.Magazines() end
+			-- Snake off an MGSV ladder at once (Climb.cpp, docs/GUEST.md 22): a direct-motion request, played and stopped, ends the
+			-- ladder action (he lets go; live 2026-10-31) -- no placement reaches him while he hangs on it
+			if w[1] == 'dmoff' then
+				local a = try(Player, 'RequestToPlayDirectMotion', { 'prLetGo', { '/Assets/tpp/motion/SI_game/fani/bodies/snap/snapnon/snapnon_s_win_idl.gani', false, '', '', '', false } })
+				local b = try(Player, 'RequestToStopDirectMotion')
+				return tostring(a) .. '/' .. tostring(b)
+			end
 			if w[1] == 'cigar' then return PR.CigarClock(w[2]) end  -- the Phantom Cigar's clock (mgsv/Cigar.cpp)
 			return 'unknown'
 		end)

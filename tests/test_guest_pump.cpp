@@ -206,6 +206,11 @@ int main()
 	lua_getglobal(g_L, "PhantomRing");
 	CHECK(lua_istable(g_L, -1));
 	lua_pop(g_L, 1);
+	// What a save would keep in the player's MGSV save (review 2026-10-31): the Phantom Cigar in an item slot, the box and its
+	// poster. Recorded here; with the guards incomplete none of them may be called.
+	CHECK(luaL_dostring(g_L, "PhantomRing.CigarItem = function() MOCK.log[#MOCK.log + 1] = 'cigar item' return 'put' end "
+	                         "PhantomRing.Poster = function() MOCK.log[#MOCK.log + 1] = 'poster' return 'done' end "
+	                         "PhantomRing.BoxItem = function() MOCK.log[#MOCK.log + 1] = 'box item' return 'ok' end") == 0);
 	CHECK(state::Lua().valid && (state::Lua().flags & state::kLTitle));
 	CHECK(state::CurrentBoot() == state::Boot::kTitle);
 	CHECK(link::CurrentStatusText().find("title") != std::string::npos);
@@ -229,6 +234,8 @@ int main()
 	// [Boot] AutoAim = false with the save guards incomplete: left as it is (it could be saved).
 	CHECK(luaL_dostring(g_L, "return vars.optionSelectedIndices[11]") == 0 && lua_tonumber(g_L, -1) == 0);
 	lua_pop(g_L, 1);
+	// ... and so are the Phantom Cigar's item slot, the box and its poster (review 2026-10-31)
+	CHECK(!MockLog("cigar item") && !MockLog("poster") && !MockLog("box item"));
 	const auto lua = state::Lua();
 	CHECK(lua.InGame() && lua.mission == 30050 && lua.buddyActive == 4 && lua.buddyId == 0x2001);
 	CHECK(lua.buddyPosValid && lua.buddyPos.x == 7.0f && lua.buddyPos.z == -2.0f);

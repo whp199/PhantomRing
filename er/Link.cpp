@@ -6,7 +6,10 @@
 #include <bcrypt.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <string_view>
 
 namespace phantom::er
 {
@@ -34,6 +37,99 @@ namespace phantom::er
 			char copy[128]{};
 			std::memcpy(copy, a_src, std::min(a_cap, sizeof(copy) - 1));
 			return std::string(copy, strnlen(copy, sizeof(copy) - 1));
+		}
+
+		// A number at the start of a /proc text file (or after a_key, e.g. "Tgid:"), read through Wine's Z: drive: 0 if none.
+		std::uint32_t ProcNumber(const std::wstring& a_path, std::string_view a_key = {})
+		{
+			const HANDLE f = ::CreateFileW(a_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+			if (f == INVALID_HANDLE_VALUE) {
+				return 0;
+			}
+			char       buf[512]{};
+			DWORD      got = 0;
+			const bool read = ::ReadFile(f, buf, sizeof(buf) - 1, &got, nullptr) && got > 0;
+			::CloseHandle(f);
+			if (!read) {
+				return 0;
+			}
+			std::string_view text(buf, got);
+			if (!a_key.empty()) {
+				const auto at = text.find(a_key);
+				if (at == std::string_view::npos) {
+					return 0;
+				}
+				text.remove_prefix(at + a_key.size());
+				while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+					text.remove_prefix(1);
+				}
+			}
+			std::uint32_t n = 0;
+			for (const char ch : text) {
+				if (ch < '0' || ch > '9') {
+					break;
+				}
+				n = n * 10 + static_cast<std::uint32_t>(ch - '0');
+			}
+			return n;
+		}
+
+		// Under Wine: Elden Ring's unix pid without a raw syscall. Proton experimental-11.0-20261027b routes a syscall made
+		// outside its own modules as a Windows one: common/Mapping.cpp's getpid stub crashed Elden Ring as the host attached
+		// (an access violation at the stub + 4, live 2026-10-31; MGSV's guest met the same: mgsv/Link.cpp). Wine opens files in
+		// the wineserver, so /proc/self/... names the wineserver (its pid W); but it looks paths up (stat) in the calling
+		// process, so Z:\proc\self\task\<n> exists only for Elden Ring's own threads. The first such n above W (or below it,
+		// for a pid counter that wrapped) is one of its threads, and its /proc status says whose (Tgid). The answer goes into
+		// PHANTOMRING_HOST_UNIX_PID, which phantom::UnixPid reads before it would try the stub; 0 = unknown (the tools then go
+		// by heartbeats alone), never the stub.
+		std::uint32_t HostUnixPid()
+		{
+			wchar_t env[32];
+			if (RunningUnderWine() && ::GetEnvironmentVariableW(L"PHANTOMRING_HOST_UNIX_PID", env, 32) == 0) {
+				constexpr std::uint32_t kPidMax = 4194304, kProbes = 65536;
+				const std::uint32_t     server = ProcNumber(L"Z:\\proc\\self\\stat");
+				std::uint32_t           tid = 0, probes = 0;
+				const auto              mine = [&](std::uint32_t a_n) {
+					++probes;
+					return ::GetFileAttributesW((L"Z:\\proc\\self\\task\\" + std::to_wstring(a_n)).c_str()) != INVALID_FILE_ATTRIBUTES;
+				};
+				for (std::uint32_t n = server + 1; server && n < kPidMax && probes < kProbes && !tid; ++n) {
+					tid = mine(n) ? n : 0;
+				}
+				for (std::uint32_t n = 2; server && n < server && probes < 2 * kProbes && !tid; ++n) {
+					tid = mine(n) ? n : 0;
+				}
+				if (!tid) {
+					// A long-lived wineserver (system Wine's, the offline tests'): its pid is far below ours. The kernel hands out pids
+					// in order, and /proc/loadavg's last field is the newest one: a thread made now is at most a few behind it.
+					const HANDLE wake = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+					const HANDLE fresh = wake ? ::CreateThread(nullptr, 0, [](LPVOID a_wake) -> DWORD { return ::WaitForSingleObject(a_wake, 5000); }, wake, 0, nullptr)
+					                          : nullptr;
+					char  text[128]{};
+					DWORD got = 0;
+					if (const HANDLE f = ::CreateFileW(L"Z:\\proc\\loadavg", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr); f != INVALID_HANDLE_VALUE) {
+						::ReadFile(f, text, sizeof(text) - 1, &got, nullptr);
+						::CloseHandle(f);
+					}
+					const char*         last = got ? std::strrchr(text, ' ') : nullptr;
+					const std::uint32_t newest = last ? static_cast<std::uint32_t>(std::strtoul(last + 1, nullptr, 10)) : 0;
+					for (std::uint32_t n = newest; n > 1 && newest - n < 20000 && !tid; --n) {
+						tid = mine(n) ? n : 0;
+					}
+					if (wake) {
+						::SetEvent(wake);
+						if (fresh) {
+							::WaitForSingleObject(fresh, 1000);
+							::CloseHandle(fresh);
+						}
+						::CloseHandle(wake);
+					}
+				}
+				const std::uint32_t pid = tid ? ProcNumber(L"Z:\\proc\\" + std::to_wstring(tid) + L"\\status", "Tgid:") : 0;
+				::SetEnvironmentVariableW(L"PHANTOMRING_HOST_UNIX_PID", std::to_wstring(pid).c_str());
+				Log::Info("link: unix pid {} (wineserver {}, thread {}, {} probes of /proc/self/task)", pid, server, tid, probes);
+			}
+			return UnixPid(L"PHANTOMRING_HOST_UNIX_PID");
 		}
 
 		const char* StatusName(proto::Status a_status)
@@ -86,8 +182,8 @@ namespace phantom::er
 		}
 		h->version = proto::kVersion;
 		h->qpcFrequency = g_qpcFreq;
-		// Unix pid (Windows pids collide across Proton prefixes): common/Mapping.h UnixPid().
-		h->hostUnixPid = UnixPid(L"PHANTOMRING_HOST_UNIX_PID");
+		// Unix pid (Windows pids collide across Proton prefixes): from /proc under Wine (HostUnixPid), common/Mapping.h UnixPid().
+		h->hostUnixPid = HostUnixPid();
 		Atomic(h->hostHeartbeatQpc).store(Qpc(), std::memory_order_relaxed);
 		h->hostStatus = proto::Status::kBooting;
 		CopyText(h->hostStatusText, sizeof(h->hostStatusText), "Elden Ring starting");

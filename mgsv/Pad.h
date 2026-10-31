@@ -26,6 +26,10 @@ namespace phantom::guest::pad
 	// Tarnished mode (protocol v10 kHEvTarnished): the same, for as long as the player plays the Tarnished.
 	void SetParked(bool a_parked);
 
+	// A climb or climb-up (Climb.h): the guest owns the pad -- MGSV gets a neutral pad with this left stick Y (the player's own pad
+	// is Elden Ring's meanwhile), pulses on top. False gives it back.
+	void SetOwned(bool a_owned, std::int16_t a_stickY = 0);
+
 	// Boot automation: hold these XInput buttons for a_ms, on top of whatever the source gives.
 	void Pulse(std::uint16_t a_buttons, unsigned a_ms);
 
@@ -54,6 +58,11 @@ namespace phantom::guest::pad
 	void               SetMgsvOwnsR3(bool a_owns);
 
 	[[nodiscard]] std::uint64_t Polls();
+	// [Input] RtTapMs: short RT taps while aiming a throwable that were held on for MGSV (`!pad`).
+	[[nodiscard]] std::uint32_t RtTapsStretched();
+	// The game thread, every frame: a support item (grenade, C4, mine, decoy) is in Snake's hand -- only then is a short RT tap
+	// while aiming held on ([Input] RtTapMs; a gun's tap stays one shot).
+	void SetThrowableInHand(bool a_inHand);
 	// `!pad` / `!menu`: the iDroid requests ([Menu] IDroidRetryMs) so far.
 	std::string DescribeIDroid();
 }

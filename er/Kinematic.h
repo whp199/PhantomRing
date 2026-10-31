@@ -98,6 +98,9 @@ namespace phantom::er
 	// 2026-10-14: the ground filter found the scaffold's floor in the characters-only layers the wall filter misses, so the
 	// railings around it were likely missed by the walls).
 	RayFn BodyRays(RayFn a_ground, RayFn a_wall, RayFn a_wallAlso);
+	// Two filters as one ray: the nearer of a_a's and a_b's hits (a_b empty: a_a alone). Snake's walls (BodyRays) and what he throws
+	// or sets down (Puppet::CastWorld: ray_filter and the characters' ground filter, review 2026-10-31).
+	RayFn NearerOf(RayFn a_a, RayFn a_b);
 
 	struct KinematicState
 	{

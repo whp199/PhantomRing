@@ -131,7 +131,10 @@ namespace phantom::er::RenderScene
 				matrixCount = list->matrixCount;
 			}
 			const auto& rc = Cfg().render;
-			const bool  buddyOut = rc.drawBuddy && !Buddy::Absent();  // dismissed in MGSV: what it still draws (leaving) stays out
+			// Dismissed in MGSV: what it still draws (leaving) stays out. On a ladder (Snake drawn where the Tarnished climbs) the
+			// buddy would hang beside him in the air: out too, back with the puppet.
+			const bool  climbing = Puppet::ClimbVisual();
+			const bool  buddyOut = rc.drawBuddy && !Buddy::Absent() && !climbing;
 			a_s.draws.reserve(drawCount);
 			for (std::uint32_t i = 0; i < drawCount; ++i) {
 				const auto& d = recs[i];
@@ -140,7 +143,7 @@ namespace phantom::er::RenderScene
 					continue;
 				}
 				if ((d.owner == proto::kOwnerPlayer && !rc.drawPlayer) || (d.owner == proto::kOwnerBuddy && !buddyOut) ||
-					(d.owner >= proto::kOwnerVehicle && d.owner != proto::kOwnerProjectile && !rc.drawOther)) {  // projectiles: Projectiles::Apply
+					(d.owner >= proto::kOwnerVehicle && d.owner != proto::kOwnerProjectile && (!rc.drawOther || climbing))) {  // projectiles: Projectiles::Apply
 					continue;
 				}
 				a_s.draws.push_back(d);
@@ -203,7 +206,9 @@ namespace phantom::er::RenderScene
 			            : rc.deathVisual == "fade" ? std::clamp(dying * 1000.0f / static_cast<float>(std::max(1, rc.deathFadeMs)), 0.0f, 1.0f)
 			                                       : 1.0f;
 		}
-		if (rc.enabled && s->dissolve < 1.0f && ReadCamera(s->camera) && (Puppet::Active() || dying >= 0.0f) && a_f.guestReady && !a_f.loading) {
+		// On a ladder ([Ladder] snake) the puppet is off while Elden Ring climbs with the hidden Tarnished: Snake is drawn at the
+		// anchor the host keeps on him (Puppet::ClimbVisual).
+		if (rc.enabled && s->dissolve < 1.0f && ReadCamera(s->camera) && (Puppet::Active() || dying >= 0.0f || Puppet::ClimbVisual()) && a_f.guestReady && !a_f.loading) {
 			const Anchor& a = Puppet::CurrentAnchor();
 			AnchorMatrix(a, s->anchor);
 			s->mirrored = a.axes.mirrorX < 0;
@@ -223,7 +228,7 @@ namespace phantom::er::RenderScene
 		// MGSV's night-vision goggles (protocol v10 kGuestNvg): on Elden Ring's frame while Snake plays with them on, faded in
 		// and out like the goggles; not in cutscenes, loads or death.
 		{
-			const bool  want = rc.enabled && rc.nvg && Puppet::Active() && a_f.guestReady && (a_f.guest.flags & proto::kGuestNvg) && !a_f.cutscene &&
+			const bool  want = rc.enabled && rc.nvg && (Puppet::Active() || Puppet::ClimbVisual()) && a_f.guestReady && (a_f.guest.flags & proto::kGuestNvg) && !a_f.cutscene &&
 			                   !a_f.loading && !a_f.dead && !a_f.dying;
 			const float step = rc.nvgFadeMs > 0 ? a_f.dt * 1000.0f / static_cast<float>(rc.nvgFadeMs) : 1.0f;
 			const float was = g_nvg;
@@ -236,7 +241,7 @@ namespace phantom::er::RenderScene
 		}
 		if (s->camera.valid || ReadCamera(s->camera)) {
 			// The Tarnished (visible while there is no puppet): where his chest is on screen.
-			if (!Puppet::Active() && dying < 0.0f && a_f.inGame && !a_f.loading && a_f.player) {
+			if (!Puppet::Active() && !Puppet::ClimbVisual() && dying < 0.0f && a_f.inGame && !a_f.loading && a_f.player) {
 				const auto& c = s->camera;
 				const Vec3  d = game::Position(a_f.player) + Vec3{ 0, 1.3f, 0 } - c.pos;
 				const Vec3  v{ Dot(d, Normalize(c.right)), Dot(d, Normalize(c.up)), Dot(d, Normalize(c.fwd)) };

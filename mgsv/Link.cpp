@@ -238,7 +238,83 @@ namespace phantom::guest::link
 
 	bool RunningUnderWine() { return phantom::RunningUnderWine(); }
 
-	std::uint32_t UnixPid() { return phantom::UnixPid(L"PHANTOMRING_GUEST_UNIX_PID"); }
+	namespace
+	{
+		// A number at the start of a /proc text file (or after a_key, e.g. "Tgid:"), read through Wine's Z: drive: 0 if none.
+		std::uint32_t ProcNumber(const std::wstring& a_path, std::string_view a_key = {})
+		{
+			const HANDLE f = ::CreateFileW(a_path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+			if (f == INVALID_HANDLE_VALUE) {
+				return 0;
+			}
+			char  buf[512]{};
+			DWORD got = 0;
+			const bool read = ::ReadFile(f, buf, sizeof(buf) - 1, &got, nullptr) && got > 0;
+			::CloseHandle(f);
+			if (!read) {
+				return 0;
+			}
+			std::string_view text(buf, got);
+			if (!a_key.empty()) {
+				const auto at = text.find(a_key);
+				if (at == std::string_view::npos) {
+					return 0;
+				}
+				text.remove_prefix(at + a_key.size());
+				while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) {
+					text.remove_prefix(1);
+				}
+			}
+			std::uint32_t n = 0;
+			for (const char ch : text) {
+				if (ch < '0' || ch > '9') {
+					break;
+				}
+				n = n * 10 + static_cast<std::uint32_t>(ch - '0');
+			}
+			return n;
+		}
+
+		// Under Wine: MGSV's unix pid without a raw syscall. Proton experimental-11.0-20261027b routes a syscall made outside its
+		// own modules as a Windows one: common/Mapping.cpp's getpid stub crashed MGSV in DllMain (access violation at the stub
+		// + 4, live 2026-10-31). Wine opens files in the wineserver, so a read of /proc/self/... names the wineserver (its pid
+		// W); but it looks paths up (stat) in the calling process, so Z:\proc\self\task\<n> exists only for MGSV's own
+		// threads. The first such n above W (MGSV starts after its wineserver; below it as well, for a pid counter that wrapped)
+		// is one of MGSV's threads, and its /proc status says whose (Tgid). Measured under Proton's wine: 67-137 probes, 2-4 ms.
+		// The answer goes into PHANTOMRING_GUEST_UNIX_PID, which phantom::UnixPid reads before it would try the stub.
+		void UnixPidFromProc()
+		{
+			wchar_t env[32];
+			if (!phantom::RunningUnderWine() || ::GetEnvironmentVariableW(L"PHANTOMRING_GUEST_UNIX_PID", env, 32) > 0) {
+				return;
+			}
+			constexpr std::uint32_t kPidMax = 4194304, kProbes = 65536;
+			const std::uint32_t     server = ProcNumber(L"Z:\\proc\\self\\stat");
+			std::uint32_t           tid = 0;
+			std::uint32_t           probes = 0;
+			const auto              mine = [&](std::uint32_t a_n) {
+				++probes;
+				return ::GetFileAttributesW((L"Z:\\proc\\self\\task\\" + std::to_wstring(a_n)).c_str()) != INVALID_FILE_ATTRIBUTES;
+			};
+			for (std::uint32_t n = server + 1; server && n < kPidMax && probes < kProbes && !tid; ++n) {
+				tid = mine(n) ? n : 0;
+			}
+			for (std::uint32_t n = 2; server && n < server && probes < 2 * kProbes && !tid; ++n) {
+				tid = mine(n) ? n : 0;
+			}
+			const std::uint32_t pid = tid ? ProcNumber(L"Z:\\proc\\" + std::to_wstring(tid) + L"\\status", "Tgid:") : 0;
+			// 0 = unknown (the tools then go by heartbeats alone): never the syscall stub, which ends the game under this Proton.
+			::SetEnvironmentVariableW(L"PHANTOMRING_GUEST_UNIX_PID", std::to_wstring(pid).c_str());
+			Log::Info("link: unix pid {} (wineserver {}, thread {}, {} probes of /proc/self/task)", pid, server, tid, probes);
+		}
+	}
+
+	std::uint32_t UnixPid()
+	{
+		static const bool once = (UnixPidFromProc(), true);
+		(void)once;
+		return phantom::UnixPid(L"PHANTOMRING_GUEST_UNIX_PID");
+	}
 
 	std::wstring DefaultMapping() { return platform::DefaultMapping(platform::Detect().wine); }  // the host's default too
 

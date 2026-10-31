@@ -49,6 +49,8 @@ namespace phantom::guest::capture::hud
 		// with the goggles off and is kept then.
 		constexpr std::uint64_t    kNvgOverlayPs = 0xae282a7fe2bdbdd9;
 		std::atomic<bool>          g_nightVision{ false };
+		std::atomic<bool>          g_frozen{ false };  // a staged climb (Climb.h): nothing new is published
+		std::atomic<std::uint64_t> g_frozenSkipped{ 0 };
 		std::atomic<std::uint64_t> g_nvgLeftOut{ 0 };
 		// The binoculars' (and scopes') lens: a UI draw (a mesh ring, idx 216) whose pixel shader samples MGSV's whole picture
 		// (t0 inScreenTexture 1280x720, t1 inNormalTexture: the lens' refraction) and so painted MGSV's airport around the lens in
@@ -449,7 +451,9 @@ namespace phantom::guest::capture::hud
 			if (SUCCEEDED(hr) && ms.pData) {
 				// Two empty copy windows in a row: the HUD is surely empty, and the host already has an empty one.
 				const bool empty = t->drawsAt[oldest] == 0;
-				if (empty && g_lastEmpty) {
+				if (g_frozen.load(std::memory_order_relaxed)) {
+					g_frozenSkipped.fetch_add(1, std::memory_order_relaxed);  // a staged climb: the host keeps the last frame
+				} else if (empty && g_lastEmpty) {
 					g_skippedEmpty.fetch_add(1, std::memory_order_relaxed);
 				} else {
 					Publish(*t, ms, t->frameAt[oldest]);
@@ -487,6 +491,7 @@ namespace phantom::guest::capture::hud
 	}
 
 	void SetNightVision(bool a_on) { g_nightVision.store(a_on, std::memory_order_relaxed); }
+	void SetFrozen(bool a_frozen) { g_frozen.store(a_frozen, std::memory_order_relaxed); }
 
 	std::string Command(std::string_view a_args)
 	{

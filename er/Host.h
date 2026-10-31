@@ -49,5 +49,7 @@ namespace phantom::er
 		// Tarnished mode (View + Start held together, er/Chord.h): the player plays the Tarnished, Snake parks.
 		bool        Tarnished();
 		std::string TarnishedCommand(std::string_view a_arg);  // console `tarnished [on|off|toggle]`
+		std::string LadderLine();  // console `ladder`: the hand-over, Snake on it, kHEvClimb
+		void        OnWorldShift(const Vec3& a_delta);  // er/WorldShift.h: the ladder's start and the climb anchor's blend move too
 	}
 }

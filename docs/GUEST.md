@@ -1589,7 +1589,11 @@ by. Live pass B (2026-10-15): `cigar: Snake lights the Phantom Cigar (MGSV's clo
 01:05:24: +437 min` (`!cigar`: 2 smokes, 54 events, 785 min sent, 0 lost); Elden Ring followed (HOST.md). `vars.clock` stayed
 put after each smoke. The `GameStatus` flag and the mute both read true while he smoked. The player's save carried no cigar, so
 with `TimeSkip` on the boot puts one into the last free item slot (`PR.CigarItem`, `boot: phantom cigar: put into item slot 7`;
-not slot 0, a fresh load's current item). It is smoked from MGSV's item wheel: D-pad left held, the right stick on it, R3 (Use)
+not slot 0, a fresh load's current item) -- only while MGSV can't save it (`SavesGuarded()` in `Pump.cpp`: `[Saves] Block`, the
+file guards and Steam's storage swapped, as for `[Boot] AutoAim`; review 2026-10-31). With the guards incomplete the log says
+`boot: phantom cigar: left as it is (...) -- put it into an item slot yourself`, and the box and its poster (§18.9) are left out
+the same way (`test_guest_pump`). The `[Loadout]` weapons are written either way: Snake needs them, and the sortie loadout is
+the player's to change back. It is smoked from MGSV's item wheel: D-pad left held, the right stick on it, R3 (Use)
 while still pointing -- needs `[Jump] PassWith` to include the D-pad (§6). A tap of D-pad left puts it out. The sandbox's clock is set and frozen at boot (`[Boot] Clock = 12:00:00`, `FreezeClock`: `SetClockTimeScale(0)`).
 `[Cigar] TimeSkip = false` ships: the smoking signal is unverified and the effect lands in Elden Ring's saved time of day
 (night-only spawns), so it is not purely additive. Turn it on for the live test.
@@ -2008,3 +2012,115 @@ enemy is a punch and nothing more. The guest now reads the player's CQC intent e
   `MgsvHold = true` MGSV's own hold starts the grab at once (an ActorProxy soldier really grabbed); off until a plain punch is
   seen to set neither.
 - `!cqc`: on/off, the tracker's state, counts, the last event; `!cqc grab|hold|throw|choke|interrogate|release` sends one by hand.
+
+## 22. Ladders, climb-ups and vaults with MGSV's own moves (`Climb.*`, `ClimbLogic.*`, `[Climb]`, `[Mantle]`, `!climb`, `!mantle`; protocol v15 kHEvClimb / kHEvMantle, kGuestClimbing / kGuestMantling)
+
+Player feedback on the video: "Snake can't jump" and "it switches back to the Tarnished to climb ladders". Elden Ring keeps
+driving the physical climb (its ladder state moves the hidden Tarnished; the host draws Snake there, HOST.md); the guest
+makes MGSV play Snake's own matching move for as long as it lasts.
+
+### 22.1 Why Snake is staged at real MGSV geometry
+
+- **Direct motion can't reach the moves.** `Player.RequestToPlayDirectMotion{name, {gani path, loop, "", "", "", false}}`
+  (0x1409DA7D0: entry 0 = the request's name, entries 1-8 = motions: a `/`-path hashed to a PathCode64, or a name; the 0x128-byte
+  request goes to 0x142C1BF48 with bit 4 of 0x142C1C2A8) plays MGSV's own `snapnon_f_idl7.gani` (the mission-clear pose, live:
+  the pose's hands rose 0.09 m for ~3.5 s), also when the raw hash is written there from outside -- but nothing from the
+  additional motion archives the player loads in a package of 17 (`player2_ladder.mtar` 23 motions, `player2_jump.mtar` 37,
+  `player2_elude.mtar` 35, ...; the package parsed in memory, each mtar `72 2B 01 0C`, count at +4, 0x20-byte entries
+  `{u64 PathCode64, u32 offset, ...}`): every one of the 23 ladder and 3 CQC hashes was taken (the player copied the request)
+  and played nothing. The gani names aren't in memory either (only hashes). So MGSV plays these moves only where they belong.
+- **The airport's ladders.** Nova Braga's wall ladders are all one model, `mafr_lddr001` (an 8 m ladder on a building wall).
+  Their TppLadder entities found in memory through their DataSet names (`mafr_lddr001_NNNN|MGSLadder00`, a fox::String with
+  its chars at +0x1C; the entity's transform, quaternion + translation, follows the reference to it): 11 load with the apron:
+  `0005` (916.35, -11.52, 1072.30) yaw 60, `0006` (788.61, -11.83, 1299.85) 60, `0008` (846.66, -11.79, 1029.53) 240, `0009`
+  (948.07, -11.77, 1276.28) 0, `0011` (879.31, -11.77, 1240.43) 60, `0012` (867.50, -11.70, 992.67) -120, `0013` (872.20,
+  -12.06, 1077.12) 150, `0014` (792.07, -3.74, 1221.29) -120 (on the terminal's roof), `0015` (732.86, -12.04, 1183.95) 150,
+  `0016` (691.98, -11.81, 1124.04) 210, `0017` (850.82, -12.05, 1064.40) 149. Two steel towers carry taller ladders
+  (`mafr_sttw001_gim_0000|ladderData` at (696.85, -11.77, 1067.82) yaw 156, `_0001` at (795.97, -11.90, 1066.21) yaw 150;
+  not measured). The default is `0011`, 85 m from the apron sandbox (`0005`, 143 m, measured the same).
+- **Measured on 0005 and 0011 (2026-10-31):** facing the ladder at its foot (the entity's facing x 1.0 m out, facing yaw + 180)
+  MGSV shows "Y + ladder"; Y mounts him in ~0.15-0.5 s, hanging with his root 0.5 m above the foot on the climbing line (0.65 m
+  out); from the roof (0.2 m behind the foot, 7.92 m up, facing the yaw) Y mounts him going down in ~1.4 s (root 6.0 m up). The
+  stick climbs 1.25-1.30 m/s up (rung cycles of +0.18/+0.32 m per 0.2 s) and 1.22 m/s down -- a half stick and L3 the same; he
+  steps off the foot below ~0.4 m (0.75 s) and climbs over the top above ~6.8 m (~1 s). PlayerStatus on the ladder: STAND
+  without NORMAL_ACTION (WALK while climbing, STOP while hanging).
+- **Moving him on it -- nothing does.** The native placement (Hold.cpp) is ignored while he hangs on the ladder (and leaves his
+  facing alone everywhere: yaw 90 asked, -90 kept; `Player2SystemImpl::Warp` 0x1409CEAE0 writes the yaw to `[impl+0xB8]+0x274`
+  besides the location's set-position and posts a message (type 2) through `impl+0x148` -- vf 0x90, 0x1409C97F0). MGSV's own
+  Warp (Lua `TppPlayer.Warp`, `TppPlayer2` `Warp`) moved him along it and off its foot in the first session on 0005 (twice) and
+  never again in four later ones, hanging still or not, on 0005 or 0011, after a raw direct-motion request or not: the
+  enabling state wasn't found. A Warp sent mid-step was always dropped.
+- **Getting him off it.** A direct-motion request (`RequestToPlayDirectMotion` of `snapnon_s_win_idl`, then
+  `RequestToStopDirectMotion`) ends the ladder action at once: he lets go and drops (root -8.5 -> the ground in 0.5 s), and
+  then the native placement reaches him; MGSV plays its landing (~1 s crouched) wherever he lands (also after a placement:
+  the drop is a fall) -- unless the same request comes again right after the placement (he stands). At its ends he leaves it
+  as MGSV plays it: over the top (~1 s) or off the foot (~0.75 s).
+- **Streaming.** A native placement 85 m away (_0011) runs smooth; 143 m (_0005) stalled MGSV's frames ~0.4 s each way (three
+  of three). Lua Warps that far put the guest in "loading" for 11 s once.
+
+### 22.2 The ladder climb (`[Climb]`)
+
+- **kHEvClimb a = 1** (b = 1 down, v0[0] the climb's speed): refused (logged) when MGSV isn't ready, in Tarnished mode, the
+  Fulton anchor, riding, dead / a cutscene / a menu / the box, or without the native placement. Otherwise Snake's sandbox spot,
+  facing and camera are kept, he is *staged*: the native placement to the ladder's stand point (the foot for up, the roof for
+  down), MGSV's Warp to the same spot to face it, a `stance 1` request if he was crouched or prone; once he has stood 150 ms
+  (STAND, NORMAL_ACTION) the guest pulses Y. On the ladder (NORMAL_ACTION gone, his root on the climbing line) the left stick
+  climbs, paced: pushed while MGSV has climbed less than Elden Ring's speed x time (0 / unknown speed = MGSV's own pace).
+- **Loops.** MGSV's ladder is 8 m: going up he climbs over its top (~1 s, a climber's move) and is placed, faced and mounted
+  again at its foot (~0.5 s); going down he steps off its foot and is mounted again from the roof (the top mount, ~1.4 s). So
+  an Elden Ring climb of any length is one MGSV climb with a short MGSV dismount + mount every ~5.5 m (`!climb` counts them).
+- **a = 1 again** while climbing changes the direction / speed (no new mount). **a = 0**: `dmoff` (the direct-motion request
+  above) makes him let go, and the moment he is off the ladder (NORMAL_ACTION back, his root 0.15 m down or off its line) the
+  native placement puts him back on his sandbox spot, MGSV's Warp there turns him the way he faced, and MGSV's camera is turned
+  back (`camrot`); right after that placement `dmoff` once more cancels the landing MGSV would play for the drop (~1 s
+  crouched; live: with it he stood at once); kGuestClimbing drops when he stands there (or 1.5 s).
+- **While a move plays** (`state::Staged()`): the odometer is still (`Odometer::Still` instead of `Update`: Elden Ring sees none
+  of it), velocity 0; GuestState's camera is the one he had when it began, at the same place relative to his root (MGSV's
+  swings round the wall); the buddy's position is published as `buddyPos + (root - home)` (where it stands relative to Snake's
+  sandbox spot); no treadmill, jump, dive, buddy whistles, Fulton anchor or proxies; the guest owns the pad
+  (`pad::SetOwned`: neutral, its own stick, the Y pulses -- the player's pad is Elden Ring's ladder's); MGSV's HUD layer keeps its
+  last frame (its "Y" prompt and ladder icon never reach Elden Ring) until 300 ms after it ends.
+- Console: `!climb up|down [m/s]`, `!climb off`, `!climb` (state, counts, the last climb's summary); fake_er / `pr record`:
+  `pr er "climb 1|0 [down] [speed]"`.
+
+### 22.3 Climb-ups and vaults (`[Mantle]`)
+
+- **kHEvMantle** (a = height cm, b = 1 vault, v0[0] Elden Ring's duration): the site by kind and height -- `Vault` for vaults;
+  for climb-ups `Low` up to `LowMaxCm`, `High` above, either alone when only one is set, and with neither the vault site *cut at
+  its top* (the first half of MGSV's climb-over is a climb-up: up onto the obstacle, hands on top, a knee up) -- staged there
+  facing it (native placement + Warp for the facing), Y once he has stood 150 ms; kGuestMantling from the request until he is
+  back home.
+- **The end of the move.** A vault is over once he is down on its far side (his root back at the start's height after rising
+  0.5 m); a climb-up on the vault site once he is on top (risen 0.5 m and starting down). Then `dmoff` ends MGSV's move (its
+  far-side drop and the ~0.7 s recovery MGSV adds), the native placement puts him home, `dmoff` again (no landing), facing
+  and camera back. MGSV's natural timing, for the host to match (live 2026-10-31, the jersey barrier, 1.0 m): Y -> his root
+  +1.0 m (on top, hands on the barrier) at ~0.5-0.7 s; over and down the far side 2 m on at ~1.1-1.5 s; NORMAL_ACTION back at
+  2.2 s. So a climb-up shows ~0.6-1.0 s of MGSV's move (the cut came 1.03 s after Y), a vault ~1.5 s. Elden Ring's v0[0] isn't
+  used to stretch it (MGSV plays at its own speed); kGuestMantling covers the whole staging (~2-2.5 s in all, the staging and
+  the stand-up before Y included).
+- **Sites.** Only one obstacle is measured: the terminal's jersey barrier, stand (826.39, -11.95, 1218.62) facing 90 ("Y +
+  step" shows; MGSV turns him to 60, the barrier's normal, as he climbs). No ledge with room on top (MGSV's climb-up that ends
+  standing on it, or its higher hang-and-pull) was found near the apron in the time there was: `Low` / `High` are empty, so
+  every climb-up, 50 or 180 cm, plays the barrier's first half.
+- Console: `!mantle <cm> [vault] [secs]`, `!mantle`; `pr er "mantle <cm> [vault] [secs]"`.
+
+### 22.3a Live with the real Elden Ring host (2026-10-31, docs/STATUS.md "0.5.0-alpha")
+
+- **Ladders**: Stormveil's 14.5 m ladder and Fort Haight's 19 m tower, up and down: `climb #N: up|down at 1.20 m/s -- Snake staged`
+  within 1-12 ms of `kHEvClimb`, on MGSV's ladder 0.13-0.5 s after Y, 1-2 loops per climb, `back on the sandbox` 0.18-0.23 s
+  after `a = 0` (1.6 s once, when the end came during a mount from the roof). The host draws him on Elden Ring's ladder.
+- **Climb-up / vault**: Church of Elleh, 1.09 m (`mantle #1: 109 cm climb-up ... on top: cut there`, 1.3 s staged) and 0.52 m
+  (`52 cm vault ... down on the far side`, MGSV's move 1185 ms from Y).
+- **Staging-site props** (`Capture.cpp`): staged at the jersey barrier the barrier stood within 2.5 m of Snake's root and was
+  captured as his -- Elden Ring drew it under his vault. While `state::Staged()`, a rigid (unskinned) draw is his only if its
+  mesh was his on the sandbox before (his weapons and gear: they always are); skinned draws always are. `!capture` counts
+  `staging-site props dropped` (335 in one vault); none showed in the frames after the fix.
+- The player's Y at a ledge no longer reaches MGSV (HOST.md "Climb up and vault": `InputBridge::SetLedge`): it had mounted
+  D-Walker following ~2.5 m away before `kHEvMantle` arrived; the guest's own Y at the staging site is what plays the move.
+
+### 22.4 Quick throws (`[Input] RtTapMs`, README Known issues)
+
+A short RT press while aiming a throwable (LT held, a support item -- grenade, C4, mine, decoy -- in hand: the game thread tells
+the pad thread every frame, `pad::SetThrowableInHand`) is held on to MGSV for `RtTapMs` (120 ms), LT with it; a gun's tap is left
+alone (one shot). Live 2026-10-31 (MGSV + fake_er, the save's sleep grenade, equip 378): 14 of 14 aimed throws with 30-60 ms RT
+presses (`!pad`: `RT taps held to 120 ms while aiming: 14`), where the 2026-10-26 run had about one throw in 20 short presses.

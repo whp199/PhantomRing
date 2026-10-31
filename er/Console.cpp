@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <tuple>
 #include <functional>
 #include <sstream>
 #include <utility>
@@ -651,6 +652,9 @@ namespace phantom::er::Console
 			"flag [name [on|off]]         render nodead nodamage nohit noattack nomove nogravity\n"
 			"puppet auto|off | motion kinematic|root_motion | hop on|off | set <key> <value>   menu auto|open|closed   debug on|off\n"
 			"tarnished [on|off|toggle]    Tarnished mode (what View + Start held 1 s toggles): the Tarnished plays, Snake parks\n"
+			"jump [r3|a|l3]               the button that jumps ([Jump] button; swapped with R3 in MGSV's pad)\n"
+			"mantle [plan [yaw_deg] | go [yaw_deg] | on|off | run off|low|all | hints reset]   Snake's climb up / vault ([Mantle], v15 kHEvMantle)\n"
+			"ladder [snake on|auto|off | offset <toward> <up> [right] | speed <m/s> | top_stand <m>]   Snake on Elden Ring's ladders ([Ladder], v15)\n"
 			"render [status | keys | set <key> <value> | probe]   phase 2 renderer\n"
 			"hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value>]   overlay (MGSV HUD layer, reticle, corner text)\n"
 			"draw [skeleton|buddy|tracers on|off]   CSEzDraw developer views\n"
@@ -904,6 +908,53 @@ namespace phantom::er::Console
 		}
 		if (cmd == "tarnished") {
 			return Host::TarnishedCommand(w.size() > 1 ? std::string_view(w[1]) : std::string_view());
+		}
+		if (cmd == "mantle") {
+			return Puppet::MantleCommand(w, a_f);
+		}
+		if (cmd == "jump") {
+			// jump [r3|a|l3]: [Jump] button live (the button that jumps; the host swaps it with R3 in MGSV's pad)
+			auto& cfg = Cfg();
+			if (w.size() > 1) {
+				static constexpr std::tuple<std::string_view, std::uint16_t, const char*> kButtons[] = { { "r3", 0x0080, "R3" }, { "a", 0x1000, "A" },
+					{ "l3", 0x0040, "L3" } };
+				bool known = false;
+				for (const auto& [name, bit, label] : kButtons) {
+					if (w[1] == name) {
+						cfg.jumpButton = bit;
+						cfg.jumpButtonName = label;
+						known = true;
+					}
+				}
+				if (!known) {
+					return c.Fail("usage: jump [r3|a|l3]");
+				}
+				Log::Info("console: [Jump] button = {}", cfg.jumpButtonName);
+			}
+			return std::format("[Jump] button = {} ({:#06x}){}", cfg.jumpButtonName, cfg.jumpButton,
+				cfg.jumpButton == 0x0080 ? "" : std::format(": swapped with R3 in MGSV's pad while Snake plays (R3 is MGSV's {} then)", cfg.jumpButton == 0x1000 ? "A" : "L3"));
+		}
+		if (cmd == "ladder") {
+			// ladder [snake on|auto|off | offset <toward> <up> | speed <m/s>]: [Ladder] live (not saved)
+			auto& cfg = Cfg();
+			if (w.size() > 2 && w[1] == "snake" && (w[2] == "on" || w[2] == "auto" || w[2] == "off")) {
+				cfg.ladderSnake = w[2];
+			} else if (w.size() > 3 && w[1] == "offset") {
+				cfg.ladderOffset[0] = static_cast<float>(ParseNumber(w[2]).value_or(cfg.ladderOffset[0]));
+				cfg.ladderOffset[1] = static_cast<float>(ParseNumber(w[3]).value_or(cfg.ladderOffset[1]));
+				if (w.size() > 4) {
+					cfg.ladderOffset[2] = static_cast<float>(ParseNumber(w[4]).value_or(cfg.ladderOffset[2]));
+				}
+			} else if (w.size() > 2 && w[1] == "top_stand") {
+				cfg.ladderTopStand = static_cast<float>(std::clamp(ParseNumber(w[2]).value_or(cfg.ladderTopStand), 0.0, 2.0));
+			} else if (w.size() > 2 && w[1] == "speed") {
+				cfg.ladderClimbSpeed = static_cast<float>(std::clamp(ParseNumber(w[2]).value_or(cfg.ladderClimbSpeed), 0.1, 10.0));
+			} else if (w.size() > 1) {
+				return c.Fail("usage: ladder [snake on|auto|off | offset <toward> <up> [right] | speed <m/s> | top_stand <m>]");
+			}
+			return std::format("[Ladder] snake = {}, offset {:.2f} toward / {:.2f} up / {:.2f} right, climb_speed {:.2f} m/s, guest_wait_ms {}, top_stand {:.2f} m\n{}",
+				cfg.ladderSnake, cfg.ladderOffset[0], cfg.ladderOffset[1], cfg.ladderOffset[2], cfg.ladderClimbSpeed, cfg.ladderGuestWaitMs,
+				cfg.ladderTopStand, Host::LadderLine());
 		}
 		if (cmd == "menu" && w.size() > 1) {
 			MenuWatch::SetForce(w[1] == "open" ? MenuWatch::Force::kOpen : (w[1] == "closed" ? MenuWatch::Force::kClosed : MenuWatch::Force::kAuto));

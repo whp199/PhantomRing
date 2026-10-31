@@ -60,6 +60,7 @@ namespace phantom::er::WorldShift
 			Puppet::OnWorldShift(*d);
 			Explosion::OnWorldShift(*d);
 			Fulton::OnWorldShift(*d);
+			Host::OnWorldShift(*d);
 		}
 
 		void OnEnd(float)

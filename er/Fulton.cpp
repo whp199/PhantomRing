@@ -6,6 +6,7 @@
 #include "Hud.h"
 #include "Log.h"
 #include "Config.h"
+#include "Cqc.h"
 #include "Mem.h"
 #include "Params.h"
 #include "Puppet.h"
@@ -36,7 +37,7 @@ namespace phantom::er::Fulton
 		};
 		std::vector<Lifting>       g_lifts;
 		std::vector<std::uint64_t> g_gone;   // fultoned, until Elden Ring brings its enemies back
-		std::uint64_t              g_events{ 0 }, g_failed{ 0 }, g_unknown{ 0 }, g_done{ 0 }, g_again{ 0 };
+		std::uint64_t              g_events{ 0 }, g_failed{ 0 }, g_unknown{ 0 }, g_done{ 0 }, g_again{ 0 }, g_refused{ 0 };
 		bool                       g_wasLoading{ false };
 		std::uint64_t              g_ticks{ 0 };
 		params::Table              g_npc{ params::kNpcParam };
@@ -200,11 +201,14 @@ namespace phantom::er::Fulton
 	int Pick(std::span<const Candidate> a_chrs, std::uint64_t a_handle, const Vec3& a_at, float a_radius)
 	{
 		if (a_handle) {
+			// That character or nobody (review 2026-10-31): the one MGSV's balloon was for may have died or unloaded since (poison,
+			// rot, a spirit ash), and the nearest other living hostile within 3 m -- awake, a boss -- was taken in his place.
 			for (std::size_t i = 0; i < a_chrs.size(); ++i) {
-				if (a_chrs[i].handle == a_handle && a_chrs[i].alive) {
-					return static_cast<int>(i);
+				if (a_chrs[i].handle == a_handle) {
+					return a_chrs[i].alive ? static_cast<int>(i) : -1;
 				}
 			}
+			return -1;
 		}
 		int   best = -1;
 		float bestD = a_radius;
@@ -257,8 +261,22 @@ namespace phantom::er::Fulton
 		}
 		const auto& c = chrs[index[static_cast<std::size_t>(k)]];
 		if (c.handle != handle) {
-			Log::Info("fulton: handle {:#x} not found; the nearest character to where the proxy stood is npc {} (handle {:#x}, {:.1f} m)", handle, c.npcParam,
-				c.handle, Length(c.pos - at));
+			Log::Info("fulton: no handle given; the nearest character to where the proxy stood is npc {} (handle {:#x}, {:.1f} m)", c.npcParam, c.handle,
+				Length(c.pos - at));
+		}
+		// Only a sleeper, never a boss (review 2026-10-31): MGSV offers its Fulton for a sleeping enemy (kActorAsleep), but he may
+		// have woken by the time its balloon goes up, and a boss that can be put to sleep would otherwise leave the arena with
+		// its runes paid -- again after every rest. CQC's own boss rule ([Cqc] boss_hp / boss_bigness).
+		if (!Combat::Asleep(c.chr)) {
+			++g_refused;
+			Log::Info("fulton: npc {} (handle {:#x}) is awake now -- MGSV's balloon is for a sleeping enemy, nothing happens in Elden Ring", c.npcParam,
+				c.handle);
+			return;
+		}
+		if (Cqc::IsBossHp(c.maxHp)) {
+			++g_refused;
+			Log::Info("fulton: npc {} (handle {:#x}, max hp {}) is a boss -- not taken (bosses can't be fultoned)", c.npcParam, c.handle, c.maxHp);
+			return;
 		}
 		Start(a_f, c);
 	}
@@ -332,9 +350,9 @@ namespace phantom::er::Fulton
 
 	std::string Describe()
 	{
-		return std::format("fulton: {} events ({} the balloon never went up, {} no character found), {} lifting, {} taken out of the world, {} gone until "
-		                   "a rest ({} re-disabled after turning up again), {} runes given{}",
-			g_events, g_failed, g_unknown, g_lifts.size(), g_done, g_gone.size(), g_again, g_runesGiven,
+		return std::format("fulton: {} events ({} the balloon never went up, {} no character found, {} refused: awake or a boss), {} lifting, {} taken "
+		                   "out of the world, {} gone until a rest ({} re-disabled after turning up again), {} runes given{}",
+			g_events, g_failed, g_unknown, g_refused, g_lifts.size(), g_done, g_gone.size(), g_again, g_runesGiven,
 			!Cfg().fultonRunes ? " ([Fulton] runes = false)" : g_runesOff ? " (runes off this session: see the log)" : "");
 	}
 

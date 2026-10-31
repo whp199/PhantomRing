@@ -13,6 +13,7 @@
 #include "DebugDraw.h"
 #include "Events.h"
 #include "Fulton.h"
+#include "GeomProbe.h"
 #include "Hud.h"
 #include "InputBridge.h"
 #include "Interaction.h"
@@ -109,6 +110,19 @@ namespace phantom::er::Host
 		std::uint64_t  g_ladderSince{ 0 };        // when the hand-over started
 		bool           g_ladderUsable{ false };    // the ladder state reads and ladder_prompts isn't "none": the hand-over is on
 		Vec3           g_ladderFrom{};
+		// Snake climbs it himself ([Ladder] snake, protocol v15): kHEvClimb out, MGSV's kGuestClimbing back, Snake drawn on it.
+		ClimbPace      g_climbPace;
+		bool           g_climbVisual{ false };     // this frame: Snake is drawn on the ladder, the Tarnished hidden
+		bool           g_guestClimbSeen{ false };  // kGuestClimbing since this climb's kHEvClimb a = 1
+		std::uint64_t  g_climbSentAt{ 0 };         // when this climb's first kHEvClimb went out
+		bool           g_guestClimbLate{ false };  // ...and kGuestClimbing never came within ladder_guest_wait_ms (logged once a climb)
+		std::uint64_t  g_guestClimbs{ 0 };         // climbs MGSV played (kGuestClimbing seen)
+		std::uint64_t  g_snakeClimbs{ 0 };         // climbs Snake was drawn on
+		// Snake's drawn place eases from where the puppet had him to the Tarnished's on the ladder (a "Descend" moves the Tarnished
+		// up to ~1 m first, AlignForDescent; Elden Ring's own start turns him round).
+		constexpr float kClimbBlendS = 0.3f;
+		Anchor         g_climbFrom{};
+		std::uint64_t  g_climbFromMs{ 0 };
 
 		bool IsLadderPrompt(std::int32_t a_id)
 		{
@@ -125,13 +139,14 @@ namespace phantom::er::Host
 			return a_id >= 0 && std::ranges::find(rest, a_id) != rest.end();
 		}
 
-		void PushEvent(proto::HostEventType a_type, std::uint32_t a_a, std::uint32_t a_b, std::uint64_t a_frame)
+		void PushEvent(proto::HostEventType a_type, std::uint32_t a_a, std::uint32_t a_b, std::uint64_t a_frame, float a_v0 = 0.0f)
 		{
 			proto::HostEvent e{};
 			e.type = a_type;
 			e.a = a_a;
 			e.b = a_b;
 			e.frame = static_cast<std::uint32_t>(a_frame);
+			e.v0[0] = a_v0;
 			if (!Link::Get().PushHostEvent(e)) {
 				Log::Debug("host event {} dropped (guest ring full or detached)", static_cast<std::uint32_t>(a_type));
 			}
@@ -271,6 +286,121 @@ namespace phantom::er::Host
 		// Ladders (er/Ladder.h): Snake's press on a ladder prompt, or a ladder state while he plays, hands the Tarnished to Elden Ring
 		// for the climb (Puppet::Hold::kLadder), until he is off it; then Snake takes over where he got off. What the Tarnished
 		// went through meanwhile (an arrow, a fall off it) is carried over to Snake as in Tarnished mode.
+		// kHEvClimb (protocol v15): a = 1 the climb started (again: it turned or changed pace), 0 it ended; b = 0 up / 1 down;
+		// v0[0] = its vertical speed (m/s).
+		void SendClimb(const Frame& a_f, const ClimbPace::Out& a_out, int a_state)
+		{
+			if (!a_out.send) {
+				return;
+			}
+			PushEvent(proto::kHEvClimb, a_out.on ? 1u : 0u, a_out.down ? 1u : 0u, a_f.index, a_out.speed);
+			const bool first = a_out.on && !g_climbSentAt;
+			if (first) {
+				g_climbSentAt = ::GetTickCount64();
+			}
+			if (a_out.on) {
+				Log::Info("ladder: kHEvClimb a=1 b={} ({} at {:.2f} m/s; ER ladder state {} {}){}", a_out.down ? 1 : 0,
+					a_out.motion > 0 ? "up" : a_out.motion < 0 ? "down" : "still on it", a_out.speed, a_state, LadderStateName(a_state),
+					first ? " -- MGSV plays Snake's climb" : "");
+			} else {
+				Log::Info("ladder: kHEvClimb a=0 (the climb is over; {} events)", g_climbPace.Sent());
+			}
+		}
+
+		// Snake on the ladder ([Ladder] snake): drawn where the Tarnished is (his feet, facing the ladder as he does), the
+		// Tarnished hidden -- while the hand-over holds, Snake doesn't play Tarnished mode and MGSV is there to draw him.
+		bool WantClimbVisual(const Frame& a_f)
+		{
+			const auto& mode = Cfg().ladderSnake;
+			if (mode == "off" || !g_ladder.Holding() || g_tarnished || !a_f.guestReady || !a_f.player || !a_f.inGame) {
+				return false;
+			}
+			if (mode == "auto" && !g_guestClimbSeen && g_climbSentAt && ::GetTickCount64() - g_climbSentAt > static_cast<std::uint64_t>(std::max(0, Cfg().ladderGuestWaitMs))) {
+				return false;  // MGSV doesn't play the climb: the Tarnished climbs as before
+			}
+			return true;
+		}
+
+		// After Elden Ring's physics (it moved the Tarnished up the rungs): where Snake is drawn on the ladder.
+		void UpdateClimbAnchor(const Frame& a_f)
+		{
+			if (!g_climbVisual || !a_f.player || Puppet::Active()) {
+				return;
+			}
+			Anchor a;
+			a.axes.mirrorX = Cfg().mirrorX;
+			a.axes.mgsvYawSign = Cfg().mgsvYawSign;
+			a.axes.erForward = Calibration::ErForward();
+			a.axes.mgsvCamForward = Cfg().mgsvCamForward;
+			const Quat q = game::Orientation(a_f.player);
+			a.delta = ChooseDelta(q, a_f.guest.rootYaw, a.axes);  // Snake's MGSV facing turned onto the Tarnished's (the ladder)
+			const Vec3 fwd = Normalize(Vec3{ ErForward(q, a.axes).x, 0.0f, ErForward(q, a.axes).z });
+			const Vec3 right{ fwd.z, 0.0f, -fwd.x };
+			const auto& off = Cfg().ladderOffset;
+			a.pe = game::Position(a_f.player) + fwd * off[0] + Vec3{ 0.0f, off[1], 0.0f } + right * off[2];
+			a.pm = Vec3{ a_f.guest.rootPos[0], a_f.guest.rootPos[1] - Cfg().mgsvRootOffsetY, a_f.guest.rootPos[2] };
+			if (g_climbFromMs) {
+				const float t = static_cast<float>(::GetTickCount64() - g_climbFromMs) / (1000.0f * kClimbBlendS);
+				if (t < 1.0f && Finite(g_climbFrom.pe) && Length(a.pe - g_climbFrom.pe) < 3.0f) {
+					const float k = t <= 0.0f ? 0.0f : t * t * (3.0f - 2.0f * t);
+					a.pe = g_climbFrom.pe + (a.pe - g_climbFrom.pe) * k;
+					a.delta = WrapPi(g_climbFrom.delta + WrapPi(a.delta - g_climbFrom.delta) * k);
+				} else {
+					g_climbFromMs = 0;
+				}
+			}
+			if (Finite(a.pe) && std::isfinite(a.delta)) {
+				Puppet::SetClimbAnchor(a);
+			}
+		}
+
+		// "Descend" at a ladder's top: Elden Ring starts the descent only from where its own capsule stands on the landing, about
+		// [Ladder] top_stand m along the ladder's forward from its axis, facing the hole (back along it; live, the prompt shows only
+		// that way). Snake's
+		// body can stand closer, on the ladder's top between its posts: live 2026-10-31 (Stormveil, AEG219_067) he did, the puppet
+		// stepped aside, Elden Ring's capsule rose 0.33 m onto the posts, the prompt went and the press was refused (twice); from
+		// Elden Ring's own spot, facing the hole, the same press went down at once. So the Tarnished is put there first.
+		void AlignForDescent(const Frame& a_f)
+		{
+			const auto& cfg = Cfg();
+			if (cfg.ladderTopStand <= 0.0f || !a_f.player) {
+				return;
+			}
+			const Vec3 at = game::Position(a_f.player);
+			const GeomProbe::Asset* best = nullptr;
+			float                   bestD = 2.5f;
+			const auto              list = GeomProbe::Ladders(at, 60.0f);
+			for (const auto& l : list) {
+				const float d = LengthXZ(l.pos - at);
+				if (d < bestD && l.pos.y < at.y - 1.0f && LengthXZ(l.fwd) > 0.5f) {  // a ladder going down from here
+					best = &l;
+					bestD = d;
+				}
+			}
+			if (!best) {
+				Log::Info("ladder: \"Descend\" -- no ladder asset found going down within 2.5 m ({} ladders loaded near): the Tarnished stays where Snake stands",
+					list.size());
+				return;
+			}
+			const Vec3 f = Normalize(Vec3{ best->fwd.x, 0.0f, best->fwd.z });
+			Vec3       p{ best->pos.x + f.x * cfg.ladderTopStand, at.y + 0.6f, best->pos.z + f.z * cfg.ladderTopStand };
+			Vec3       hit;
+			if (!game::CastRay(p, Vec3{ 0.0f, -1.4f, 0.0f }, hit, a_f.player.chr, cfg.rayFilter) || std::fabs(hit.y - at.y) > 0.6f) {
+				Log::Info("ladder: \"Descend\" -- no landing {:.2f} m along {} from its axis (the ground there: {}): the Tarnished stays where Snake stands",
+					cfg.ladderTopStand, best->name, game::CastRay(p, Vec3{ 0.0f, -1.4f, 0.0f }, hit, a_f.player.chr, cfg.rayFilter) ? std::format("{:+.2f} m", hit.y - at.y) : "none");
+				return;
+			}
+			p.y = hit.y;
+			Axes axes;
+			axes.mirrorX = cfg.mirrorX;
+			axes.mgsvYawSign = cfg.mgsvYawSign;
+			axes.erForward = Calibration::ErForward();
+			game::SetPosition(a_f.player, p);
+			game::SetYaw(a_f.player, ErYawForHeading(Heading(f * -1.0f), axes));  // facing the hole (the ladder's back: he turns round on it)
+			Log::Info("ladder: \"Descend\" -- the Tarnished put where Elden Ring starts it: {:.2f} m from Snake, {:.2f} m along {}'s forward, facing the hole",
+				Length(p - at), cfg.ladderTopStand, best->name);
+		}
+
 		void UpdateLadder(const Frame& a_f)
 		{
 			const auto state = a_f.player ? game::LadderState(a_f.player) : std::nullopt;
@@ -287,7 +417,10 @@ namespace phantom::er::Host
 				if (g_ladder.Holding()) {
 					g_ladder.Reset();
 					Puppet::SetHold(Puppet::Hold::kLadder, false);
+					SendClimb(a_f, g_climbPace.End(), -1);
 				}
+				g_climbVisual = false;
+				Puppet::SetClimbVisual(false);
 				return;
 			}
 			if (*state != g_ladderState) {
@@ -312,17 +445,26 @@ namespace phantom::er::Host
 				Log::Info("ladder: the press goes to Elden Ring now, {} ms after it, the Tarnished in its hands", in.nowMs - g_ladderSince);
 			}
 			switch (event) {
-			case LadderHandOver::Event::kStarted:
+			case LadderHandOver::Event::kStarted: {
 				g_ladderHpFrac = HpFrac(a_f);
 				g_ladderSince = in.nowMs;
 				g_ladderFrom = game::Position(a_f.player);
+				g_climbPace.Reset();
+				g_guestClimbSeen = g_guestClimbLate = false;
+				g_climbSentAt = 0;
+				if (press && g_ladderPrompt == Cfg().ladderDescendPrompt) {
+					AlignForDescent(a_f);  // before the puppet lets go of him: Elden Ring's own place for the descent
+				}
 				Puppet::SetHold(Puppet::Hold::kLadder, true);
-				Hud::Notify("Ladder: the Tarnished climbs (left stick) -- Snake is back at the end", Hud::Tone::kInfo);
-				Log::Info("ladder: {} -> the puppet steps aside, Elden Ring climbs with the Tarnished (the whole pad); HP bar {:.0f}%",
+				const bool snake = Cfg().ladderSnake != "off";
+				Hud::Notify(snake ? "Ladder: left stick climbs" : "Ladder: the Tarnished climbs (left stick) -- Snake is back at the end", Hud::Tone::kInfo);
+				Log::Info("ladder: {} -> the puppet steps aside, Elden Ring climbs with the {} (the whole pad); HP bar {:.0f}%",
 					press ? std::format("Snake's Y on its prompt (ActionButtonParam {})", g_ladderPrompt) :
 							std::format("Elden Ring's ladder state {} ({}) while Snake played", *state, LadderStateName(*state)),
+					snake ? std::format("hidden Tarnished, Snake drawn on the ladder ([Ladder] snake = {})", Cfg().ladderSnake) : std::string("Tarnished"),
 					g_ladderHpFrac * 100.0f);
 				break;
+			}
 			case LadderHandOver::Event::kClimbing:
 				Log::Info("ladder: the climb started ({} ms after the press)", in.nowMs - g_ladderSince);
 				break;
@@ -333,22 +475,58 @@ namespace phantom::er::Host
 				const std::string carried = g_tarnished ? std::string("Tarnished mode carries it") : CarryHp(a_f, g_ladderHpFrac);
 				Puppet::SetHold(Puppet::Hold::kLadder, false);
 				InputBridge::HoldLeftStickUntilReleased();  // the stick that climbed must not run Snake on (off the landing, down the shaft)
-				Log::Info("ladder: the Tarnished is off it after {:.1f} s, {:+.1f} m up, {:.1f} m away -> {}; {} (climb #{})",
+				Log::Info("ladder: the Tarnished is off it after {:.1f} s, {:+.1f} m up, {:.1f} m away -> {}; {}; {} (climb #{})",
 					static_cast<double>(in.nowMs - g_ladderSince) / 1000.0, at.y - g_ladderFrom.y, LengthXZ(at - g_ladderFrom),
-					g_tarnished ? "Tarnished mode keeps him" : "Snake takes over where he stands", carried, g_ladderClimbs);
+					g_tarnished ? "Tarnished mode keeps him" : "Snake takes over where he stands", carried,
+					g_climbVisual ? std::format("Snake was drawn on it (MGSV {} the climb)", g_guestClimbSeen ? "played" : "never played")
+					              : std::string("the Tarnished showed"),
+					g_ladderClimbs);
+				SendClimb(a_f, g_climbPace.End(), -1);
 				break;
 			}
 			case LadderHandOver::Event::kNoClimb:
 				++g_ladderNoClimbs;
 				Puppet::SetHold(Puppet::Hold::kLadder, false);
+				SendClimb(a_f, g_climbPace.End(), -1);
 				Log::Info("ladder: no climb {} ms after the press (Elden Ring refused it) -> Snake plays on", in.waitMs);
 				break;
 			case LadderHandOver::Event::kAborted:
 				Puppet::SetHold(Puppet::Hold::kLadder, false);
+				SendClimb(a_f, g_climbPace.End(), -1);
 				Log::Info("ladder: {} on the way -> the hand-over ends", a_f.dead || a_f.dying ? "a death" : "a load");
 				break;
 			case LadderHandOver::Event::kNone:
 				break;
+			}
+			// On the ladder: the climb's pace for MGSV (kHEvClimb), and whether Snake is drawn on it.
+			if (g_ladder.Current() == LadderHandOver::State::kClimbing || g_ladder.Current() == LadderHandOver::State::kSettling) {
+				SendClimb(a_f, g_climbPace.Update(in.nowMs, *state, game::Position(a_f.player).y, Cfg().ladderClimbSpeed), *state);
+			}
+			const bool guestClimbing = a_f.guestReady && (a_f.guest.flags & proto::kGuestClimbing);
+			if (g_ladder.Holding() && guestClimbing && !g_guestClimbSeen) {
+				g_guestClimbSeen = true;
+				++g_guestClimbs;
+				Log::Info("ladder: MGSV plays Snake's climb (kGuestClimbing) {} ms after kHEvClimb", g_climbSentAt ? in.nowMs - g_climbSentAt : 0);
+			}
+			if (g_ladder.Holding() && !g_guestClimbSeen && !g_guestClimbLate && g_climbSentAt &&
+				in.nowMs - g_climbSentAt > static_cast<std::uint64_t>(std::max(0, Cfg().ladderGuestWaitMs))) {
+				g_guestClimbLate = true;
+				Log::Warn("ladder: MGSV hasn't played Snake's climb {} ms after kHEvClimb (no kGuestClimbing) -- {}", Cfg().ladderGuestWaitMs,
+					Cfg().ladderSnake == "auto" ? "the Tarnished climbs instead ([Ladder] snake = auto)" : "Snake is drawn on the ladder in the pose MGSV has");
+			}
+			const bool want = WantClimbVisual(a_f);
+			if (want != g_climbVisual) {
+				if (want && Puppet::Active()) {
+					g_climbFrom = Puppet::CurrentAnchor();  // where Snake is drawn now: the start of the ease
+					g_climbFromMs = ::GetTickCount64();
+				}
+				g_climbVisual = want;
+				g_snakeClimbs += want ? 1 : 0;
+				Log::Info("ladder: {}", want ? "Snake is drawn on the ladder, the Tarnished stays hidden" : "Snake is no longer drawn on the ladder");
+			}
+			Puppet::SetClimbVisual(want);
+			if (want) {
+				UpdateClimbAnchor(a_f);  // before the puppet's start/stop: Snake never jumps back to where the climb began
 			}
 		}
 
@@ -700,6 +878,7 @@ namespace phantom::er::Host
 		{
 			Pacing::Resample(g_frame);
 			Puppet::SyncAnchor(g_frame);
+			UpdateClimbAnchor(g_frame);
 			CameraDriver::Apply(g_frame);
 		}
 
@@ -708,6 +887,7 @@ namespace phantom::er::Host
 			auto& f = g_frame;
 			Pacing::Resample(f);
 			Puppet::AfterPhysics(f);
+			UpdateClimbAnchor(f);
 			if (!Puppet::Active() && f.inGame && !f.dead && f.player) {
 				Calibration::Observe(f.player, a_dt > 0 ? a_dt : f.dt);
 			}
@@ -776,6 +956,23 @@ namespace phantom::er::Host
 			Puppet::Describe());
 	}
 
+	void OnWorldShift(const Vec3& a_delta)
+	{
+		// Live 2026-10-31, Fort Haight's 19 m tower: Elden Ring moved its origin 32 m down mid-climb and the summary read "-13.1 m
+		// up, 8.7 m away" for a climb of +18.9 m.
+		g_ladderFrom += a_delta;
+		g_climbFrom.pe += a_delta;
+	}
+
+	std::string LadderLine()
+	{
+		return std::format("ladder {} (ER state {} {}; {} climbs, {} without a climb); Snake drawn on {} climbs{}, MGSV played {}; kHEvClimb {} events, "
+		                   "pace {:.2f} m/s; the Tarnished {}",
+			Name(g_ladder.Current()), g_ladderState, LadderStateName(g_ladderState), g_ladderClimbs, g_ladderNoClimbs, g_snakeClimbs,
+			g_climbVisual ? " (now)" : "", g_guestClimbs, g_climbPace.Sent(), g_climbPace.Speed(),
+			Puppet::Active() || Puppet::ClimbVisual() ? "hidden" : "shown");
+	}
+
 	namespace
 	{
 		const char* MountedName(game::Mounted a_on)
@@ -795,14 +992,15 @@ namespace phantom::er::Host
 		auto&       link = Link::Get();
 		return std::format(
 			"frame {} dt {:.4f} | player {} inGame {} dead {} dying {} menu {} (blocking {}) cutscene {} prompt {} interacting {} | Tarnished mode {} "
-			"({} toggles, {} chords{}; the Tarnished {}) rests {} | ladder {} (state {} {}; {} climbs, {} without a climb)\n"
+			"({} toggles, {} chords{}; the Tarnished {}) rests {} | ladder {} (state {} {}; {} climbs, {} without a climb; Snake drawn on {}, MGSV played "
+			"{}{}; kHEvClimb {}, pace {:.2f} m/s)\n"
 			"guest: alive {} ready {} status {} \"{}\" hb {:.0f} ms attaches {} flags {:#x} life {}/{} buddy {}\n"
 			"{}\n{}\n{}\n{}\n"
 			"camera driving {} maxDist {:.2f} | input pad {} calls {} | events {} | tasks FB {} PP {} CAM {} POST {}",
 			f.index, f.dt, static_cast<void*>(f.player.chr), f.inGame, f.dead, f.dying, f.menuOpen, f.modalMenu, f.cutscene, f.prompt, f.interacting,
 			g_tarnished ? "ON" : "off", g_tarnishedToggles, g_chordsSeen, InputBridge::ChordHolding() ? ", chord buttons held" : "",
 			MountedName(game::PlayerMounted(f.player)), g_rests, Name(g_ladder.Current()), g_ladderState, LadderStateName(g_ladderState), g_ladderClimbs,
-			g_ladderNoClimbs, f.guestAlive,
+			g_ladderNoClimbs, g_snakeClimbs, g_guestClimbs, g_climbVisual ? ", Snake on it now" : "", g_climbPace.Sent(), g_climbPace.Speed(), f.guestAlive,
 			f.guestReady,
 			static_cast<int>(link.GuestStatus()), link.GuestStatusText(), link.GuestHeartbeatAgeMs(), link.AttachCount(), f.guest.flags, f.guest.life,
 			f.guest.lifeMax, Buddy::TypeName(f.guest.buddyType), Puppet::Describe(), MenuWatch::Describe(), Calibration::Describe(), Buddy::Describe(),

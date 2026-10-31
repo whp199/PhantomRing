@@ -120,6 +120,18 @@ namespace phantom::guest
 		float         jumpLift{ 1.0f };         // m (0.2-1.5: a small lift, MGSV's fall damage never starts)
 		int           jumpMaxAirMs{ 2000 };     // the flag goes down by then at the latest (no landing seen)
 
+		// [Climb] Snake's own ladder climb for an Elden Ring ladder (protocol v15 kHEvClimb / kGuestClimbing, Climb.h): staged at a
+		// real MGSV wall ladder (a mafr_lddr001 TppLadder entity: its foot x, y, z and yaw in degrees; docs/GUEST.md 22.1).
+		bool  climb{ true };
+		float climbLadder[4]{ 879.31f, -11.77f, 1240.43f, 60.0f };  // mafr_lddr001_0011, 85 m from the apron sandbox
+		// [Mantle] Snake's climb-up / vault for an Elden Ring ledge (kHEvMantle / kGuestMantling): staged at a real obstacle. Each
+		// site: where he stands x, y, z (feet), the way he faces (deg), its height (cm). Unset (all 0) = that kind is refused.
+		bool  mantle{ true };
+		float mantleVault[5]{ 826.39f, -11.95f, 1218.62f, 90.0f, 100.0f };  // the terminal's jersey barrier (MGSV climbs over it)
+		float mantleLow[5]{};
+		float mantleHigh[5]{};
+		int   mantleLowMaxCm{ 110 };  // a climb-up this high or lower takes the Low site (when both are set)
+
 		// [Pacing] (FramePace.h)
 		int  jobSleepUs{ 500 };  // MGSV's own Sleep(1) (its job system's poll) as a delay of this many us; 0 = 1 ms as MGSV asks
 		bool waitProbe{ false };  // detours under ntdll's waits for `!pace start` (diagnostics)
@@ -132,6 +144,9 @@ namespace phantom::guest
 		bool hideDirectInputControllers{ true };
 		bool rumble{ true };
 		bool guardWindow{ true };
+		// A short RT tap while aiming (LT past XInput's threshold, e.g. a grenade, C4 or a decoy aimed) reaches MGSV for at least
+		// this long (and LT with it): MGSV ignored about 1 tap in 20 (README Known issues). 0 = as the player pressed it.
+		int  rtTapMs{ 120 };
 
 		// [Camera]
 		float filmHeightMm{ 24.0f };  // focal (mm) -> vertical FOV: 2*atan(film/2/focal). UNVERIFIED

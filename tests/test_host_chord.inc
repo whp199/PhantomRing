@@ -414,6 +414,88 @@ static void TestLadder()
 	CHECK(phantom::er::LadderStateName(-1) == "none" && phantom::er::LadderStateName(0) == "StartBottom" && phantom::er::LadderStateName(6) == "EndTop");
 }
 
+// Snake climbs the ladder himself (protocol v15 kHEvClimb, er/Ladder.h ClimbPace): when the guest hears of the climb, its turns and
+// its pace; the end once.
+static void TestClimbPace()
+{
+	using phantom::er::ClimbPace;
+	using phantom::er::LadderMotion;
+	CHECK(LadderMotion(0) == 1 && LadderMotion(2) == 1 && LadderMotion(3) == 1 && LadderMotion(6) == 1);
+	CHECK(LadderMotion(1) == -1 && LadderMotion(4) == -1 && LadderMotion(5) == -1 && LadderMotion(7) == -1 && LadderMotion(15) == -1);
+	CHECK(LadderMotion(8) == 0 && LadderMotion(9) == 0 && LadderMotion(-1) == 0 && LadderMotion(21) == 0 && LadderMotion(99) == 0);
+	{  // up a 19 m ladder at Elden Ring's ~1.1 m/s, a rest on the rungs half way, then down again, off at the bottom
+		ClimbPace p;
+		std::uint64_t now = 1000;
+		float         y = 0.0f;
+		auto o = p.Update(now, 0, y, 1.2f);  // StartBottom: the climb starts, going up, at the default pace (nothing measured yet)
+		CHECK(o.send && o.on && !o.down && Near(o.speed, 1.2f) && o.motion == 1 && p.Started());
+		int sends = 0;
+		for (int i = 0; i < 300; ++i) {  // 5 s up at 1.1 m/s, rung states alternating
+			now += 16;
+			y += 1.1f * 0.016f;
+			o = p.Update(now, (i / 40) % 2 ? 3 : 2, y, 1.2f);
+			sends += o.send ? 1 : 0;
+		}
+		CHECK(sends == 0);  // 1.1 vs 1.2 m/s told: within the pace change; Up left / Up right is no turn
+		CHECK(Near(p.Speed(), 1.1f, 0.08f));
+		for (int i = 0; i < 12; ++i) {  // IdleLeft for 0.19 s between two pushes of the stick: no stop as far as MGSV's climb goes
+			now += 16;
+			o = p.Update(now, 9, y, 1.2f);
+			CHECK(!o.send);
+		}
+		now += 16;
+		o = p.Update(now, 3, y, 1.2f);  // up again
+		CHECK(!o.send);
+		sends = 0;
+		for (int i = 0; i < 25 && !o.send; ++i) {  // a real stop on the rungs: told once it lasted kStillMs
+			now += 16;
+			o = p.Update(now, 9, y, 1.2f);
+		}
+		CHECK(o.send && o.on && !o.down && o.speed == 0.0f && o.motion == 0);
+		now += 50;
+		o = p.Update(now, 3, y, 1.2f);  // up again 50 ms later: within the gap -> waits
+		CHECK(!o.send);
+		now += 50;
+		o = p.Update(now, 9, y, 1.2f);  // ...and still again before the gap is over: nothing to tell (no turn after all)
+		CHECK(!o.send);
+		for (int i = 0; i < 30; ++i) {  // idle a while
+			now += 16;
+			o = p.Update(now, 9, y, 1.2f);
+			CHECK(!o.send);
+		}
+		now += 16;
+		o = p.Update(now, 4, y, 1.2f);  // DownRight: down now, at the last climbing pace until a measure is warm
+		CHECK(o.send && o.on && o.down && o.speed > 1.0f && o.speed < 1.25f && o.motion == -1);
+		sends = 0;
+		for (int i = 0; i < 120; ++i) {  // sliding down (the coast) at 6 m/s: the pace changes -> told once it is measured
+			now += 16;
+			y -= 6.0f * 0.016f;
+			o = p.Update(now, 15, y, 1.2f);
+			if (o.send) {
+				++sends;
+				CHECK(o.down && o.speed > 3.0f && o.motion == -1);
+			}
+		}
+		CHECK(sends >= 1 && sends <= 3);
+		now += 16;
+		o = p.Update(now, -1, y, 1.2f);  // a frame of "none" between two states: nothing
+		CHECK(!o.send);
+		o = p.End();
+		CHECK(o.send && !o.on && o.down && !p.Started());
+		o = p.End();  // once
+		CHECK(!o.send);
+	}
+	{  // a hand-over without any climb (Elden Ring refused the press): nothing to end
+		ClimbPace p;
+		CHECK(!p.End().send);
+	}
+	{  // the first state is "down" (StartTop at the top): b = 1 from the first event
+		ClimbPace p;
+		const auto o = p.Update(5000, 1, 19.0f, 1.2f);
+		CHECK(o.send && o.on && o.down);
+	}
+}
+
 // The puppet's start on a rim (er/Kinematic.h SupportedStart): live, off a ladder the Tarnished's centre was over the shaft.
 static void TestSupportedStart()
 {

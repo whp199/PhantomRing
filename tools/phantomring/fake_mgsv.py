@@ -67,6 +67,14 @@ Overlay tests (er/Overlay.h):
 Protocol v10 host events are logged: kHEvRested (a = 0 grace rest, 1 respawn) refills ammo (30+120) and life;
 kHEvTarnished a = 1 parks Snake (no walking, no autofire) until a = 0.
 
+Protocol v15 (Snake climbs ladders and ledges with MGSV's own moves): kHEvClimb a = 1 (b = 0 up / 1 down, v0[0] = the climb's
+speed m/s; a = 1 again = it turned or changed pace) makes the fake "play the ladder climb" until a = 0: GuestFlags.Climbing, no
+walking (the odometer stands still), and a climb pose (triangle: Snake's upper matrix swings with the climb's pace; humanoid: its
+walk cycle at the climb's pace, still at speed 0). kHEvMantle (a = height cm, b = 0 climb up / 1 vault, v0[0] = duration s) sets
+GuestFlags.Mantling for that long, 50 ms after it (MGSV's own reaction), with no walking meanwhile. Both are logged.
+    !climbplay on|off   off: kHEvClimb is logged but no climb is played (no GuestFlags.Climbing: a guest that can't)
+    !mantleplay on|off  off: kHEvMantle is logged but no GuestFlags.Mantling (the host times the move out by itself)
+
     python3 -m phantomring.fake_mgsv [--seconds N] [--create] [--summary out.json] [--quiet]
 """
 
@@ -230,6 +238,11 @@ class FakeGuest:
 		self.nvg = False          # v10: !nvg on|off -> GuestFlags.Nvg
 		self.binoculars = False   # v13: !binoculars on|off -> GuestFlags.Binoculars
 		self.parked = False       # v10: kHEvTarnished a=1 -> Snake parks (no walking, no autofire) until a=0
+		self.climb = None         # v15: kHEvClimb a=1 -> {"down", "speed", "since", "phase"} until a=0 (GuestFlags.Climbing)
+		self.mantle = None        # v15: kHEvMantle -> {"vault", "height", "start", "end"} (GuestFlags.Mantling from start to end)
+		self.climb_play = True    # !climbplay on|off
+		self.mantle_play = True   # !mantleplay on|off
+		self.climbing = self.mantling = False  # this frame: GuestFlags.Climbing / Mantling
 		self.buddy = "walker"     # --buddy / !buddy walker|horse
 		self.stick_mode = "world"  # !stick world|camera: the left stick along MGSV x/z (+3 m/s), or relative to the camera like MGSV
 		self.stick_speed = 5.0     # !stick camera <m/s>: full stick on foot (MGSV's run ~4.7 m/s)
@@ -365,6 +378,27 @@ class FakeGuest:
 				# v10: Tarnished mode: Snake parks (the real guest: neutral pad, no follow whistles) until a = 0.
 				self.parked = ev.a == 1
 				self.log(f"host: kHEvTarnished a={ev.a} -> Snake {'parks (Tarnished mode)' if self.parked else 'is back'}")
+			elif ev.type == HostEventType.Climb:
+				# v15: Elden Ring climbs a ladder with the hidden Tarnished: MGSV plays Snake's own climb at its pace.
+				speed = float(ev.v0[0])
+				if ev.a == 1:
+					again = self.climb is not None
+					phase = self.climb["phase"] if again else 0.0
+					self.climb = {"down": ev.b == 1, "speed": speed, "since": self.climb["since"] if again else t, "phase": phase}
+					self.log(f"host: kHEvClimb a=1 b={ev.b} v={speed:.2f} m/s -> {'the climb goes on' if again else 'Snake climbs'} "
+						f"{'down' if ev.b else 'up'}{'' if speed > 0.01 else ' (still on the ladder)'}"
+						f"{'' if self.climb_play else ' -- not played (!climbplay off)'}")
+				else:
+					was = self.climb
+					self.climb = None
+					self.log(f"host: kHEvClimb a=0 -> off the ladder{(' after %.1f s' % (t - was['since'])) if was else ''}")
+			elif ev.type == HostEventType.Mantle:
+				# v15: Snake climbs onto / vaults over an Elden Ring ledge: MGSV plays its matching move for v0[0] s.
+				dur = max(0.1, float(ev.v0[0]))
+				start = t + 0.05
+				self.mantle = {"vault": ev.b == 1, "height": ev.a / 100.0, "start": start, "end": start + dur}
+				self.log(f"host: kHEvMantle a={ev.a} ({ev.a / 100.0:.2f} m) b={ev.b} ({'vault over' if ev.b else 'climb up'}) v={dur:.2f} s"
+					f"{'' if self.mantle_play else ' -- not played (!mantleplay off)'}")
 		self.regen_acc += self.regen * dt  # MGSV-style regeneration
 		self.life = min(LIFE_MAX, self.life + int(self.regen_acc))
 		self.regen_acc -= int(self.regen_acc)
@@ -379,7 +413,16 @@ class FakeGuest:
 		if riding:
 			st["rideFrames"] += 1
 		btype, bobject, ride_factor, ride_stick, _ = BUDDIES[self.buddy]
-		speed = 0.0 if (self.stand or not self.walk or self.parked) else 1.4 * (ride_factor if riding else 1.0)
+		if self.mantle and t >= self.mantle["end"]:
+			self.log(f"mantle over ({'vault' if self.mantle['vault'] else 'climb up'}, {self.mantle['height']:.2f} m) -> GuestFlags.Mantling off")
+			self.mantle = None
+		mantling = self.mantle is not None and self.mantle_play and t >= self.mantle["start"]
+		climbing = self.climb is not None and self.climb_play
+		if climbing:
+			# The climb cycle's phase at its pace (one cycle per ~0.6 m of rungs).
+			self.climb["phase"] += dt * self.climb["speed"] / 0.6 * 2 * math.pi
+		busy = climbing or mantling or (self.mantle is not None and self.mantle_play)  # MGSV's move holds Snake (no walking)
+		speed = 0.0 if (self.stand or not self.walk or self.parked or busy) else 1.4 * (ride_factor if riding else 1.0)
 		self.heading += speed / 4.0 * dt
 		vx, vz = math.cos(self.heading) * speed, -math.sin(self.heading) * speed
 		if self.stick_mode == "camera" and self.last_cam and not self.parked:
@@ -400,6 +443,8 @@ class FakeGuest:
 			vz += ly / 32767.0 * 3.0
 		if self.move and not self.parked:
 			vx, vz = math.sin(self.move[1]) * self.move[0], math.cos(self.move[1]) * self.move[0]
+		if busy:
+			vx = vz = 0.0  # MGSV plays its climb / climb-up: no walking meanwhile
 		dx, dz = vx * dt, vz * dt
 		self.odo[0] += dx
 		self.odo[2] += dz
@@ -445,6 +490,10 @@ class FakeGuest:
 			flags |= GuestFlags.Nvg
 		if self.binoculars:
 			flags |= GuestFlags.Binoculars | GuestFlags.FirstPerson  # MGSV's BINOCLE status is first person too (mgsv/Frame.cpp)
+		if climbing and self.ready():
+			flags |= GuestFlags.Climbing
+		if mantling and self.ready():
+			flags |= GuestFlags.Mantling
 		if self.aim_throw and self.ready():
 			flags |= GuestFlags.ThrowAim
 			hand, vel = self.release(*self.aim_throw[:2])
@@ -512,6 +561,7 @@ class FakeGuest:
 			self.push_event(GuestEventType.BuddyFire, a=4, b=1, v0=(self.root[0], 1.5 + (1.0 if riding else 0.0), self.root[2]), v1=fwd, pad0=0, pad1=12000)
 			st["buddyFireSent"] += 1
 
+		self.climbing, self.mantling = climbing, mantling
 		self.publish_draw_list(riding)
 		if self.frame % 10 == 0:
 			self.publish_hud()
@@ -536,6 +586,8 @@ class FakeGuest:
 				return 0, (f"fake guest: frame {self.frame}, session {self.nonce:#018x}, buddy {BUDDIES[self.buddy][0].name} ammo {self.buddy_ammo}, stick {self.stick_mode} ({self.stick_speed:.1f} m/s), life {self.life} "
 					f"(regen {self.regen:.0f}/s, healed {st['healed']}), ammo {self.ammo}+{self.stock}, nvg {'on' if self.nvg else 'off'}, "
 					f"{'PARKED (Tarnished mode), ' if self.parked else ''}menu {'open' if self.in_menu else 'closed'}, "
+					f"{('CLIMBING %s at %.2f m/s, ' % ('down' if self.climb['down'] else 'up', self.climb['speed'])) if self.climb else ''}"
+					f"{('MANTLING (%s %.2f m), ' % ('vault' if self.mantle['vault'] else 'climb up', self.mantle['height'])) if self.mantle else ''}"
 					f"pad: Back {st['backPresses']} Start {st['startPresses']} in-menu presses {st['menuButtons']}, events {st['hostEvents']}")
 			return self.combat_command(cmd.split())
 		try:
@@ -547,9 +599,16 @@ class FakeGuest:
 		usage = ("fake guest commands: !status !walk on|off !autofire on|off !fire <kind> [n] [yaw] [pitch] [share] !share <s> !move <speed> [yaw] "
 			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !grab <action> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
-			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off !binoculars on|off")
+			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off !binoculars on|off "
+			"!climbplay on|off !mantleplay on|off")
 		if not w:
 			return 0, usage
+		if w[0] == "climbplay" and len(w) > 1:
+			self.climb_play = w[1] == "on"
+			return 0, f"ladder climb {'played' if self.climb_play else 'NOT played'} on kHEvClimb (GuestFlags.Climbing)"
+		if w[0] == "mantleplay" and len(w) > 1:
+			self.mantle_play = w[1] == "on"
+			return 0, f"climb-up / vault {'played' if self.mantle_play else 'NOT played'} on kHEvMantle (GuestFlags.Mantling)"
 		if w[0] == "binoculars" and len(w) > 1:
 			self.binoculars = w[1] == "on"
 			return 0, f"binoculars {'on' if self.binoculars else 'off'} (GuestFlags.Binoculars)"
@@ -836,10 +895,16 @@ class FakeGuest:
 			pb.parent[i] = -1
 		self.link.seq_write(proto.OFF_POSE, pb)
 
+	def climb_anim_time(self) -> float:
+		"""The humanoid's walk cycle as the climb's (or the mantle's) pose: at the climb's pace, still while he holds on the rungs."""
+		if self.climbing and self.climb:
+			return self.climb["phase"] / (2 * math.pi)
+		return self.anim_time()
+
 	def publish_draw_list(self, riding: bool):
 		if self.humanoid:
 			walker = (0.0, -1.0, 0.0) if riding else (1.6 * math.cos(self.yaw) - 0.4 * math.sin(self.yaw), 0.0, -1.6 * math.sin(self.yaw) - 0.4 * math.cos(self.yaw))
-			draws, mats, _ = self.humanoid.draw(self.anim_time(), self.yaw, walker)
+			draws, mats, _ = self.humanoid.draw(self.climb_anim_time(), self.yaw, walker)
 			payload = proto.build_draw_list(self.frame, self.root, self.yaw, draws, mats)
 			self.link.write_draw_slot(self.draw.back, self.frame, payload)
 			self.draw.publish()
@@ -854,7 +919,12 @@ class FakeGuest:
 		rec_walker.textures[0] = TEX_DWALKER
 		# Anchor-relative matrices: Snake at the anchor; D-Walker under him while ridden, else beside him.
 		walker = (0.0, -0.8, 0.0) if riding else (1.5, 0.0, -0.5)
-		mats = [matrix_3x4(0, 0, 0, self.yaw), matrix_3x4(0, 0.9, 0, self.yaw),
+		upper = (0, 0.9, 0)
+		if self.climbing and self.climb:
+			upper = (0.15 * math.sin(self.climb["phase"]), 1.3, 0)  # the climb pose: arms up, swinging with its pace
+		elif self.mantling:
+			upper = (0, 1.5, 0.3)  # the climb-up / vault pose: reaching over the ledge
+		mats = [matrix_3x4(0, 0, 0, self.yaw), matrix_3x4(*upper, self.yaw),
 			matrix_3x4(*walker, self.yaw), matrix_3x4(walker[0], walker[1] + 1.0, walker[2], self.yaw)]
 		payload = proto.build_draw_list(self.frame, self.root, self.yaw, [rec_snake, rec_walker], mats)
 		self.link.write_draw_slot(self.draw.back, self.frame, payload)

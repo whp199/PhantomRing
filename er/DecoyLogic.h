@@ -42,6 +42,11 @@ namespace phantom::er::decoy
 	// a_snakeDistance: the enemy's distance to Snake (m, a large number when unknown).
 	Notice Notices(const Vec3& a_eye, const Vec3& a_forward, const Vec3& a_decoy, Variant a_variant, float a_snakeDistance, const Rules& a_rules);
 
+	// Who a decoy (or the box poster: er/Stealth.cpp) may stop and make stare: never a sleeper (he sees nothing), never a boss --
+	// a_boss is cqc::IsBoss's answer (er/Cqc.h IsBossHp). Review 2026-10-31: nothing checked, and a boss within 25 m of an active
+	// decoy froze (no attack, no move) 6 s of every 21 s.
+	inline bool Fooled(bool a_asleep, bool a_boss) { return !a_asleep && !a_boss; }
+
 	// An enemy a_contact m from the decoy's body knocks it over.
 	inline bool PopsOn(float a_contact, const Rules& a_rules) { return a_contact <= a_rules.popDistance; }
 

@@ -26,11 +26,12 @@ from ctypes import c_char, c_double, c_float, c_int16, c_int32, c_int64, c_uint8
 
 # ---- constants (namespace phantom::proto) ---------------------------------------------------------
 MAGIC = 0x47524850  # "PHRG"
-VERSION = 14  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
+VERSION = 15  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
 				# v6: GuestState aimThrowPos/Vel/Kind (0xA8..0xC4) + GuestFlags.ThrowAim; v7: GuestEventType.BuddyOrder; v8: GuestFlags.InBox/BoxPoster, Fire pad[1] = damage share;
 				# v9: PLACED_AGAIN (Placed pad[0]: an announcement repeated); v10: GuestFlags.Nvg, HostEventType.Rested/Tarnished;
 				# v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100: plugin versions, readable on a mismatch); v12: GuestEventType.Fulton
 				# v13: GuestFlags.Binoculars/Diving, GuestEventType.TimeSkip/Cqc, CqcAction, AmmoKind.Decoy, DrawOwner.Projectile; v14: GuestFlags.Jumping
+				# v15: GuestFlags.Climbing/Mantling, HostEventType.Climb/Mantle
 DEFAULT_PATH = "/dev/shm/phantomring_v1"
 DEFAULT_MAPPING_WIN = "file:Z:\\dev\\shm\\phantomring_v1"
 
@@ -135,6 +136,8 @@ class GuestFlags(enum.IntFlag):
 	Binoculars = 1 << 17  # v13: looking through binoculars (host marks ER characters)
 	Diving = 1 << 18  # v13: in MGSV's dive (host may carry the puppet over gaps)
 	Jumping = 1 << 19  # v14: Snake jumps (host: Elden Ring-like jump on the rising edge)
+	Climbing = 1 << 20  # v15: MGSV plays Snake's ladder climb for an ER ladder
+	Mantling = 1 << 21  # v15: MGSV plays a climb-up / vault
 
 
 class GuestBuddyFlags(enum.IntFlag):
@@ -200,6 +203,8 @@ class HostEventType(enum.IntEnum):
 	Detonate = 6  # v5: b placed id: an ER enemy is within its trigger radius
 	Rested = 7  # v10: a = 0 grace rest, 1 respawn: refill ammo (and life)
 	Tarnished = 8  # v10: a = 1 Tarnished mode on, 0 Snake back
+	Climb = 9  # v15: a 1 start / 0 end, b 0 up / 1 down, v0[0] climb speed m/s
+	Mantle = 10  # v15: a ledge height cm, b 0 climb up / 1 vault over, v0[0] duration s
 
 
 class HurtKind(enum.IntEnum):

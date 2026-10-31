@@ -611,8 +611,11 @@ static void TestFulton()
 	CHECK(rising && !LiftAt(kSeconds - 0.01f).done && LiftAt(kSeconds).done);
 	const Candidate chrs[] = { { 0x10, { 0, 0, 0 }, true }, { 0x20, { 5, 0, 0 }, true }, { 0x30, { 1, 0, 0 }, false }, { 0x40, { 2, 0, 0 }, true } };
 	CHECK(Pick(chrs, 0x20, { 0, 0, 0 }, 3.0f) == 1);   // its handle, wherever the proxy stood
-	CHECK(Pick(chrs, 0x99, { 1.2f, 0, 0 }, 3.0f) == 3);  // unknown handle: the nearest living one to the proxy (0x30 is dead)
-	CHECK(Pick(chrs, 0x30, { 1.0f, 0, 0 }, 3.0f) == 3);  // its handle is a dead one: never that
+	// A handle MGSV gave is that character or nobody (review 2026-10-31: a dead or unloaded one used to hand the balloon to the nearest
+	// living hostile within 3 m -- awake, or a boss)
+	CHECK(Pick(chrs, 0x99, { 1.2f, 0, 0 }, 3.0f) == -1);  // unknown handle (unloaded): nobody, though 0x40 stands 0.8 m away
+	CHECK(Pick(chrs, 0x30, { 1.0f, 0, 0 }, 3.0f) == -1);  // its handle is a dead one: nobody, not 0x40 next to him
+	CHECK(Pick(chrs, 0, { 1.2f, 0, 0 }, 3.0f) == 3);      // no handle at all: the nearest living one to the proxy (0x30 is dead)
 	CHECK(Pick(chrs, 0, { 10, 0, 0 }, 3.0f) == -1);       // nothing near
 }
 
@@ -1015,4 +1018,149 @@ static void TestJumpReview()
 		e.Reset(true);                          // the puppet starts with a jump under way in MGSV: not one to make
 		CHECK(!e.Update(true, true, true));
 	}
+}
+
+// Review 2026-10-31: a jump or a hop "landed" on its first frame when the ground ahead rose (uphill, a curb, a step): the landing
+// test, rising, took any top 2 cm above the feet -- the ground the feet rise past this very frame included -- so a jump up a slope
+// steeper than ~12 degrees at 60 fps (~6 at 30), or across a 2+ cm curb, ended 2 cm up and R3 seemed to do nothing. A world for
+// it: ground y = 0, rising along +z from z = 10 at g_slopeDeg for x in [300, 310]; a 5 cm curb from z = 10 for x in [320, 330];
+// a 0.25 m step from z = 10 for x in [340, 350].
+namespace
+{
+	float g_slopeDeg = 20.0f;
+
+	bool UphillSolid(const Vec3& p)
+	{
+		float ground = 0.0f;
+		if (p.x >= 300.0f && p.x <= 310.0f && p.z >= 10.0f) {
+			ground = (p.z - 10.0f) * std::tan(g_slopeDeg * std::numbers::pi_v<float> / 180.0f);
+		} else if (p.x >= 320.0f && p.x <= 330.0f && p.z >= 10.0f) {
+			ground = 0.05f;
+		} else if (p.x >= 340.0f && p.x <= 350.0f && p.z >= 10.0f) {
+			ground = 0.25f;
+		}
+		return p.y < ground;
+	}
+
+	bool UphillRay(const Vec3& from, const Vec3& delta, Vec3& hit)
+	{
+		if (UphillSolid(from)) {
+			hit = from;
+			return true;
+		}
+		constexpr int kSteps = 1000;
+		Vec3          prev = from;
+		for (int i = 1; i <= kSteps; ++i) {
+			const Vec3 p = from + delta * (static_cast<float>(i) / kSteps);
+			if (UphillSolid(p)) {
+				Vec3 a = prev, b = p;
+				for (int k = 0; k < 24; ++k) {
+					const Vec3 m = (a + b) * 0.5f;
+					(UphillSolid(m) ? b : a) = m;
+				}
+				hit = b;
+				return true;
+			}
+			prev = p;
+		}
+		return false;
+	}
+
+	struct Uphill
+	{
+		bool  ok{ false };
+		float rise{ -1 };      // highest feet above the take-off
+		int   airFrames{ 0 };
+		bool  landed{ false };
+		Vec3  end;
+	};
+	// A jump (or, a_hop, a dive's hop) taken at a_from moving a_speed m/s along +z, a_fps frames a second, until it lands.
+	Uphill JumpFrom(const Vec3& a_from, float a_speed, float a_fps, bool a_hop = false)
+	{
+		KinematicParams params;
+		params.bodyHeight = 1.8f;
+		KinematicState s;
+		s.pos = a_from;
+		s.grounded = true;
+		const float dt = 1.0f / a_fps;
+		Uphill      u;
+		if (a_hop) {
+			u.ok = KinematicHop(s, { 0, 0, 1 }, HopParams{}, params, &UphillRay) > 0.0f;
+		} else {
+			u.ok = KinematicJump(s, { 0, 0, a_speed }, 1.2f, 0.15f, 12.0f, params, &UphillRay).ok;
+		}
+		for (int i = 0; i < static_cast<int>(3.0f * a_fps) && u.ok; ++i) {
+			const auto r = KinematicStep(s, { 0, 0, a_speed * dt }, dt, params, &UphillRay);
+			u.rise = std::max(u.rise, s.pos.y - a_from.y);
+			u.airFrames += s.grounded ? 0 : 1;
+			if (r.landed) {
+				u.landed = true;
+				break;
+			}
+		}
+		u.end = s.pos;
+		return u;
+	}
+}
+
+static void TestJumpUphill()
+{
+	for (const float fps : { 30.0f, 60.0f }) {
+		for (const float deg : { 10.0f, 20.0f, 30.0f }) {
+			g_slopeDeg = deg;
+			const float t = std::tan(deg * std::numbers::pi_v<float> / 180.0f);
+			// Walking up it (2 m/s), taking off 1 m up the slope: the full jump (the slope rises 0.15-0.4 m under its ~1 s).
+			const Uphill walk = JumpFrom({ 305, t, 11 }, 2.0f, fps);
+			CHECK(walk.ok && walk.landed && walk.rise > 1.1f && walk.airFrames > static_cast<int>(0.6f * fps));
+			// Running up it (5.5 m/s): up to the apex (1.2 m), or -- the steepest -- until the arc meets the slope (~1.08 m at 30 deg).
+			const Uphill run = JumpFrom({ 305, t, 11 }, 5.5f, fps);
+			const float  expect = deg < 25.0f ? 1.1f : 0.95f;
+			CHECK(run.ok && run.landed && run.rise > expect && run.airFrames > static_cast<int>(0.3f * fps));
+			// ... and lands on the slope, not under it or floating
+			CHECK(Near(run.end.y, (run.end.z - 10.0f) * t, 0.03f));
+			if (!(run.rise > expect)) {
+				std::printf("  uphill jump %.0f deg at %.0f fps: rose %.2f m in %d frames\n", deg, fps, run.rise, run.airFrames);
+			}
+			// A dive's hop up it (0.6 m up, 2.5 m on): its arc, not a 2 cm step.
+			const Uphill hop = JumpFrom({ 305, t, 11 }, 0.0f, fps, true);
+			CHECK(hop.ok && hop.landed && hop.rise > 0.3f);
+		}
+		// Across a 5 cm curb right at the take-off (the centre over it in the first frame): the jump, not a 5 cm step.
+		const Uphill curb = JumpFrom({ 325, 0, 9.98f }, 5.5f, fps);
+		CHECK(curb.ok && curb.landed && curb.rise > 1.1f && Near(curb.end.y, 0.05f, 1e-3f));
+		// Toward a 0.25 m step 0.6 m ahead (4 m/s): over its edge in the rise, down onto it from the arc.
+		const Uphill step = JumpFrom({ 345, 0, 9.4f }, 4.0f, fps);
+		CHECK(step.ok && step.landed && step.rise > 1.1f && Near(step.end.y, 0.25f, 1e-3f) && step.end.z > 11.0f);
+	}
+	g_slopeDeg = 20.0f;
+}
+
+// Review 2026-10-31: grenades and decoys cast ray_filter alone, which passes through the floors only characters stand on (every
+// floor of Stormveil's cliffside scaffold): a grenade dropped on Snake's planks went off on the ground below. Puppet::CastWorld
+// casts both filters and keeps the nearer hit (NearerOf). Here ray_filter sees only the ground (y = 0), the ground filter the
+// scaffold's boards too (ScaffoldRay).
+static void TestNearerOf()
+{
+	const RayFn world = [](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
+		if (a_from.y + a_delta.y >= 0.0f || a_from.y < 0.0f || std::fabs(a_delta.y) < 1e-6f) {
+			return false;
+		}
+		const float t = a_from.y / -a_delta.y;
+		a_hit = a_from + a_delta * t;
+		return true;
+	};
+	const RayFn none = [](const Vec3&, const Vec3&, Vec3&) { return false; };
+	Vec3        hit;
+	// A grenade falling onto a board of the scaffold (x 202, z 0.1): ray_filter alone finds the ground 6 m below...
+	CHECK(world({ 202, 8, 0.1f }, { 0, -10, 0 }, hit) && Near(hit.y, 0.0f, 1e-3f));
+	// ... both filters, the board under it
+	CHECK(NearerOf(world, &ScaffoldRay)({ 202, 8, 0.1f }, { 0, -10, 0 }, hit) && Near(hit.y, 6.0f, 1e-2f));
+	CHECK(NearerOf(&ScaffoldRay, world)({ 202, 8, 0.1f }, { 0, -10, 0 }, hit) && Near(hit.y, 6.0f, 1e-2f));
+	// off the scaffold: the ground, whichever filter finds it
+	CHECK(NearerOf(world, &ScaffoldRay)({ 190, 8, 0.1f }, { 0, -10, 0 }, hit) && Near(hit.y, 0.0f, 1e-2f));
+	// one filter finds nothing: the other's hit; neither: no hit; no second filter: the first alone
+	CHECK(NearerOf(none, world)({ 190, 8, 0 }, { 0, -10, 0 }, hit) && Near(hit.y, 0.0f, 1e-3f));
+	CHECK(NearerOf(world, none)({ 190, 8, 0 }, { 0, -10, 0 }, hit) && Near(hit.y, 0.0f, 1e-3f));
+	CHECK(!NearerOf(none, none)({ 190, 8, 0 }, { 0, -10, 0 }, hit));
+	CHECK(!NearerOf(world, RayFn{})({ 190, 8, 0 }, { 0, 10, 0 }, hit) && NearerOf(world, RayFn{})({ 190, 8, 0 }, { 0, -10, 0 }, hit));
 }

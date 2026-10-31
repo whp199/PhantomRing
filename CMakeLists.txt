@@ -158,6 +158,11 @@ if(PHANTOM_GUEST_SOURCES)
 	target_link_libraries(test_guest_actorproxy PRIVATE phantom_common)
 	target_link_options(test_guest_actorproxy PRIVATE ${PHANTOM_STATIC_LINK})
 
+	# Snake's ladder climbs and climb-ups / vaults (mgsv/ClimbLogic.cpp, protocol v15, docs/GUEST.md 22)
+	add_executable(test_guest_climb tests/test_guest_climb.cpp mgsv/ClimbLogic.cpp mgsv/Logic.cpp)
+	target_include_directories(test_guest_climb PRIVATE mgsv)
+	target_link_options(test_guest_climb PRIVATE ${PHANTOM_STATIC_LINK})
+
 	# D-Horse treadmill's pure half (mgsv/HorseLogic.cpp, docs/GUEST.md 8.1a)
 	add_executable(test_guest_horse tests/test_guest_horse.cpp mgsv/HorseLogic.cpp mgsv/Logic.cpp)
 	target_include_directories(test_guest_horse PRIVATE mgsv)
@@ -221,10 +226,11 @@ if(PHANTOM_GUEST_SOURCES)
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_actorproxy>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_cqc>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_horse>
+		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_climb>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all "WINEDLLOVERRIDES=dinput8=n,b"
 			wine $<TARGET_FILE:test_guest_proxy> $<TARGET_FILE:PhantomRingGuest>
 		WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-		DEPENDS test_guest_logic test_guest_dive test_guest_c4 test_guest_actorproxy test_guest_cqc test_guest_horse test_guest_link test_guest_watch test_guest_proxy PhantomRingGuest ${PHANTOM_GUEST_PUMP_DEP}
+		DEPENDS test_guest_logic test_guest_dive test_guest_c4 test_guest_actorproxy test_guest_cqc test_guest_horse test_guest_climb test_guest_link test_guest_watch test_guest_proxy PhantomRingGuest ${PHANTOM_GUEST_PUMP_DEP}
 		USES_TERMINAL)
 endif()
 

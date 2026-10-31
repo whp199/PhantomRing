@@ -23,7 +23,14 @@ edit that one). The log is `PhantomRingHost.log` next to the DLL.
    - vtables: the RTTI name behind `vtable[-1]`.
 
    A failed entry is logged and stays null. Every feature checks what it needs and turns itself off rather than guess.
-3. **Shared memory** (`er/Link.cpp`). It opens or creates `/dev/shm/phantomring_v1` (OPEN_ALWAYS, full size) and clears magic while it rewrites the header. It stamps the version, a fresh BCrypt-random `sessionNonce`, the QPC frequency and `hostUnixPid` (getpid through the high syscall stub, `common/Mapping.h UnixPid`, shared with the guest). It resets every host-owned region: HostState, PadState, the host event ring, ActorTable, and the console (`respSeq = reqSeq`). It drains what it consumes: guest events and the render ring.
+3. **Shared memory** (`er/Link.cpp`). It opens or creates `/dev/shm/phantomring_v1` (OPEN_ALWAYS, full size) and clears magic while it rewrites the header. It stamps the version, a fresh BCrypt-random `sessionNonce`, the QPC frequency and `hostUnixPid`: under Wine from `/proc` (`HostUnixPid`: the wineserver's pid from `Z:\proc\self\stat`, then
+the first `Z:\proc\self\task\<n>` above it that exists -- Wine looks paths up in the calling process, so only Elden Ring's own
+threads do -- and that thread's `Tgid`; ~100 probes; with a long-lived wineserver far below, as system Wine's in the offline
+tests, from `/proc/loadavg`'s newest pid down while a fresh thread of ours waits; written to `PHANTOMRING_HOST_UNIX_PID`), never
+the raw getpid syscall stub
+of `common/Mapping.h UnixPid` any more: Proton experimental-11.0-20261027b handles a syscall made outside its own modules as a
+Windows one, and the stub crashed Elden Ring as the host attached (an access violation at the stub + 4, live 2026-10-31; MGSV's
+guest met the same, mgsv/Link.cpp). Real Windows: `GetCurrentProcessId`. It resets every host-owned region: HostState, PadState, the host event ring, ActorTable, and the console (`respSeq = reqSeq`). It drains what it consumes: guest events and the render ring.
 4. **XInput bridge** (`er/InputBridge.cpp`). MinHook detours `xinput1_4.dll` ordinal 2, the import ER uses. This is a system DLL, so nothing in `eldenring.exe` is patched.
 5. **System init.** It waits for `global_hinstance` and the `CSTaskImp` instance, as fromsoftware-rs does.
 6. **FD4 singleton finder** (`er/Singletons.cpp`, TGA's method in-process). It names every singleton slot through the game's own `get_singleton_name`. It cross-checks the AOB-resolved slots by name and gives the console `s.<Name>` symbols.
@@ -89,6 +96,11 @@ and no blocking screen (the loading screen) is up. While it is active:
 - the data module's NoDead bit is set;
 - ER's pad is masked to Start/View (unless an ER menu is open);
 - MGSV gets the real pad.
+
+Nor while the Tarnished has 0 HP (`Puppet::Decide`, logged once `puppet: the Tarnished has 0 HP (a revival screen after a
+load?)`): a save Elden Ring wrote while he was dying loads him under its "Choose revival location" screen with the dead bit
+clear, and Snake used to take the pad there (README Known issues); a living player never has 0 (the puppet's NoDead keeps 1).
+UNVERIFIED live that such a load reads 0.
 
 The puppet stops, and everything it changed is restored, the same frame any of these happens:
 
@@ -279,13 +291,62 @@ Tarnished went through is Snake's too: the HP bar's net change between the two t
   on a ladder the chord is refused too (VERIFIED live 2026-10-13, Fort Haight: "Ladders" below).
 
 **Ladders** (`er/Ladder.h`, `[Input] ladder_prompts` 5000 "Climb" / 5010 "Descend", `ladder_press_delay_ms` 100, `ladder_wait_ms`
-1500, `ladder_settle_ms` 300; roadmap 1.7). Snake can't climb, so a ladder is an automatic, temporary Tarnished mode, like the
-mist's step-aside but lasting as long as Elden Ring's own ladder state: `CSPlayerLadderModule` (modules+0x78, RTTI checked)
-+0x18, fromsoftware-rs `LadderState`: -1 none, 0 StartBottom, 1 StartTop, 2/3 up, 4/5 down, 6 EndTop, 7 EndBottom, 8/9 idle on
-it (`game::LadderState`, every change logged as `ER ladder state a -> b (Name)`).
-- Snake's Y on a ladder prompt steps the puppet aside (`Puppet::Hold::kLadder`): the Tarnished shows, Elden Ring has the whole
-  pad (the left stick climbs, B/X as Elden Ring has them) and its own camera; the corner says "Ladder: the Tarnished climbs (left
-  stick) -- Snake is back at the end". No interaction is started for it (its 3.5 s "menu" would only have kept the chord away).
+1500, `ladder_settle_ms` 300; `[Ladder]`; roadmap 1.7; protocol v15 `kHEvClimb` / `kGuestClimbing`). Elden Ring climbs the ladder
+with the hidden Tarnished -- its ladder state moves him exactly, and Snake's kinematic body couldn't -- for as long as its own
+ladder state says he is on one: `CSPlayerLadderModule` (modules+0x78, RTTI checked) +0x18, fromsoftware-rs `LadderState`: -1
+none, 0 StartBottom, 1 StartTop, 2/3 up, 4/5 down, 6 EndTop, 7 EndBottom, 8/9 idle on it, 14-20 the slide down (`game::LadderState`,
+every change logged as `ER ladder state a -> b (Name)`). **Snake climbs it himself** (since 2026-10-31; `[Ladder] snake = on`, the default):
+the Tarnished stays hidden throughout, MGSV plays Snake's own ladder climb, and Snake's meshes are drawn where the Tarnished is
+on the ladder, facing it. Before (and with `snake = off`) the Tarnished showed and climbed, Snake came back at the end.
+- Snake's Y on a ladder prompt steps the puppet aside (`Puppet::Hold::kLadder`): Elden Ring has the whole pad (the left stick
+  climbs, B/X as Elden Ring has them) and its own ladder camera (it frames the climb from below going up, from above going down);
+  the corner says "Ladder: left stick climbs". No interaction is started for it (its 3.5 s "menu" would only have kept the chord away).
+- **Snake on the ladder** (`Puppet::SetClimbVisual` / `SetClimbAnchor` / `ClimbVisual`): while the hand-over holds (and Snake
+  isn't in Tarnished mode, and MGSV is ready) the puppet's stop leaves the Tarnished hidden (render bit + base transparency, as
+  the puppet hides him, re-asserted every frame), and the renderer draws Snake at a climb anchor the host computes after Elden
+  Ring's physics every frame (`Host::UpdateClimbAnchor`, OnCamera and PostPhysics): his root at the Tarnished's feet
+  (+ `[Ladder] offset` toward / up / right, 0 by default), turned so that Snake's MGSV facing is the Tarnished's (`ChooseDelta`:
+  he faces the ladder whatever way MGSV turns him). The first 0.3 s ease from where the puppet had him (a "Descend" moves the
+  Tarnished up to ~1 m first, below). His buddy's draws are left out meanwhile (they would hang in the air beside him), and so
+  is everything else MGSV draws but Snake; MGSV's HUD layer stays (it is still Snake's screen: `Hud` counts the climb as the
+  puppet's). Elden Ring's light-set learning, which samples the Tarnished on screen, waits. A death on the ladder keeps him
+  hidden as any death does (Snake fades at the ladder); Tarnished mode on the ladder (the chord) shows the Tarnished again.
+  `snake = auto`: the same while MGSV plays the climb (`kGuestClimbing` within `guest_wait_ms` 1500 of the first `kHEvClimb`),
+  else the Tarnished shows and climbs (logged `ladder: MGSV hasn't played Snake's climb ... the Tarnished climbs instead`).
+- **kHEvClimb** (`ClimbPace`, pure, `TestClimbPace`): `a = 1` when the climb starts (StartBottom / StartTop), `b` = 0 up / 1 down,
+  `v0[0]` = its vertical speed (m/s): Elden Ring's climb moves him rung by rung (0.76-1.72 m/s in 0.3 s windows, live), so the
+  Tarnished's own speed is eased over 0.8 s and, until that has 0.5 s of climbing in it, `[Ladder] climb_speed` (1.2) or the
+  last moving pace is sent. `a = 1` again when the climb turns (up / down / **still**: a stop on the rungs that lasts 0.3 s --
+  Elden Ring's climb passes through its idle states between two pushes of the stick -- sends speed 0 with the last direction)
+  or its pace changes by more than half (at most once a second), never more than once in 0.2 s; `a = 0` once when the hand-over
+  ends (off it, a load, a death, a press Elden Ring refused). Logged: `ladder: kHEvClimb a=1 b=0 (up at 1.20 m/s; ER ladder
+  state 0 StartBottom) -- MGSV plays Snake's climb`, `ladder: MGSV plays Snake's climb (kGuestClimbing) 33 ms after kHEvClimb`,
+  `ladder: kHEvClimb a=0 (the climb is over; N events)`; `pr er status` / `pr er ladder`: Snake drawn on N climbs, MGSV played N,
+  kHEvClimb events, the pace.
+- **"Descend" from Elden Ring's own place** (`AlignForDescent`, `[Ladder] descend_prompt` 5010, `top_stand` 0.55): Elden Ring
+  starts a descent only from where its capsule stands on the landing, ~0.5 m along the ladder's forward (its matrix's third row,
+  `GeomProbe::Asset::fwd`) from its axis, facing the hole. Snake's body can stand closer -- on the ladder's top between its
+  posts. Found live 2026-10-31 (Stormveil, AEG219_067_4000, a 14.5 m ladder): there the puppet stepped aside, Elden Ring's capsule
+  rose 0.33 m onto the posts, the prompt went, and the press was refused (twice, `no climb 1500 ms after the press`); put by hand
+  at Elden Ring's own end-of-climb spot and turned to the hole, the same press went down at once. So on a "Descend" press the
+  nearest ladder asset going down within 2.5 m is looked up and the Tarnished is put there (on the ground a ray finds within
+  0.6 m of Snake's height) facing the hole, before the puppet lets go of him: `ladder: "Descend" -- the Tarnished put where
+  Elden Ring starts it: 1.18 m from Snake, 0.55 m along AEG219_067_4000's forward, facing the hole` -> `StartTop` 500 ms after
+  the press. No ladder found (or no landing there): he stays where Snake stands, as before.
+- **Live 2026-10-31** (fake MGSV humanoid, Elden Ring 1.17.2 headless 4K, Stormveil's AEG219_067_4000 near the ladder room by
+  the Rampart Tower): up `+14.5 m` in 16.7 s (StartBottom 500 ms after the press, `MGSV plays Snake's climb (kGuestClimbing) 33
+  ms after kHEvClimb`, 8 kHEvClimb events with the shots' pauses, 28 before the pace was eased and the still states debounced),
+  `Snake was drawn on it (MGSV played the climb)`, `puppet ON` at the top; down `-14.5 m` in 17.6 s after the alignment. Frames
+  (`hud shot`) at three points of each climb: Snake's model on the ladder, the Tarnished nowhere, MGSV's HUD layer, Elden Ring's
+  ladder camera (going up: behind and below him; going down in the tower's shaft: close over his head, as it frames the
+  Tarnished there). The test model hung ~0.4 m left of the ladder's middle going up -- whether MGSV's own climb pose does too is
+  for `[Ladder] offset` once a recording of the real climb exists.
+- **Live 2026-10-31 with the real MGSV** (docs/STATUS.md "0.5.0-alpha"): Stormveil's AEG219_067_4000 up 15.4 s / down 16.5 s and
+  Fort Haight's AEG030_902_2001 up +18.9 m in 17.8 s / down -18.9 m in 18.8 s; `kGuestClimbing` 33-34 ms after `kHEvClimb`,
+  MGSV on its ladder 0.13-0.5 s after Y, 1-2 loops of MGSV's 8 m ladder per climb (~1 s each where his pose loses the rungs),
+  the Tarnished never visible in the frames, Snake in control at both ends. Elden Ring moved its origin 32 m mid-climb at Fort
+  Haight: the start (`g_ladderFrom`) and the climb anchor's blend now follow origin shifts (`Host::OnWorldShift`; the summary
+  had read "-13.1 m up"). `[Ladder] offset` stays 0: the frames showed his hands on the rails.
 - **The press reaches Elden Ring only after the step-aside** (`InputBridge::SetPrompt(.., deferred)` + `PressForEr`): the
   bridge keeps the real Y out of both games, and Elden Ring alone gets a 150 ms Y `ladder_press_delay_ms` later, with the
   Tarnished in its hands. Found live: pressed while the puppet still held him, "Descend" at the top never started (the prompt
@@ -342,6 +403,63 @@ it (`game::LadderState`, every change logged as `ER ladder state a -> b (Name)`)
   ladder they matter to neither motion. Tarnished mode on a ladder (the second run): the chord mid-climb -> `Tarnished mode ON
   (View+Start on a ladder)`, no Elden Ring menu; the chord again on the ladder -> refused, "Tarnished mode: get off the ladder
   first, then View+Start" (screenshot); off at the top -> `Tarnished mode keeps him`; the chord on foot -> Snake back.
+
+**Climb up and vault** (`er/Mantle.*`, `[Mantle]`, protocol v15 `kHEvMantle` / `kGuestMantling`; console `mantle`; 2026-10-31). MGSV
+climbs onto a ledge with Y (its action button) and vaults low fences; its flat airport has no such walls where Elden Ring has
+them, so the host finds the ledge in Elden Ring's world, tells the guest which move to play and for how long, and carries the
+kinematic puppet up and over while MGSV plays it.
+- **The ledge** (`PlanMantle`, pure, `tests/test_host_mantle.inc` `TestMantle`: 12 lanes of a synthetic world and the path checked
+  clear of it at every step): a face within `reach` (0.6 m) of his body at knee, waist or chest height straight ahead; its top
+  just past the face, `min_height`-`max_height` (0.5-1.8 m) above his feet (looked for from 2.15 m down, and under anything
+  higher there: a ceiling over the top, a beam over the face; lower: a step he walks onto; higher: a wall); room to rise along
+  the face (`climb_room` 1 m over the top: his axis from the feet, his sides, back and front from just above the top -- live,
+  Gatefront's rocks lean toward him and are 0.1 m higher at his side, so knee height read "no room"). Then:
+  - **vault over** (b = 1): a top at most `vault_max_depth` (0.7 m) deep (a fence, a low wall), its highest point on the way over
+    at most `vault_max_height` (1.2 m), ground behind it no more than `vault_max_drop` (1.6 m) below his feet (more: "a drop behind
+    it"), the whole body standing there (five probes) with room for his height, and nothing in the way 0.3-0.9 m over its crest.
+    Path: up beside it to the crest + 0.25 m (35% of the time), over (70%), down to the far ground; `vault_base_s` 1.1 +
+    `vault_per_m` 0.25 per metre (+ 0.2 s per metre of drop): MGSV's own vault, from the request, is on top at ~0.8 s and down
+    at ~1.35 s (live 2026-10-31; 0.55 had Elden Ring's path done while MGSV still reached for the top).
+  - **climb up** (b = 0): a top to stand on `radius` + 0.1 m past the face (its height within `maxSlope` x that of the edge's, the
+    body's five probes on it, room for his standing height), nothing in the way over the edge. Path: straight up beside the face
+    to the top + 5 cm (55%), then over onto it; `climb_base_s` 0.75 + `climb_per_m` 0.45 per metre (1.2 s for 1 m, 1.5 s for 1.6 m).
+  - a thin obstacle where climbing isn't possible is vaulted even when only climbs are wanted; anything else is refused with a
+    reason ("too high to climb (a wall)", "no room above him to climb", "nothing to stand on up there", "a drop behind it", ...).
+- **When**: **Y** (rising edge on the real pad, `[Mantle] y`) with none of Elden Ring's prompts up now or within
+  `prompt_quiet_ms` (400): at a grace, a door or an item the Y stays Elden Ring's (`InputBridge::SetPrompt`). Facing: Snake's.
+  Nothing in front: nothing happens (the Y was MGSV's anyway); a ledge that doesn't fit: logged `puppet: Y at a ledge 0.25 m ahead
+  -- no climb: <why>`. **Running into it** (`run_into = low`, the default: asking `run_speed` 3 m/s or more and stopped by it for
+  `run_blocked_s` 0.12 s): a ledge or fence up to `run_into_max` 1.1 m is climbed / vaulted without Y (`all`: any that fits;
+  `off`: Y only). Never riding, prone, aiming (first person, binoculars, a throw), in CQC, the box, a dive or a jump, in the air,
+  in MGSV's menu, nor with the buddy within `buddy_clear` (1.3 m: Y mounts D-Walker / D-Horse in MGSV). With C4 in hand the
+  climb's Y no longer sets one off (below).
+- **Y is the climb's alone** (`LedgeAhead` every 100 ms in Snake's facing, with TryMantleY's refusals; `InputBridge::SetLedge`):
+  while a ledge that fits is in front of him, a fresh Y stays out of MGSV's pad until released. Found live 2026-10-31 with the
+  real MGSV: D-Walker follows ~2.5 m away (outside `buddy_clear`), MGSV's Y reached it first and mounted it at a Stormveil fence;
+  with C4 in hand MGSV's Y also set one off. Now neither happens (`pr er mantle`: `a ledge ahead now: yes (N Y presses kept from
+  MGSV)`); live: Y onto a 1.09 m wall with D-Walker 2.36 m away in MGSV -> climbed, not mounted. Within `buddy_clear` Y still
+  mounts.
+- **The move** (`MantleRun`): `kHEvMantle` (a = height cm, b, v0[0] = the duration) goes out and Snake holds still until MGSV
+  says it plays the move (`kGuestMantling`) or `wait_ms` (300) passed; then the puppet follows the path, checked against Elden
+  Ring's world before it starts (never through a wall or a ceiling), with no collision of its own meanwhile; Snake's own motion,
+  jumps and dives wait until it is over; at the end he stands on the ground there (a fall from there is an ordinary one). An
+  Elden Ring warp on the way ends it. Logged: `puppet: Snake climbs onto a 0.68 m ledge 0.04 m ahead (Y) -> kHEvMantle a=68 b=0
+  1.05 s, to (...)`, `puppet: the climb up starts 67 ms after kHEvMantle -- MGSV plays it (kGuestMantling)`, `puppet: climb up
+  done at (...)`. The drawn Snake follows the puppet's root (MGSV's draws are relative to his root, as for a jump): the guest's
+  move should keep his root where the body is, else the lift shows twice.
+- **Hints** (`[Hints]`, `count` 3 per kind and session, `blocked_s` 0.6, at least 20 s apart -- live the three of a kind went out
+  in three seconds at the first wall): walking into something (stopped by it while asking to move) for 0.6 s plans a climb in
+  that direction once a second; what fits gets a corner hint the first few times: "R3: jump onto
+  it -- Y: climb up" (a ledge he can also jump onto: up to `jump_apex` + `jump_air_step` - 0.15 m), "Y: climb up", "Y: vault over
+  -- or run into it". The jump's button follows `[Jump] button`. `pr er "mantle hints reset"` shows them again.
+- **[Jump] button** (`r3` default | `a` | `l3`; console `jump a`): the guest's jump is its R3 (`[Jump] Button = rs` in
+  PhantomRingGuest.ini, unchanged). With `a` the host swaps A and R3 in the pad MGSV gets while Snake plays (`InputBridge`
+  `SwapJump`): A jumps -- and selects in MGSV's call menu (LB) and uses in its weapon / item wheels (the Phantom Cigar), as R3 did
+  -- and R3 crouches / lies down (MGSV's A). `l3`: L3 jumps, R3 sprints (MGSV's L3 is its DASH). Not the keyboard (its middle
+  mouse button jumps), not in MGSV's menus.
+- `pr er "mantle plan [deg]"` says what a climb would do in front of Snake (or along a heading), `mantle go` starts one as Y would,
+  `mantle on|off`, `mantle run off|low|all`; `pr er status` (puppet line) counts climbs up / vaults (running, played by MGSV,
+  refused) and hints.
 
 **MGSV's own menu** (`[Input] guest_menu_owns_pad`): while GuestState `kGuestInMenu` is set (iDroid, pause) MGSV gets the
 whole pad -- Start, View and Y included, to work the menu and close it -- and Elden Ring a neutral one (no map, no menu,
@@ -529,8 +647,10 @@ and restored when it stops (only on the same, live object).
     frames) carries on in the air, steered toward Snake's own motion by at most `jump_air_control` m/s² (Elden Ring-like: a
     little; no motion from MGSV in the air never brakes it);
   - in the air (`AirStep`, one air for the jump and the dive's hop since the merge) the knee ray drops to `jump_air_step`
-    above the feet, a ledge's top up to that far above them is landed on (rising, one above the take-off ground: the capsule
-    catching an edge): a 1.0 m ledge is reached from a run or standing at its foot, a 1.7 m one never; his head stops under a
+    above the feet, a ledge's top up to that far above them is landed on (rising, only one above where the feet end the frame:
+    the capsule catching an edge -- review 2026-10-31: "above the take-off" let ground the feet were rising past count, and a
+    jump up a 12-degree slope at 60 fps, a 6-degree one at 30, or across a 2 cm curb ended 2 cm up; `TestJumpUphill`, live
+    1.21-1.22 m up 14 and 24 degree slopes): a 1.0 m ledge is reached from a run or standing at its foot, a 1.7 m one never; his head stops under a
     ceiling (`headBump`: rays up from half his height, seams bridged) and a horizontal move that would put something lower
     than his head over him is refused (`BodyHeadroom`, from each probe's own ground: a table top the wall rays pass under
     and over, a beam);
@@ -850,8 +970,9 @@ If the fireball reads too big even cut short, try another look live: `boom look 
 
 MGSV's decoys (inflatable 397-399, active 401-403, shock 405-407 / 380-381) only fool MGSV's soldiers, and its sandbox has
 none. The guest now announces them like a mine (`kGEvPlaced`, a = `kAmmoDecoy`, trigger 0; docs/GUEST.md 18.8) and the host
-keeps each where Snake set it (anchor at that moment, set down on Elden Ring's ground: near that height first, else down to 40 m
-below, else from 12 m above -- MGSV throws a decoy onto its flat apron, and live one thrown down a slope stood 5.5 m up in the
+keeps each where Snake set it (anchor at that moment, set down on Elden Ring's ground through Snake's ground filter --
+`Puppet::CastWorld`, review 2026-10-31: ray_filter passed through the character-only floors he stands on, Stormveil's scaffold --
+near that height first, else down to 40 m below, else from 12 m above -- MGSV throws a decoy onto its flat apron, and live one thrown down a slope stood 5.5 m up in the
 air), drawn as a soldier-shaped grey-olive
 balloon of lit balls (`decoy::Figure`, `height` 1.75 m) that blows up over 0.8 s and collapses over 0.5 s when it pops; the
 active decoy's speaker blinks amber, the shock decoy shows a steady blue charge (`RenderMarkers::Owner::kDecoys`).
@@ -859,7 +980,9 @@ active decoy's speaker blinks amber, the shock decoy shows a steady blue charge 
 Four times a second one `Combat::HostilesNear` scan around the standing decoys (`decoy::Notices`, pure):
 - a hostile whose eyes (top of its capsule) see one within `range` 15 m (`cone` 70 deg in front, a clear ray) stops and stares
   for `stare` 6 s -- the box poster's mechanism (`er/Stealth.cpp`): ChrIns `+0x538` no-attack / no-move bits, only the bits
-  we set are cleared again; `cooldown` 15 s before the same one stares again. An **active** decoy is heard: within
+  we set are cleared again; `cooldown` 15 s before the same one stares again. Never a boss (`decoy::Fooled`, `Cqc::IsBossHp`;
+  review 2026-10-31: a boss within 25 m of an active decoy froze 6 s of every 21 s) -- a boss still pops one it walks into --
+  nor one CQC holds; the box poster's stare (`er/Stealth.cpp`) leaves bosses and sleepers be too. An **active** decoy is heard: within
   `active_range` 25 m, no cone, no ray. Asleep enemies don't notice; one within `snake_close` 4 m of Snake and nearer him
   than the decoy is busy with him (a decoy must not be a pause button in a fight);
 - a hostile whose capsule comes within `pop_distance` 1 m of its chest knocks it over: it pops (`kHEvDetonate` b = its id:
@@ -1009,9 +1132,13 @@ dismissing is the MGSV agent's).
 The guest's ActorProxy stands an MGSV soldier in for an Elden Ring character (docs/GUEST.md 20); when Snake fultons it, MGSV's
 own balloon goes up and the guest sends `kGEvFulton` with that character's handle (`pad[0] | pad[1] << 32`), where the proxy
 stood (`v0`, MGSV world) and `a` (1 the balloon went up, 0 it failed: nothing happens). The host:
-- finds the character by its handle among game::Characters, else (handle unknown) the nearest living one within 3 m of where
-  the proxy stood -- only an enemy of the Tarnished by Elden Ring's team relation table (the rule every hit uses: live, a
-  "nearest" without it took an invisible team-0 character standing at the player's grace, and the grace's prompt went);
+- finds the character by its handle among game::Characters -- that one while he lives, else nobody (review 2026-10-31: a dead
+  or unloaded handle used to pass the balloon to the nearest living hostile within 3 m, awake or a boss); only with no handle
+  at all the nearest living one within 3 m of where the proxy stood -- only an enemy of the Tarnished by Elden Ring's team
+  relation table (the rule every hit uses: live, a "nearest" without it took an invisible team-0 character standing at the
+  player's grace, and the grace's prompt went); and only while he still sleeps (`Combat::Asleep`) and is no boss
+  (`Cqc::IsBossHp`, CQC's rule): refused otherwise (`fulton: ... is awake now` / `is a boss`; `pr er fulton` counts them).
+  `er/Actors.cpp` never flags a boss `kActorAsleep`, so MGSV offers no Fulton for one;
 - holds it (ChrIns+0x538 bits 4/5 no attack / no move, +0x1C4 bit 5 no gravity) and lifts it under a balloon for 2.2 s
   (`Fulton::LiftAt`, tested): the balloon inflates over 0.7 s while he is lifted 0.25 m, then 1 m in 0.6 s, then yanked up
   ~18 m; drawn with the world markers (an olive-grey ball and a dotted line to his back), moved with Elden Ring's origin
@@ -1222,7 +1349,9 @@ mines". MGSV flies its grenades over its own flat airport, and its proximity min
 (there are none). The host now keeps its own copies in Elden Ring's world:
 
 - **Throws** (`kGEvThrow`): MGSV's release point and velocity, mapped through the anchor at the release, flown with MGSV's
-  gravity (9.8) through Elden Ring's collision (`cs_phys_world_cast_ray`, one ray per 1/60 s; at a hit two parallel rays give
+  gravity (9.8) through Elden Ring's collision (`cs_phys_world_cast_ray`, one ray per 1/60 s through ray_filter and Snake's
+  ground filter, the nearer hit -- `Puppet::CastWorld`, review 2026-10-31: ray_filter alone passed through the character-only
+  floors he stands on and a grenade dropped on Stormveil's scaffold went off on the ground below; at a hit two parallel rays give
   the surface normal): bounces (restitution 0.3, friction 0.65), rolls (3 m/s^2) and lies still (`er/ThrowLogic.h`, pure,
   `tests/test_host_throw.inc`). Drawn as a small lit olive ball. The matching `kGEvExplosion` (`pad[1]` = throw id) puts the
   blast -- damage and Elden Ring's pot effect (`Combat::BlastAt`) -- where our copy is. Fused throws (pad[0] >> 16: MGSV's
@@ -1302,6 +1431,10 @@ through `input virtualpad` + `press`):
   - `kHEvRested` (v10): `a = 0` a rest at a grace, `a = 1` a respawn (with `kHEvRespawn`): the guest refills Snake's ammo
     (Control hand-over, "Resting").
   - `kHEvTarnished` (v10): `a = 1` the player took the Tarnished (Tarnished mode), `a = 0` Snake is back.
+  - `kHEvClimb` (v15): Elden Ring climbs a ladder with the hidden Tarnished (`a` 1 started / again on a turn or a new pace, 0 ended;
+    `b` 0 up / 1 down; `v0[0]` m/s): Control hand-over, "Ladders".
+  - `kHEvMantle` (v15): Snake climbs onto (`b = 0`) / vaults over (`b = 1`) a ledge `a` cm high, the move lasting `v0[0]` s:
+    "Climb up and vault".
   - `kHEvWarped`: ER moved the player more than `resync_distance` by itself.
   - `kHEvDetonate` (v5): an Elden Ring enemy within a placed explosive's trigger radius (`b` = placed id), once.
 - **HP bar = Snake's life** (`mirror_life`): every frame HP = max(1, round(max HP × life / lifeMax)) (`combat::MirrorHp`); while

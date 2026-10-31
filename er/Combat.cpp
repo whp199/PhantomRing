@@ -1251,12 +1251,14 @@ namespace phantom::er::Combat
 				c.bigFrom = v;
 			} else if (a_w[2] == "share_mult") {
 				c.shareMult = v;
+			} else if (a_w[2] == "hurt_mult") {
+				c.hurtMult = std::clamp(v, 0.0f, 10.0f);  // Elden Ring's hits on Snake (docs/COMBAT.md "Elden Ring's hits on Snake")
 			} else if (a_w[2] == "speffect_template") {
 				c.speffectTemplate = static_cast<int>(v);
 				RestorePatches();  // the carriers are written again (from the template) by the next ladder hit
 			} else {
 				return "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|boss_lives|boss_from|big_from|share_mult|"
-				       "speffect_template <value>";
+				       "hurt_mult|speffect_template <value>";
 			}
 			return std::format("{} = {}", a_w[2], v);
 		}

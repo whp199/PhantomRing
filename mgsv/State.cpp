@@ -17,6 +17,7 @@ namespace phantom::guest::state
 		std::atomic<bool>          g_restart{ false };
 		std::atomic<bool>          g_treadmill{ true };
 		std::atomic<bool>          g_parked{ false };  // Tarnished mode (kHEvTarnished)
+		std::atomic<bool>          g_staged{ false };  // a climb / climb-up is under way (Climb.h)
 		std::atomic<bool>          g_buddyMissing{ false };
 	}
 
@@ -217,4 +218,6 @@ namespace phantom::guest::state
 	bool TreadmillEnabled() { return g_treadmill.load(); }
 	void SetParked(bool a_parked) { g_parked.store(a_parked); }
 	bool Parked() { return g_parked.load(); }
+	void SetStaged(bool a_staged) { g_staged.store(a_staged); }
+	bool Staged() { return g_staged.load(); }
 }

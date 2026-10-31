@@ -157,7 +157,7 @@ namespace phantom::er::Hud
 		auto&  link = Link::Get();
 		Inputs in;
 		in.now = Link::QpcToMs(Link::Qpc()) / 1000.0;
-		in.puppet = Puppet::Active();
+		in.puppet = Puppet::Active() || Puppet::ClimbVisual();  // Snake on a ladder (Elden Ring climbs): still Snake's screen
 		in.guestAlive = a_f.guestAlive;
 		in.guestAttached = link.AttachCount() > 0 && a_f.guestAlive;
 		in.guestStatus = link.GuestStatus();

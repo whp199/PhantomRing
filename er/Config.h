@@ -4,6 +4,7 @@
 // keys take the defaults below.
 
 #include "KbmMap.h"
+#include "MantleParams.h"
 
 #include <array>
 #include <cstdint>
@@ -202,6 +203,16 @@ namespace phantom::er
 		int              ladderPressDelayMs{ 100 };    // ...the puppet steps aside on the press, which reaches Elden Ring this much later
 		int              ladderWaitMs{ 1500 };         // ...until the climb starts (at most this long after the press)
 		int              ladderSettleMs{ 300 };        // ...and back this long after the Tarnished got off the ladder
+		// [Ladder] Snake climbs Elden Ring's ladders himself (protocol v15 kHEvClimb / kGuestClimbing, er/Ladder.h ClimbPace): Elden
+		// Ring still moves the hidden Tarnished up or down (the whole pad, its own camera), MGSV plays Snake's own ladder climb at
+		// its pace, and Snake's meshes are drawn where the Tarnished is on the ladder, facing it.
+		std::string      ladderSnake{ "on" };          // on: Snake drawn, the Tarnished hidden throughout | auto: Snake while MGSV plays the climb
+		                                               // (kGuestClimbing within ladder_guest_wait_ms), else the Tarnished | off: the Tarnished climbs (before 2026-10-31)
+		float            ladderClimbSpeed{ 1.2f };     // m/s told the guest until the Tarnished's own pace is measured
+		int              ladderGuestWaitMs{ 1500 };
+		float            ladderOffset[3]{ 0.0f, 0.0f, 0.0f };  // Snake drawn this far (m) toward the ladder, up, and right of the Tarnished's feet
+		int              ladderDescendPrompt{ 5010 };  // "Descend" (ActionButtonParam): the Tarnished is put where Elden Ring starts a descent ...
+		float            ladderTopStand{ 0.55f };      // ... this far (m) along the ladder's forward from its axis, facing that way; 0 = off
 
 		// [Puppet]
 		std::string hideMode{ "render_flag" };  // render_flag | fade | none
@@ -276,6 +287,27 @@ namespace phantom::er
 		float jumpAirStep{ 0.3f };     // m: a ledge's top this far above the feet in the air is landed on (the capsule catching an edge)
 		bool  jumpCameraHold{ true };  // the camera's height over Snake stays as before the jump while he is in the air (MGSV's own lift
 		                               // and fall of Snake, the guest's, never bob it)
+
+		// [Mantle] Snake climbs onto / vaults over Elden Ring's ledges (protocol v15 kHEvMantle / kGuestMantling, er/Mantle.h)
+		bool         mantle{ true };
+		MantleParams mantleParams;
+		bool         mantleY{ true };             // Y (no Elden Ring prompt up) at a ledge in front climbs it
+		std::string  mantleRunInto{ "low" };      // off | low (up to run_into_max) | all: running into a ledge climbs / vaults it
+		float        mantleRunIntoMax{ 1.1f };
+		float        mantleRunSpeed{ 3.0f };      // m/s Snake must be asking for (running) ...
+		float        mantleRunBlockedS{ 0.12f };  // ... into it this long
+		int          mantleWaitMs{ 300 };         // the move waits this long for MGSV's kGuestMantling, then goes without it
+		int          mantlePromptQuietMs{ 400 };  // Y this soon after one of Elden Ring's prompts was up is never a mantle
+		float        mantleBuddyClear{ 1.3f };    // ... nor with the buddy this near (Y mounts it in MGSV: right beside it)
+
+		// [Hints] corner hints the first few times Snake is stopped by something he could jump onto or climb
+		bool  hints{ true };
+		int   hintCount{ 3 };          // per kind (jump, climb up, vault) and session
+		float hintBlockedS{ 0.6f };    // walking into it this long
+
+		// [Jump] the pad button that jumps (the host swaps it with R3 in MGSV's pad while Snake plays; the guest's jump is R3)
+		std::uint16_t jumpButton{ 0x0080 };  // R3; 0x1000 A (then R3 = MGSV's A: crouch), 0x0040 L3 (then R3 = MGSV's L3: sprint)
+		std::string   jumpButtonName{ "R3" };
 
 		// [Axes] (UNVERIFIED conventions; confirmed live and pinned here)
 		float mirrorX{ -1 };         // Fox and Havok differ in handedness (verified live 2026-10-12)

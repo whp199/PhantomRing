@@ -1,5 +1,8 @@
 #include "Ladder.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace phantom::er
 {
 	LadderHandOver::Event LadderHandOver::Update(const Input& a_in)
@@ -82,6 +85,113 @@ namespace phantom::er
 		case LadderHandOver::Event::kAborted: return "aborted";
 		}
 		return "?";
+	}
+
+	int LadderMotion(int a_state)
+	{
+		switch (a_state) {
+		case 0:   // StartBottom: onto it at the bottom, going up
+		case 2:   // UpRight
+		case 3:   // UpLeft
+		case 6:   // EndTop: off it at the top
+			return 1;
+		case 1:   // StartTop: onto it at the top, going down
+		case 4:   // DownRight
+		case 5:   // DownLeft
+		case 7:   // EndBottom
+		case 14:  // CoastStart .. CoastLanding: the slide down
+		case 15:
+		case 16:
+		case 18:
+		case 20:
+			return -1;
+		default:
+			return 0;
+		}
+	}
+
+	ClimbPace::Out ClimbPace::Update(std::uint64_t a_nowMs, int a_state, float a_y, float a_defaultSpeed)
+	{
+		Out out;
+		// The measured pace: the Tarnished's vertical speed, eased (Elden Ring's climb moves him rung by rung).
+		if (haveY_ && a_nowMs > lastMs_ && std::isfinite(a_y)) {
+			const float dt = static_cast<float>(a_nowMs - lastMs_) / 1000.0f;
+			if (dt < 0.5f) {
+				const float v = std::fabs(a_y - lastY_) / dt;
+				const float k = 1.0f - std::exp(-dt / kSpeedTauS);
+				speed_ += (std::min(v, 20.0f) - speed_) * k;
+			}
+		}
+		if (std::isfinite(a_y)) {
+			haveY_ = true;
+			lastY_ = a_y;
+			lastMs_ = a_nowMs;
+		}
+		if (a_state == -1 && started_) {
+			return out;  // a frame of "none" between two of its states: nothing changes
+		}
+		int motion = LadderMotion(a_state);
+		movingSince_ = motion == 0 ? 0 : (movingSince_ ? movingSince_ : a_nowMs);
+		stillSince_ = motion != 0 ? 0 : (stillSince_ ? stillSince_ : a_nowMs);
+		if (started_ && motion == 0 && motionSent_ != 0 && a_nowMs - stillSince_ < kStillMs) {
+			motion = motionSent_;  // a moment's idle between two pushes: still climbing as far as MGSV's climb goes
+		}
+		const bool  warm = movingSince_ && a_nowMs - movingSince_ >= kWarmupMs;
+		const float speed = motion == 0 ? 0.0f : warm && speed_ > 0.05f ? speed_ : (moveSent_ > 0.0f ? moveSent_ : std::max(a_defaultSpeed, 0.0f));
+		auto        fill = [&] {
+			out.send = true;
+			out.on = true;
+			if (motion != 0) {
+				down_ = motion < 0;
+			}
+			out.down = down_;
+			out.speed = speed;
+			out.motion = motion;
+			motionSent_ = motion;
+			speedSent_ = speed;
+			moveSent_ = speed > 0.0f ? speed : moveSent_;
+			sentMs_ = a_nowMs;
+			pending_ = false;
+			++sent_;
+		};
+		if (!started_) {
+			started_ = true;
+			fill();
+			return out;
+		}
+		const bool turned = motion != motionSent_;
+		const bool paced = motion != 0 && speedSent_ > 0.0f && std::fabs(speed - speedSent_) > kPaceChange * speedSent_;
+		if (turned || pending_) {
+			if (!turned) {
+				pending_ = false;  // turned back within the gap: nothing to tell
+				return out;
+			}
+			if (a_nowMs - sentMs_ >= kMinGapMs) {
+				fill();
+			} else {
+				pending_ = true;
+			}
+			return out;
+		}
+		if (paced && a_nowMs - sentMs_ >= kPaceGapMs) {
+			fill();
+		}
+		return out;
+	}
+
+	ClimbPace::Out ClimbPace::End()
+	{
+		Out out;
+		if (started_) {
+			out.send = true;
+			out.on = false;
+			out.down = down_;
+			++sent_;
+		}
+		const auto sent = sent_;
+		*this = ClimbPace();
+		sent_ = sent;
+		return out;
 	}
 
 	std::string_view LadderStateName(int a_state)

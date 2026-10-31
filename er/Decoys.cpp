@@ -5,6 +5,7 @@
 #include "Calibration.h"
 #include "Combat.h"
 #include "Config.h"
+#include "Cqc.h"
 #include "DecoyLogic.h"
 #include "Game.h"
 #include "Link.h"
@@ -95,9 +96,11 @@ namespace phantom::er::Decoys
 			{
 				float from, down;
 			};
+			// Snake's ground filter (Puppet::CastWorld, ground only; review 2026-10-31): the floors only characters stand on count
+			// (ray_filter passed through Stormveil's scaffold and set the decoy on the ground below), an enemy's hit capsule doesn't.
 			for (const Try t : { Try{ 1.5f, 4.0f }, Try{ 1.5f, 40.0f }, Try{ 12.0f, 10.5f } }) {
 				Vec3 hit;
-				if (game::CastRay(a_d.pos + Vec3{ 0, t.from, 0 }, Vec3{ 0, -t.down, 0 }, hit, a_f.player.chr, Cfg().rayFilter)) {
+				if (Puppet::CastWorld(a_d.pos + Vec3{ 0, t.from, 0 }, Vec3{ 0, -t.down, 0 }, hit, a_f.player.chr, true)) {
 					if (std::abs(hit.y - a_d.pos.y) > 2.5f) {
 						Log::Info("decoys: decoy {} set down on Elden Ring's ground {:+.1f} m from where MGSV's apron put it", a_d.id, hit.y - a_d.pos.y);
 					}
@@ -226,6 +229,9 @@ namespace phantom::er::Decoys
 				if (Combat::Asleep(foe.chr)) {
 					continue;  // a sleeper sees nothing (and won't knock anything over)
 				}
+				// A boss walks into a decoy and pops it like anyone, but never stops to stare (review 2026-10-31: nothing checked, and
+				// a boss within 25 m of an active decoy froze 6 s of every 21 s); one CQC holds keeps CQC's bits.
+				const bool fooled = decoy::Fooled(false, Cqc::IsBossHp(foe.maxHp)) && !Cqc::IsHeld(foe.handle);
 				const float toSnake = combat::CapsuleDistance(foe.cap, snake);
 				// Walked into one: it pops (staring or not: a starer doesn't move, so it was there already -- it knocks it too).
 				Decoy*      best = nullptr;
@@ -238,6 +244,9 @@ namespace phantom::er::Decoys
 					const Vec3  chest = decoy::Chest(d.pos, c.decoyHeight);
 					if (decoy::PopsOn(combat::CapsuleDistance(foe.cap, chest), rules)) {
 						Pop(a_f, d, std::format("{} walked into it", foe.name));
+						continue;
+					}
+					if (!fooled) {
 						continue;
 					}
 					const Vec3  eye = foe.cap.b;  // top sphere centre: about the eyes
@@ -255,7 +264,7 @@ namespace phantom::er::Decoys
 					bestD = dist;
 					how = n;
 				}
-				if (!best || std::ranges::any_of(g_starers, [&](const Starer& s) { return s.handle == foe.handle; })) {
+				if (!best || !fooled || std::ranges::any_of(g_starers, [&](const Starer& s) { return s.handle == foe.handle; })) {
 					continue;
 				}
 				if (auto it = g_cooldown.find(foe.handle); it != g_cooldown.end() && a_now < it->second) {

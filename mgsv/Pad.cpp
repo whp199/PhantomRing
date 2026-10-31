@@ -34,6 +34,8 @@ namespace phantom::guest::pad
 		std::atomic<Source>        g_source{ Source::kNeutral };
 		std::atomic<bool>          g_blocked{ false };
 		std::atomic<bool>          g_parked{ false };
+		std::atomic<bool>          g_owned{ false };    // Climb.h: the guest's own pad (SetOwned)
+		std::atomic<std::int16_t>  g_ownedStickY{ 0 };
 		std::atomic<std::uint16_t> g_pulseButtons{ 0 };
 		std::atomic<ULONGLONG>     g_pulseUntil{ 0 };
 		std::atomic<std::uint64_t> g_polls{ 0 };
@@ -44,6 +46,15 @@ namespace phantom::guest::pad
 		std::atomic<std::uint32_t> g_jumpPresses{ 0 };
 		std::atomic<bool>          g_mgsvOwnsR3{ false };  // the game thread's word (SetMgsvOwnsR3) and when it last said it
 		std::atomic<std::uint64_t> g_mgsvOwnsR3At{ 0 };
+		// [Input] RtTapMs (MGSV's poll thread only): a short RT tap while aiming is held this long, LT with it.
+		ULONGLONG                  g_rtDownAt{ 0 };
+		bool                       g_rtWasDown{ false };
+		bool                       g_rtStretch{ false };
+		bool                       g_rtCounted{ false };
+		std::uint8_t               g_rtStretchLt{ 0 };
+		std::atomic<std::uint32_t> g_rtStretched{ 0 };
+		std::atomic<bool>          g_throwable{ false };  // the game thread's word (SetThrowableInHand) and when it last said it
+		std::atomic<std::uint64_t> g_throwableAt{ 0 };
 
 		// Boot automation's button sequence (Sequence()): step i holds its buttons/RT for its ms, one after the other.
 		std::mutex                       g_seqLock;
@@ -158,7 +169,10 @@ namespace phantom::guest::pad
 			g_polls.fetch_add(1, std::memory_order_relaxed);
 			XINPUT_GAMEPAD pad{};
 			bool           fromHost = false;
-			if (g_source.load(std::memory_order_acquire) == Source::kHost && !g_blocked.load(std::memory_order_acquire) &&
+			const bool owned = g_owned.load(std::memory_order_acquire);
+			if (owned) {
+				pad.sThumbLY = g_ownedStickY.load(std::memory_order_relaxed);  // a climb (Climb.h): nothing of the player's
+			} else if (g_source.load(std::memory_order_acquire) == Source::kHost && !g_blocked.load(std::memory_order_acquire) &&
 			    !g_parked.load(std::memory_order_acquire)) {
 				proto::PadState slot{};
 				if (link::HostAlive() && link::ReadPad(slot) && (slot.flags & proto::kPadConnected) && !(slot.flags & proto::kPadNeutral)) {
@@ -186,6 +200,35 @@ namespace phantom::guest::pad
 			}
 			const auto now = ::GetTickCount64();
 			IDroid(now, pad, fromHost);
+			if (cfg.rtTapMs > 0 && fromHost) {
+				// A quick throw: RT tapped while LT aims a support item (grenade, C4, decoy). MGSV threw on ~1 short press in 20 (live
+				// 2026-10-26; held ~1.5 s, 5 of 5): the press is held on to RtTapMs, and LT with it (a release of both at once would
+				// put the throwable away). A gun's tap is left alone (one shot).
+				const bool rtDown = pad.bRightTrigger > XINPUT_GAMEPAD_TRIGGER_THRESHOLD;
+				if (rtDown && !g_rtWasDown) {
+					g_rtDownAt = now;
+					g_rtStretch = logic::AimingTrigger(pad.bLeftTrigger) && g_throwable.load(std::memory_order_acquire) &&
+					              now - g_throwableAt.load(std::memory_order_acquire) < 250;
+					g_rtStretchLt = pad.bLeftTrigger;
+					g_rtCounted = false;
+				}
+				g_rtWasDown = rtDown;
+				if (g_rtStretch && now - g_rtDownAt < static_cast<ULONGLONG>(cfg.rtTapMs)) {
+					if (!rtDown) {
+						if (!g_rtCounted) {
+							g_rtCounted = true;
+							g_rtStretched.fetch_add(1, std::memory_order_relaxed);  // a tap shorter than RtTapMs
+						}
+						pad.bRightTrigger = 255;
+					}
+					pad.bLeftTrigger = std::max(pad.bLeftTrigger, g_rtStretchLt);
+				} else if (!rtDown) {
+					g_rtStretch = false;
+				}
+			} else {
+				g_rtWasDown = false;
+				g_rtStretch = false;
+			}
 			{
 				// The player's own presses (before our pulses go on top): Presses(), e.g. the dive (Dive.h).
 				const std::uint16_t own = fromHost ? pad.wButtons : 0;
@@ -307,6 +350,11 @@ namespace phantom::guest::pad
 
 	void SetBlocked(bool a_blocked) { g_blocked.store(a_blocked, std::memory_order_release); }
 	void SetParked(bool a_parked) { g_parked.store(a_parked, std::memory_order_release); }
+	void SetOwned(bool a_owned, std::int16_t a_stickY)
+	{
+		g_ownedStickY.store(a_owned ? a_stickY : std::int16_t(0), std::memory_order_relaxed);
+		g_owned.store(a_owned, std::memory_order_release);
+	}
 
 	void Pulse(std::uint16_t a_buttons, unsigned a_ms)
 	{
@@ -351,6 +399,14 @@ namespace phantom::guest::pad
 			}
 		}
 		return 0;
+	}
+
+	std::uint32_t RtTapsStretched() { return g_rtStretched.load(std::memory_order_relaxed); }
+
+	void SetThrowableInHand(bool a_inHand)
+	{
+		g_throwableAt.store(::GetTickCount64(), std::memory_order_release);
+		g_throwable.store(a_inHand, std::memory_order_release);
 	}
 
 	std::string DescribeIDroid()

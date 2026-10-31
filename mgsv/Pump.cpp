@@ -378,6 +378,22 @@ namespace phantom::guest::pump
 		// kBox: [Loadout] BoxPoster on Snake's first cardboard box (docs/GUEST.md 18.9). Only MGSV's item menu applies a poster
 		// (the var alone changes nothing on the box, and a mission load clears it): with the box worn (it is then the item the
 		// menu opens on), hold D-pad left and press X as often as the cycle needs, let go, check, take the box off (RT).
+		// MGSV can't save now: [Saves] Block, the file guards in place and Steam's storage swapped (an incomplete guard leaves saves
+		// live). What the guest changes in MGSV's own state that a save would keep -- MGSV's Auto-Aim Correction, the Phantom Cigar
+		// in an item slot, the box and its poster -- is changed only then (review 2026-10-31). The [Loadout] weapons are written
+		// either way: Snake needs them to play, and the sortie loadout is the player's to change back.
+		bool SavesGuarded()
+		{
+			const auto& c = Cfg();
+			return c.blockSaves && hidden::SavesBlocked() && saves::SteamGuarded();
+		}
+
+		std::string UnguardedWhy(std::string_view a_then = {})
+		{
+			return std::format("left as it is ({}){}", !Cfg().blockSaves ? "[Saves] Block = false: it would be saved" : "the save guards are incomplete: it could be saved",
+				a_then.empty() ? std::string() : std::format(" -- {}", a_then));
+		}
+
 		void BoxStep(const lua::Ctx& a_ctx, ULONGLONG a_now, ULONGLONG a_since)
 		{
 			const auto& c = Cfg();
@@ -391,6 +407,13 @@ namespace phantom::guest::pump
 				Enter(Boot::kCentre, a_now);
 			};
 			if (c.boxPoster.empty()) {
+				Enter(Boot::kCentre, a_now);
+				return;
+			}
+			if (!SavesGuarded()) {
+				// The poster goes to Mother Base and the box is handed over "in memory only" -- only true while MGSV can't save
+				// (review 2026-10-31).
+				Log::Info("boot: box poster: {}", UnguardedWhy());
 				Enter(Boot::kCentre, a_now);
 				return;
 			}
@@ -779,10 +802,7 @@ namespace phantom::guest::pump
 					// not enough (review): the file guards may be incomplete (InstallFileGuards) or the Steam swap incomplete
 					// (PollSteam kIncomplete), and the guest carries on with saves live. Both guards must really be in place.
 					if (!c.autoAim) {
-						const bool guarded = c.blockSaves && hidden::SavesBlocked() && saves::SteamGuarded();
-						Log::Info("boot: auto-aim correction: {}", guarded ? Call(a_ctx, "return PhantomRing.AutoAim(false)") :
-							!c.blockSaves ? std::string("left as it is ([Saves] Block = false: it would be saved)") :
-							                std::string("left as it is (the save guards are incomplete: it could be saved)"));
+						Log::Info("boot: auto-aim correction: {}", SavesGuarded() ? Call(a_ctx, "return PhantomRing.AutoAim(false)") : UnguardedWhy());
 					}
 					fulton::Reset("sandbox setup");  // its anchor soldiers are looked for again (FultonAnchor.cpp)
 					// ActorProxy v0 ([Proxies], docs/GUEST.md 20): the sandbox's soldiers and hostages, for the frame thread to place.
@@ -835,8 +855,9 @@ namespace phantom::guest::pump
 					Log::Info("boot: audio refresh: {}", Call(a_ctx, "return PhantomRing.AudioRefresh('boot')"));
 					if (c.cigarTimeSkip) {
 						// The Phantom Cigar in an item slot, so the player can smoke it from the item wheel (live pass B
-						// 2026-10-15: the player's save carried none).
-						Log::Info("boot: phantom cigar: {}", Call(a_ctx, "return PhantomRing.CigarItem()"));
+						// 2026-10-15: the player's save carried none). Only while MGSV can't save it (review 2026-10-31, as
+						// [Boot] AutoAim): with the guards incomplete it would land in the player's real loadout.
+						Log::Info("boot: phantom cigar: {}", SavesGuarded() ? Call(a_ctx, "return PhantomRing.CigarItem()") : UnguardedWhy("put it into an item slot yourself"));
 					}
 					Enter(Boot::kReady, a_now);
 					link::SetStatus(proto::Status::kReady, readyText());
@@ -909,7 +930,7 @@ namespace phantom::guest::pump
 						}
 						if (c.proxies && c.proxyAutoAim && !c.autoAim && a_now - g_boot.proxyAutoAimAt >= 1000) {
 							g_boot.proxyAutoAimAt = a_now;
-							const bool guarded = c.blockSaves && hidden::SavesBlocked() && saves::SteamGuarded();
+							const bool guarded = SavesGuarded();
 							const int  want = proxy::AutoAimWanted(guarded) ? 1 : 0;
 							if (guarded && want != g_boot.proxyAutoAim) {
 								Log::Info("boot: proxies: auto-aim correction {}", Call(a_ctx, want ? "return PhantomRing.AutoAim(true)" : "return PhantomRing.AutoAim(false)"));

@@ -4,7 +4,7 @@ NVG only darkens the picture: recreate it on Elden Ring's frame from the guest's
 layer); an option for Elden Ring levels / weapons to scale Snake's damage (2.12); the mist step-aside and the boss-bar-after-
 cutscene fix (both UNVERIFIED live); never build while the player plays (builds dropped Elden Ring to ~10 fps). -->
 
-# PhantomRing next-steps roadmap (written 2026-10-12, HEAD `654c760`; status rows updated 2026-10-26, 0.4.1-alpha)
+# PhantomRing next-steps roadmap (written 2026-10-12, HEAD `654c760`; status rows updated 2026-10-31, 0.5.0-alpha)
 
 Everything below comes from README (Status, Known issues, How to play), docs/DESIGN.md (§12–14c), HOST.md, GUEST.md, COMBAT.md, WINDOWS.md, docs/research/re-backlog.md, the code (`er/`, `mgsv/`, `protocol/`) and the git log. I worked read-only and did not touch the games, `build/` or `/dev/shm`.
 
@@ -33,6 +33,7 @@ and Margit's arena; details in docs/STATUS.md):**
 
 | # | Status | Evidence (live, both games) |
 |---|---|---|
+| 0.5.0 Getting over things (2026-10-31) | **DONE** (real MGSV + Elden Ring 1.17.2) | video feedback "Snake can't jump" / "switches back to the Tarnished to climb ladders" (protocol v15). **Ladders**: Snake climbs himself with MGSV's ladder climb (staged at an airport wall ladder in MGSV, looped every ~5.5 m), the Tarnished hidden: Fort Haight's 19 m tower +18.9 m in 17.8 s and -18.9 m in 18.8 s, Stormveil's 14.5 m ladder up and down; kGuestClimbing 33-34 ms after kHEvClimb. **Climb up / vault** (Y, or running into a low one): Church of Elleh 1.09 m wall (MGSV 16 ms after the press, on top in 1.24 s) and a 0.52 m vault (1.23 s, paced to MGSV's); Y at a fitting ledge is kept from MGSV (D-Walker 2.4 m away was mounted before). **Jump** uphill fixed (a jump up a slope ended after 2 cm): 1.21-1.22 m on 14 and 24 degree slopes. Hints in the corner. Open: the ladder loop's ~1 s seam, one climb-up move for every height, grass over Snake, C4 placed as he dies, D-Walker's footsteps |
 | 1.1 Tarnished mode | **DONE** | View + Start 1 s, 28 toggles in one session, 0 Elden Ring menus, 0 iDroids; a Flask of Crimson Tears as the Tarnished (74% -> 100%) -> Snake +2044 life; Snake back where the Tarnished stood. Torrent: the player's whistle (it is in Tools, not in a quick slot) summoned him at Stormhill, the chord refused while riding ("get off Torrent first"), Snake back after the dismount |
 | 1.2 Resupply | **DONE** | rest: `magazines 36:17->30; stocks 197->210`; respawn: `36:4->30; 184->210`, life 7801 (real MGSV's ammo component) |
 | 1.3 Fall watchdog | **DONE** | `falling 3.5 s, 60 m with no landing -> Snake dies of the fall`, respawn 13 s later |

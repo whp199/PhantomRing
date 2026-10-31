@@ -560,7 +560,7 @@ namespace phantom::guest::follow
 			const bool riding = lua.ridden != 0xFFFF || (lua.flags & state::kLVehicle);
 			const bool busy = (lua.flags & (state::kLMenu | state::kLDemo | state::kLDead | state::kLCqc)) != 0 || death::Down();
 			if (!g_enabled || !c.buddyFollow || c.buddyHorseFollowDistance <= 0.0f || riding || busy || g_playerHold.load(std::memory_order_acquire) ||
-				state::Parked()) {
+				state::Parked() || state::Staged()) {
 				return;
 			}
 			// A treadmill jump left it behind (it can't be moved with Snake): at once, unless it is right beside him.
@@ -681,7 +681,7 @@ namespace phantom::guest::follow
 			g_stuckSince = a_nowMs;
 		}
 		g_lastDist = dist;
-		if (!g_enabled || !c.buddyFollow || riding || busy || g_playerHold.load(std::memory_order_acquire) || state::Parked()) {
+		if (!g_enabled || !c.buddyFollow || riding || busy || g_playerHold.load(std::memory_order_acquire) || state::Parked() || state::Staged()) {
 			return;
 		}
 		if (!modeOurs) {

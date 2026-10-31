@@ -38,6 +38,9 @@ namespace phantom::er::InputBridge
 		std::atomic<bool>          g_promptLatch{ false };  // the prompt button belongs to ER until released
 		std::atomic<bool>          g_promptDeferred{ false };  // SetPrompt(.., deferred): the press goes to neither game
 		std::atomic<bool>          g_deferLatch{ false };      // ... and stays out of both until released
+		std::atomic<bool>          g_ledge{ false };           // SetLedge: a climb fits in front of Snake: a fresh press is the host's
+		std::atomic<bool>          g_ledgeLatch{ false };      // ... and stays out of MGSV's pad until released
+		std::atomic<std::uint32_t> g_ledgePresses{ 0 };
 		std::atomic<ULONGLONG>     g_erPressUntil{ 0 };        // PressForEr: Elden Ring alone sees the prompt button until then
 		DWORD                      g_erPressPacket{ 0x60000000 };
 		DWORD                      g_erPressRaw{ 0 };
@@ -143,6 +146,20 @@ namespace phantom::er::InputBridge
 		bool             g_lstickHeldOver{ false };
 		constexpr int    kStickDeadZone = 7849;          // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
 
+		// [Jump] button: while Snake plays, the chosen button and R3 trade places in MGSV's pad (the guest's jump is its R3). With
+		// A: A jumps (and selects in the call menu, uses in the wheels), R3 crouches; with L3: L3 jumps, R3 sprints. Not for the
+		// keyboard (its own keys), nor in MGSV's menus.
+		std::uint16_t SwapJump(std::uint16_t a_buttons)
+		{
+			constexpr std::uint16_t kR3 = XINPUT_GAMEPAD_RIGHT_THUMB;
+			const std::uint16_t     j = Cfg().jumpButton;
+			if (j == kR3 || j == 0 || Kbm::KeyboardInUse()) {
+				return a_buttons;
+			}
+			const bool hasJ = (a_buttons & j) != 0, hasR3 = (a_buttons & kR3) != 0;
+			return static_cast<std::uint16_t>((a_buttons & ~(j | kR3)) | (hasJ ? kR3 : 0) | (hasR3 ? j : 0));
+		}
+
 		void Publish(const XINPUT_STATE* a_state, bool a_connected)
 		{
 			if (g_publishLock.test_and_set(std::memory_order_acquire)) {
@@ -176,8 +193,8 @@ namespace phantom::er::InputBridge
 					}
 				} else {
 					if (g_prompt.load(std::memory_order_relaxed) || g_promptLatch.load(std::memory_order_relaxed) ||
-						g_deferLatch.load(std::memory_order_relaxed)) {
-						pad.buttons &= static_cast<std::uint16_t>(~Cfg().promptButton);  // ER's press, not MGSV's
+						g_deferLatch.load(std::memory_order_relaxed) || g_ledgeLatch.load(std::memory_order_relaxed)) {
+						pad.buttons &= static_cast<std::uint16_t>(~Cfg().promptButton);  // ER's press (or the host's climb), not MGSV's
 					}
 					if (g_maskEr.load(std::memory_order_relaxed)) {
 						// Start/View are Elden Ring's while Snake plays (its menu and map): MGSV opening its iDroid or pause
@@ -187,6 +204,7 @@ namespace phantom::er::InputBridge
 						if (g_guestStart.load(std::memory_order_relaxed)) {
 							pad.buttons |= XINPUT_GAMEPAD_START;
 						}
+						pad.buttons = SwapJump(pad.buttons);
 					}
 				}
 				pad.leftTrigger = g_ltHeldOver ? 0 : g.bLeftTrigger;
@@ -297,9 +315,13 @@ namespace phantom::er::InputBridge
 					if (button && (now & ~before & button) && g_prompt.load(std::memory_order_relaxed)) {
 						(g_promptDeferred.load(std::memory_order_relaxed) ? g_deferLatch : g_promptLatch).store(true, std::memory_order_relaxed);
 						g_promptPresses.fetch_add(1, std::memory_order_relaxed);
+					} else if (button && (now & ~before & button) && g_ledge.load(std::memory_order_relaxed)) {
+						g_ledgeLatch.store(true, std::memory_order_relaxed);  // the host's climb (SetLedge), not MGSV's action
+						g_ledgePresses.fetch_add(1, std::memory_order_relaxed);
 					} else if (!(now & button)) {
 						g_promptLatch.store(false, std::memory_order_relaxed);
 						g_deferLatch.store(false, std::memory_order_relaxed);
+						g_ledgeLatch.store(false, std::memory_order_relaxed);
 					}
 				} else {
 					// The pad went away (or a test press ended): nothing is held any more.
@@ -506,6 +528,8 @@ namespace phantom::er::InputBridge
 	}
 
 	void SetButtonsOnly(bool a_on) { g_buttonsOnly.store(a_on && g_installed, std::memory_order_relaxed); }
+	void SetLedge(bool a_ledge) { g_ledge.store(a_ledge && Cfg().promptButton != 0, std::memory_order_relaxed); }
+	std::uint32_t LedgePresses() { return g_ledgePresses.load(std::memory_order_relaxed); }
 
 	void SetGuestMenu(bool a_open) { g_guestMenu.store(a_open && g_installed, std::memory_order_relaxed); }
 	void PressForEr(unsigned a_ms) { g_erPressUntil.store(::GetTickCount64() + a_ms, std::memory_order_release); }

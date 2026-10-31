@@ -180,6 +180,11 @@ namespace phantom::guest::state
 	void SetParked(bool a_parked);
 	bool Parked();
 
+	// A climb or climb-up is under way (protocol v15, Climb.h): Snake is staged at real MGSV geometry, away from the sandbox on
+	// purpose -- no treadmill, jump, dive, buddy whistles, Fulton anchor or proxies meanwhile.
+	void SetStaged(bool a_staged);
+	bool Staged();
+
 	// The configured buddy isn't available in this save (not developed, dead, can't sortie).
 	void SetBuddyMissing(bool a_missing);
 	bool BuddyMissing();

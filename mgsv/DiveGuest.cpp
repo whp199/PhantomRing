@@ -31,7 +31,7 @@ namespace phantom::guest::dive
 		Facts f;
 		f.nowMs = ::GetTickCount64();
 		f.xPresses = pad::Presses(XINPUT_GAMEPAD_X);
-		f.eligible = a_ready && !a_riding && !(a_luaFlags & kBusy) && !menu::PauseOpen() && !state::Parked();
+		f.eligible = a_ready && !a_riding && !(a_luaFlags & kBusy) && !menu::PauseOpen() && !state::Parked() && !state::Staged();
 		f.standing = (a_luaFlags & state::kLStand) != 0;
 		f.crawl = (a_luaFlags & state::kLCrawl) != 0;
 		f.normal = (a_luaFlags & state::kLNormal) != 0;

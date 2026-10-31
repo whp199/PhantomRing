@@ -17,6 +17,7 @@
 #include "Horse.h"
 #include "Blast.h"
 #include "C4.h"
+#include "Climb.h"
 #include "Link.h"
 #include "Menu.h"
 #include "Log.h"
@@ -277,6 +278,10 @@ namespace phantom::guest::frame
 				case proto::kHEvDetonate:
 					placed::Detonate(e.b);  // an Elden Ring enemy walked into one of Snake's mines
 					break;
+				case proto::kHEvClimb:
+				case proto::kHEvMantle:
+					climb::OnHostEvent(e);  // v15: an Elden Ring ladder climb / climb-up / vault: MGSV's own move (Climb.h)
+					break;
 				default:
 					break;
 				}
@@ -405,6 +410,9 @@ namespace phantom::guest::frame
 			}
 			if (fulton::Anchored()) {
 				return "the Fulton anchor holds him";
+			}
+			if (state::Staged()) {
+				return "climbing (a ladder, a climb-up or a vault plays)";
 			}
 			if ((lf & state::kLVehicle) || a_vars.vehicleId != kNullId || a_lua.ridden != kNullId) {
 				return "riding";
@@ -540,7 +548,8 @@ namespace phantom::guest::frame
 				return;
 			}
 			const auto  centre = state::Centre();
-			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled() || state::Parked() || fulton::Anchored()) {
+			if (!a_ready || !centre || c.holdMode == HoldMode::kOff || !state::TreadmillEnabled() || state::Parked() || fulton::Anchored() ||
+				state::Staged()) {
 				return;
 			}
 			if (g_jump.Active()) {
@@ -783,7 +792,13 @@ namespace phantom::guest::frame
 		if (horse::RiddenMissed(g_frame, ::GetTickCount64(), root)) {
 			g_warpPending = false;  // a ridden D-Horse jump Snake didn't follow: the horse is back under him (Horse.cpp), nothing landed
 		}
-		g_odo.Update(odoRoot, dt, warpWindow && g_warpPending, c.teleportJump, c.velocitySmoothing);
+		if (state::Staged()) {
+			// A climb / climb-up plays at real MGSV geometry (Climb.h): none of it is Snake's motion for Elden Ring (whose own ladder
+			// or ledge moves the puppet), not the placements there and back either.
+			g_odo.Still(root);
+		} else {
+			g_odo.Update(odoRoot, dt, warpWindow && g_warpPending, c.teleportJump, c.velocitySmoothing);
+		}
 		g_lastRoot = root;
 
 		// Riding a buddy whose GameObject gives no position (D-Horse): its skin is the one under Snake (Skeleton.cpp).
@@ -820,6 +835,7 @@ namespace phantom::guest::frame
 		// Throws and placed explosives (docs/GUEST.md 18.8): the projectiles' lifetimes, the arc Snake aims, his mines.
 		const auto support = v.supportIndex < v.supportWeapons.size() ? v.supportWeapons[v.supportIndex] : std::uint16_t(0);
 		const auto aim = throwing::Observe(ready, g_frame, (v.buttons & addr::kPadHold) != 0, v.inventorySlot, support);
+		pad::SetThrowableInHand(ready && v.inventorySlot == addr::kSupportSlotInHand && support != 0);  // [Input] RtTapMs
 		placed::Update(ready, g_frame, root);
 		// C4's detonator (C4.cpp): MGSV's own button with C4 in hand, on foot, no menu.
 		c4::Update(ready, v.buttons, v.inventorySlot, support,
@@ -837,6 +853,11 @@ namespace phantom::guest::frame
 			.root = { root.x, root.y, root.z },
 			.yaw = yaw });
 		horse::Update(lua, ::GetTickCount64());  // [Buddy] HorseTreadmill: D-Horse's location object, before the treadmill may move it
+		// v15: Elden Ring's ladders and ledges with MGSV's own moves (Climb.h): staged at real MGSV geometry, the odometer still
+		const auto moves = climb::Update(a_sample, root, yaw, lua, ready, dt);
+		if (moves.placed) {
+			g_odo.Still(root);
+		}
 		Jump(a_sample, root, v, lua, ready);
 		Hold(a_sample, root, yaw, v, lua, ready);
 
@@ -885,6 +906,12 @@ namespace phantom::guest::frame
 		if (g_jump.Active()) {
 			f |= proto::kGuestJumping;  // v14: from the [Jump] press until he lands in MGSV (the host jumps the puppet on its rising edge)
 		}
+		if (moves.climbing) {
+			f |= proto::kGuestClimbing;  // v15: MGSV plays his ladder climb (kHEvClimb a = 1 .. back on the sandbox after a = 0)
+		}
+		if (moves.mantling) {
+			f |= proto::kGuestMantling;  // v15: MGSV plays his climb-up / vault (kHEvMantle .. back on the sandbox)
+		}
 		// First person: MGSV's own SUBJECT/BINOCLE status, or riding with the camera in the cockpit (RB while riding D-Walker:
 		// MGSV sets no status for it; its camera sits ~0.6 m in front of the walker's root, ~5 m behind in third person).
 		if ((lf & (state::kLSubject | state::kLBinocle)) || (riding && RidingFirstPerson(a_sample, root))) {
@@ -927,8 +954,11 @@ namespace phantom::guest::frame
 		SetV(s.rootPos, root);
 		s.rootYaw = yaw;
 		SetV(s.velocity, g_odo.Velocity());
-		std::copy_n(a_sample.pos, 3, s.camPos);
-		std::copy_n(a_sample.quat, 4, s.camQuat);
+		// While a climb plays MGSV's camera swings round the real ladder or wall: the one he had when it began is published.
+		if (!climb::PublishedCamera(root, s.camPos, s.camQuat)) {
+			std::copy_n(a_sample.pos, 3, s.camPos);
+			std::copy_n(a_sample.quat, 4, s.camQuat);
+		}
 		// MGSV's own projection when capture has seen it (exact); else the focal-length estimate.
 		const float projFov = capture::ProjectionFovY();
 		float fov = c.fovOverrideDeg > 0.0f ? c.fovOverrideDeg * std::numbers::pi_v<float> / 180.0f
@@ -979,7 +1009,9 @@ namespace phantom::guest::frame
 		}
 		if (lua.buddyPosValid && luaFresh) {
 			bf |= proto::kBuddyPosValid;
-			SetV(s.buddyPos, lua.buddyPos);
+			// Staged for a climb (Climb.h) Snake is far from the buddy in MGSV: it is published where it stands relative to where he
+			// stood on the sandbox, which is where the host had it (the host keeps it on Elden Ring's ground).
+			SetV(s.buddyPos, state::Staged() ? lua.buddyPos + (root - climb::Home()) : lua.buddyPos);
 		}
 		if (lua.buddyId != kNullId && (lua.ridden == lua.buddyId || (riding && v.vehicleId == lua.buddyId))) {
 			bf |= proto::kBuddyRidden;
@@ -1006,7 +1038,8 @@ namespace phantom::guest::frame
 			g_buddyYaw = yaw;  // ridden: it faces where Snake's root faces
 		}
 		s.buddyFlags = bf;
-		capture::NoteBuddy((bf & proto::kBuddyPosValid) != 0, s.buddyPos);
+		// Where the buddy really is in MGSV (its draws are told apart by it), not the place published while Snake is staged for a climb.
+		capture::NoteBuddy((bf & proto::kBuddyPosValid) != 0, lua.buddyPosValid ? &lua.buddyPos.x : s.buddyPos);
 		s.buddyObjectId = lua.buddyId;
 		s.buddyAmmo = v.buddyGearAmmo[0];
 		s.buddyYaw = lua.buddyYawValid ? lua.buddyYaw : g_buddyYaw;
@@ -1019,7 +1052,7 @@ namespace phantom::guest::frame
 		// ActorProxy v0 ([Proxies] Enabled, docs/GUEST.md 20): the pool soldiers to the nearest hostile Elden Ring characters, with
 		// the treadmill offset of exactly what was just published (rootPos - odo).
 		if (c.ProxiesRun()) {
-			const auto centre = ready ? state::Centre() : std::nullopt;
+			const auto centre = ready && !state::Staged() ? state::Centre() : std::nullopt;
 			if (centre) {
 				const Vec3 buddy{ s.buddyPos[0], s.buddyPos[1], s.buddyPos[2] };
 				proxy::OnFrame(root, s.odo, (bf & proto::kBuddyPosValid) ? &buddy : nullptr, *centre, ::GetTickCount64());

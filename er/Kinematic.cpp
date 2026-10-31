@@ -181,20 +181,30 @@ namespace phantom::er
 		return g;
 	}
 
-	RayFn BodyRays(RayFn a_ground, RayFn a_wall, RayFn a_wallAlso)
+	RayFn NearerOf(RayFn a_a, RayFn a_b)
 	{
-		return [ground = std::move(a_ground), wall = std::move(a_wall), also = std::move(a_wallAlso)](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
-			if (std::fabs(a_delta.y) > LengthXZ(a_delta)) {
-				return ground(a_from, a_delta, a_hit);
-			}
+		if (!a_b) {
+			return a_a;
+		}
+		return [a = std::move(a_a), b = std::move(a_b)](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
 			Vec3       h1, h2;
-			const bool b1 = wall(a_from, a_delta, h1);
-			const bool b2 = also && also(a_from, a_delta, h2);
+			const bool b1 = a(a_from, a_delta, h1);
+			const bool b2 = b(a_from, a_delta, h2);
 			if (!b1 && !b2) {
 				return false;
 			}
 			a_hit = b1 && (!b2 || Dot(h1 - a_from, h1 - a_from) <= Dot(h2 - a_from, h2 - a_from)) ? h1 : h2;
 			return true;
+		};
+	}
+
+	RayFn BodyRays(RayFn a_ground, RayFn a_wall, RayFn a_wallAlso)
+	{
+		return [ground = std::move(a_ground), walls = NearerOf(std::move(a_wall), std::move(a_wallAlso))](const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit) {
+			if (std::fabs(a_delta.y) > LengthXZ(a_delta)) {
+				return ground(a_from, a_delta, a_hit);
+			}
+			return walls(a_from, a_delta, a_hit);
 		};
 	}
 
@@ -349,11 +359,13 @@ namespace phantom::er
 					}
 				}
 				// The landing looks from 0.1 m above the feet (kFallStep: a fall's knee ray), a hop's or a jump's from its ledge catch:
-				// a ledge top the feet are just under is landed on (rising, only one above the take-off ground: the ground he left is no
-				// landing). A plain fall going up lands on nothing.
+				// a ledge top the feet are just under is landed on. Rising, only a top above where the feet end this frame: the ground
+				// he left, and ground ahead the feet rise past this frame (uphill, a curb, a step), is no landing -- the review's case:
+				// a jump up a 12-degree slope at 60 fps (6 at 30) "landed" on its first frame, 2 cm up, and R3 seemed to do nothing.
+				// A top he rises past is landed on as he comes down. A plain fall going up lands on nothing.
 				const float       lift = aimed ? a_params.stepUp + 0.05f : kFallStep + 0.05f;
 				const GroundProbe g = dy <= 0.0f || aimed ? LandingGround(pos, lift, dy, a_params, a_ray) : GroundProbe{};
-				if (g.supported && g.y <= pos.y + std::max(dy, 0.0f) + lift && (a_state.vy <= 0.0f || g.y > pos.y + 0.02f)) {
+				if (g.supported && g.y <= pos.y + std::max(dy, 0.0f) + lift && (a_state.vy <= 0.0f || g.y > pos.y + std::max(dy, 0.0f) + 0.02f)) {
 					r.landed = true;
 					r.landingSpeed = std::max(0.0f, -a_state.vy);
 					if (aimed) {

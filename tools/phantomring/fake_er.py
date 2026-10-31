@@ -128,6 +128,7 @@ class FakeHost:
 		self.placed: dict[int, tuple] = {}  # v5: kGEvPlaced ids still there (`pr er detonate <id>|all`)
 		self.dead = False  # `pr er die`: HostState kHostPlayerDead until `pr er respawn` (guest death tests)
 		self.tarnished = False  # `pr er tarnished 1`: Tarnished mode, no kHostPuppeting (the pad stays as given: the guest parks itself)
+		self.climbing = False  # `pr er climb 1`: an Elden Ring ladder climb under way (v15 kHEvClimb)
 		# --actors near (ActorProxy tests, docs/GUEST.md 20): the two actors stand still in Elden Ring at these offsets (MGSV x, z) from
 		# where Snake was at the first guest state, published the way the host maps them (rootPos + (point - odo) for a point fixed in
 		# odometer space), so treadmill jumps move them in MGSV's world exactly as they do with the real host. "fixed": the old
@@ -419,9 +420,9 @@ class FakeHost:
 		gone = " (fultoned: not published)" if self.actor_handles[i] in self.fultoned else ""
 		return 0, f"actor {i} handle {self.actor_handles[i]:#x} flags {self.actor_flags[i]:#x}{where}{gone}"
 
-	def host_event(self, typ, a: int, b: int) -> tuple[int, str]:
+	def host_event(self, typ, a: int, b: int, v0: list[float] | None = None) -> tuple[int, str]:
 		ev = proto.HostEvent(type=int(typ), a=a, b=b, frame=self.frame & 0xFFFFFFFF)
-		ev.v0[:] = [0.0, 0.0, 1.0]
+		ev.v0[:] = v0 if v0 is not None else [0.0, 0.0, 1.0]
 		ok = self.link.host_events.push(ev)
 		if ok and self.trace:
 			self.trace.write(f"# host {proto.enum_name(int(typ), HostEventType)} a={a} b={b} t={time.monotonic() - self.t0:.4f}\n")
@@ -434,7 +435,8 @@ class FakeHost:
 		match cmd:
 			case ["help"]:
 				return 0, ("fake_er canned commands: help, ping, status, peek player.pos, peek <addr>, hurt <er dmg>, heal <amount>, die, respawn, "
-					"rested 0|1, tarnished 0|1, placed, detonate <id>|all, actors, actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew")
+					"rested 0|1, tarnished 0|1, placed, detonate <id>|all, actors, actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew, "
+					"climb 1|0 [down] [speed m/s], mantle <cm> [vault] [secs]")
 			case ["actor", *rest]:
 				return self.actor_command(rest)
 			case ["actors"]:
@@ -465,6 +467,29 @@ class FakeHost:
 					return 1, "usage: tarnished 0|1"
 				self.tarnished = which == "1"
 				return self.host_event(HostEventType.Tarnished, int(which), 0)
+			case ["climb", which, *rest]:
+				# v15: an Elden Ring ladder climb started (1) / ended (0): b = 1 going down, v0[0] = its vertical speed (m/s; 0 = unknown,
+				# the guest climbs at MGSV's own pace). The guest plays MGSV's ladder climb meanwhile (kGuestClimbing).
+				if which not in ("0", "1"):
+					return 1, "usage: climb 1|0 [down] [speed m/s]"
+				down = "down" in rest
+				speed = 0.0
+				for w in rest:
+					if w != "down" and w != "up":
+						try:
+							speed = float(w)
+						except ValueError:
+							return 1, f"climb: bad speed {w!r}"
+				self.climbing = which == "1"
+				return self.host_event(HostEventType.Climb, int(which), 1 if down else 0, [speed, 0.0, 0.0])
+			case ["mantle", cm, *rest]:
+				# v15: Snake climbs onto (b = 0) / vaults over (b = 1) a ledge a cm high; v0[0] = the move's duration (s)
+				try:
+					height = int(cm, 0)
+					secs = next((float(w) for w in rest if w != "vault"), 0.0)
+				except ValueError:
+					return 1, "usage: mantle <cm> [vault] [secs]"
+				return self.host_event(HostEventType.Mantle, height, 1 if "vault" in rest else 0, [secs, 0.0, 0.0])
 			case ["die"]:
 				# What the real host does when the Tarnished dies: kHostPlayerDead from the death until the respawn.
 				self.dead = True

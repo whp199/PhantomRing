@@ -7,6 +7,7 @@
 #include "Camera.h"
 #include "Capture.h"
 #include "Cigar.h"
+#include "Climb.h"
 #include "Combat.h"
 #include "Cqc.h"
 #include "Config.h"
@@ -112,6 +113,13 @@ namespace phantom::guest
 			if (cmd == "boot") {
 				state::RequestBootRestart();
 				return "boot sequence restarted";
+			}
+			// v15: what the host's kHEvClimb / kHEvMantle do (queued for the game thread), or the state
+			if (cmd == "climb" || cmd.starts_with("climb ")) {
+				return climb::Command(cmd.substr(std::min<std::size_t>(cmd.size(), 6)), false) + "\n";
+			}
+			if (cmd == "mantle" || cmd.starts_with("mantle ")) {
+				return climb::Command(cmd.substr(std::min<std::size_t>(cmd.size(), 7)), true) + "\n";
 			}
 			if (cmd == "jump") {
 				// As if the [Jump] button went down (the game thread decides whether Snake can jump: the log says)
@@ -390,7 +398,8 @@ namespace phantom::guest
 				return dive::Describe();
 			}
 			if (cmd == "pad") {
-				return std::format("pad polls {}  offline {} (refused {} connections)", pad::Polls(), offline::Enabled(), offline::Refused());
+				return std::format("pad polls {}  offline {} (refused {} connections)  RT taps held to {} ms while aiming: {}", pad::Polls(), offline::Enabled(),
+					offline::Refused(), Cfg().rtTapMs, pad::RtTapsStretched());
 			}
 			if (std::string watchOut; watch::Command(cmd, watchOut)) {
 				return watchOut;

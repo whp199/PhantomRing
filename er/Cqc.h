@@ -27,6 +27,9 @@ namespace phantom::er::Cqc
 	void Tick(const Frame& a_frame);  // FrameBegin, after the events: ends holds
 	void OnPuppetStop();               // lets every held enemy go
 	bool IsHeld(std::uint64_t a_handle);  // CQC holds him now (his ChrIns+0x538 hold bits are ours: Stealth leaves him be)
+	// A boss by CQC's own rule (cqc::IsBoss: [Cqc] boss_hp / boss_bigness against the Tarnished's HP; an unknown max HP counts as
+	// one). Decoys, the box poster and the Fulton leave such an enemy be: none of them may freeze or take a boss.
+	bool IsBossHp(std::int32_t a_maxHp);
 
 	// Dev console: `cqc [status | grab | throw | choke | interrogate | release | on | off]` -- an action as if the guest had sent it
 	// (Snake's place and facing from the puppet), for testing without MGSV's controls.

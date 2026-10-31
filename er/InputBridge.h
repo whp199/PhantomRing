@@ -41,6 +41,12 @@ namespace phantom::er
 		// a_deferred (a ladder's "Climb" / "Descend", er/Ladder.h): the press is counted but kept from Elden Ring as well as from
 		// MGSV until released -- the host steps the puppet aside first and gives Elden Ring the press itself (Inject), as the
 		// Tarnished's own: pressed while the puppet held him, Elden Ring never started the descent (live).
+		// A climb up / vault fits in front of Snake now (er/Puppet.cpp, [Mantle] y; checked every ~100 ms): a fresh press of the prompt
+		// button is the host's (Snake climbs) and stays out of MGSV's pad until released. MGSV's Y there would mount D-Walker or
+		// D-Horse following a couple of metres away, or set off C4 in hand, before kHEvMantle reached it (live 2026-10-31: Y at a
+		// Stormveil fence mounted D-Walker). The guest presses MGSV's own Y for the move where it stages Snake.
+		void SetLedge(bool a_ledge);
+		[[nodiscard]] std::uint32_t LedgePresses();  // running count of such presses kept from MGSV
 		// MGSV's own menu is open (GuestState kGuestInMenu, [Input] guest_menu_owns_pad): MGSV gets the whole pad (Start,
 		// View, the prompt button too), Elden Ring a neutral one. Needs SetMode(true, false) as well.
 		void SetGuestMenu(bool a_open);

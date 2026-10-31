@@ -119,6 +119,14 @@ static void TestCqcResponses()
 	CHECK(cqc::IsBoss(4174, s, r));
 	CHECK(!cqc::IsBoss(1500, s, r));  // a late knight is still ordinary against him
 	CHECK(!cqc::IsBoss(400, s, r));
+	// Review 2026-10-31: decoys and the box poster freeze nobody CQC calls a boss (Margit near an active decoy stood still 6 s of
+	// every 21 s); a soldier still stares, a sleeper never does.
+	CHECK(!decoy::Fooled(false, cqc::IsBoss(4174, s, r)) && !decoy::Fooled(false, cqc::IsBoss(3000, s, r)));
+	CHECK(decoy::Fooled(false, cqc::IsBoss(400, s, r)) && !decoy::Fooled(true, cqc::IsBoss(400, s, r)));
+	{
+		Scaling early;  // before Combat's first tick: unknown -> a boss -> nobody frozen
+		CHECK(!decoy::Fooled(false, cqc::IsBoss(400, early, r)));
+	}
 	cqc::Rules noFloor = r;
 	noFloor.bossHp = 0;  // boss_hp = 0: Bigness alone, as before
 	CHECK(!cqc::IsBoss(4174, s, noFloor));

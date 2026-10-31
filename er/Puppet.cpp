@@ -11,8 +11,10 @@
 #include "DiveHop.h"
 #include "HitHook.h"
 #include "Hud.h"
+#include "InputBridge.h"
 #include "Link.h"
 #include "Log.h"
+#include "Mantle.h"
 #include "Mem.h"
 #include "Pacing.h"
 #include "PacingProbe.h"
@@ -22,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <numbers>
 
 #include <windows.h>
 
@@ -101,6 +104,11 @@ namespace phantom::er::Puppet
 		bool           g_hiddenForDeath{ false };  // the puppet stopped with the Tarnished still hidden (g_saved holds the originals)
 		Vec3           g_deathPos{};               // where the dying player was (er/Revival.h: a revival moves it)
 		bool           g_deathPosValid{ false };
+		// Ladders ([Ladder] snake, er/Ladder.h): the Tarnished stays hidden while Elden Ring climbs with him, and Snake is drawn at
+		// g_anchor (SetClimbAnchor) instead. g_saved keeps the originals meanwhile.
+		bool           g_climbWanted{ false };
+		bool           g_hiddenForClimb{ false };
+		std::uint8_t*  g_climbChr{ nullptr };
 		// Snake's jumps (protocol v14 kGuestJumping, the guest's [Jump] button): the flag last frame (a jump starts on its rising
 		// edge), the puppet's running velocity on the ground (the takeoff's), and counts for the log and `puppet`.
 		JumpEdge       g_jumpEdge;
@@ -108,6 +116,23 @@ namespace phantom::er::Puppet
 		std::uint64_t  g_jumps{ 0 };
 		std::uint64_t  g_jumpsRefused{ 0 };
 		bool           g_jumpRootWarned{ false };
+		// Climb up / vault ([Mantle], er/Mantle.h, protocol v15 kHEvMantle / kGuestMantling): Y at a ledge in front of Snake, or
+		// running into one, carries the kinematic puppet up and over it while MGSV plays its own move.
+		MantleRun      g_mantle;
+		MantlePlan     g_mantleWas;                // the last one (console, log)
+		std::uint64_t  g_mantles{ 0 }, g_mantlesRefused{ 0 }, g_mantlesGuest{ 0 }, g_mantlesRun{ 0 };
+		bool           g_yWasDown{ false };
+		bool           g_ledgeAhead{ false };      // LedgeAhead's last answer (InputBridge::SetLedge)
+		std::uint64_t  g_ledgePlanMs{ 0 };
+		std::uint64_t  g_promptAtMs{ 0 };          // one of Elden Ring's prompts was up then (a Y near it is Elden Ring's)
+		float          g_runBlockedS{ 0 };
+		std::uint64_t  g_runPlanMs{ 0 };
+		// [Hints]: walking into something Snake could jump onto, climb or vault -- the first few times, a corner hint how.
+		float          g_hintBlockedS{ 0 };
+		std::uint64_t  g_hintPlanMs{ 0 };
+		int            g_hintsShown[3]{};          // jump, climb up, vault
+		std::uint64_t  g_hintLastMs{ 0 };          // the last hint (any kind): the next waits kHintGapMs
+		constexpr std::uint64_t kHintGapMs = 20000;
 
 		Axes CurrentAxes()
 		{
@@ -325,7 +350,10 @@ namespace phantom::er::Puppet
 			g_dive.Reset();
 			g_jumpEdge.Reset((g.flags & proto::kGuestJumping) != 0);  // a jump under way when the puppet starts is not one to make
 			g_runVel = {};
-			if (!(g_hiddenForDeath && g_deathChr == p.chr)) {  // else still hidden by us: g_saved has the originals
+			g_mantle.Abort();
+			g_runBlockedS = g_hintBlockedS = 0;
+			g_yWasDown = (InputBridge::LastButtons() & Cfg().promptButton) != 0;  // a Y already down (the ladder's) is no climb
+			if (!(g_hiddenForDeath && g_deathChr == p.chr) && !(g_hiddenForClimb && g_climbChr == p.chr)) {  // else still hidden by us: g_saved has the originals
 				g_saved.renderBit = game::GetBit(p.chr + game::kChrFlags1C5, 0x08);
 				g_saved.transparencyMod = SafeRead<float>(p.chr + game::kChrTransparencyMod).value_or(0.0f);
 				// A sane opacity (a Mimic's Veil or a fade could be mid-way): put back as 1 if it isn't one.
@@ -333,6 +361,7 @@ namespace phantom::er::Puppet
 				g_saved.baseTransparency = std::isfinite(base) && base > 0.0f && base <= 1.0f ? base : 1.0f;
 			}
 			g_hiddenForDeath = false;
+			g_hiddenForClimb = false;
 			g_deathAt = 0;
 			g_saved.dataDebug = SafeRead<std::uint8_t>(p.data + game::kDataDebug).value_or(0);
 			Hide(p, true);
@@ -391,6 +420,8 @@ namespace phantom::er::Puppet
 				return;
 			}
 			g_active = false;
+			g_ledgeAhead = false;
+			InputBridge::SetLedge(false);  // Y is no climb any more
 			// Restore only on the same, still valid character; a swapped/unloaded one is the game's (its
 			// objects may be gone: the hooks just forget them, their vtable copies stay valid).
 			const bool same = a_f.player && a_f.player.chr == g_chr;
@@ -409,6 +440,10 @@ namespace phantom::er::Puppet
 			if (same) {
 				if (dying) {
 					g_hiddenForDeath = true;  // until the respawn (AfterPhysics) or the next puppet start
+				} else if (g_climbWanted && (g_holds & static_cast<std::uint8_t>(Hold::kLadder))) {
+					// A ladder: Snake is drawn on it, the Tarnished stays hidden (until the climb ends: Decide, or the next start).
+					g_hiddenForClimb = true;
+					g_climbChr = g_chr;
 				} else {
 					Hide(a_f.player, false);
 				}
@@ -602,6 +637,149 @@ namespace phantom::er::Puppet
 		}
 	}
 
+	namespace
+	{
+		// A climb up / vault may start: on foot, standing or crouched, not busy with something else of MGSV's.
+		const char* MantleBusy(const proto::GuestState& a_g)
+		{
+			if (g_riding) {
+				return "riding";
+			}
+			if ((a_g.flags & proto::kGuestProne) || a_g.stance == 2) {
+				return "prone";
+			}
+			if (a_g.flags & (proto::kGuestAiming | proto::kGuestThrowAim | proto::kGuestFirstPerson | proto::kGuestBinoculars)) {
+				return "aiming";
+			}
+			if (a_g.flags & (proto::kGuestCqc | proto::kGuestInBox | proto::kGuestDiving | proto::kGuestJumping | proto::kGuestInMenu)) {
+				return "busy (CQC, the box, a dive, a jump, MGSV's menu)";
+			}
+			if (!g_kin.grounded || g_kin.jumping || g_kin.hopping) {
+				return "in the air";
+			}
+			return nullptr;
+		}
+
+		// The buddy right beside him (MGSV world): Y is MGSV's (it mounts D-Walker / D-Horse).
+		bool BuddyNear(const proto::GuestState& a_g)
+		{
+			if ((a_g.buddyFlags & (proto::kBuddyPresent | proto::kBuddyPosValid)) != (proto::kBuddyPresent | proto::kBuddyPosValid) ||
+				(a_g.buddyFlags & proto::kBuddyRidden)) {
+				return false;
+			}
+			const float dx = a_g.buddyPos[0] - a_g.rootPos[0], dz = a_g.buddyPos[2] - a_g.rootPos[2];
+			return std::hypot(dx, dz) < Cfg().mantleBuddyClear;
+		}
+
+		void BeginMantle(const Frame& a_f, const MantlePlan& a_plan, const char* a_how)
+		{
+			++g_mantles;
+			g_mantle.Begin(a_plan, ::GetTickCount64());
+			g_mantleWas = a_plan;
+			g_runVel = {};
+			g_runBlockedS = 0;
+			g_hintBlockedS = 0;
+			const auto cm = static_cast<std::uint32_t>(std::lround(std::max(0.0f, a_plan.height) * 100.0f));
+			const bool vault = a_plan.kind == MantleKind::kVault;
+			PushHost(proto::kHEvMantle, cm, vault ? 1u : 0u, Vec3{ a_plan.duration, 0.0f, 0.0f }, a_f.index);
+			Log::Info("puppet: Snake {} a {:.2f} m {} {:.2f} m ahead ({}) -> kHEvMantle a={} b={} {:.2f} s, to ({:.2f}, {:.2f}, {:.2f}){} (mantle #{})",
+				vault ? "vaults over" : "climbs onto", a_plan.height, vault ? std::format("obstacle {:.2f} m deep", a_plan.depth) : std::string("ledge"),
+				std::max(0.0f, a_plan.face - Cfg().radius), a_how, cm, vault ? 1 : 0, a_plan.duration, a_plan.End().x, a_plan.End().y, a_plan.End().z,
+				vault ? std::format(", {:+.2f} m below where he was", a_plan.drop) : std::string(), g_mantles);
+		}
+
+		// Why a Y now would be no climb (nullptr: it may be one, if a ledge fits).
+		const char* MantleYRefusal(const Frame& a_f, const proto::GuestState& a_g, std::uint64_t a_nowMs)
+		{
+			const auto& cfg = Cfg();
+			if (a_f.prompt >= 0 || a_nowMs - g_promptAtMs < static_cast<std::uint64_t>(std::max(0, cfg.mantlePromptQuietMs))) {
+				return "one of Elden Ring's prompts is up (the Y is its)";
+			}
+			if (a_f.interacting || a_f.menuOpen) {
+				return "Elden Ring has the pad";
+			}
+			if (const char* busy = MantleBusy(a_g)) {
+				return busy;
+			}
+			if (BuddyNear(a_g)) {
+				return "the buddy is right here (Y mounts it)";
+			}
+			return nullptr;
+		}
+
+		// Is there a climb up / vault in front of Snake now that a Y would start? Asked every ~100 ms: while it holds, a fresh Y is the
+		// host's alone (InputBridge::SetLedge) -- MGSV's own Y there would mount the buddy following a couple of metres away or set
+		// off C4 in hand before kHEvMantle reached it (live 2026-10-31: Y at a Stormveil fence mounted D-Walker).
+		bool LedgeAhead(const Frame& a_f, const proto::GuestState& a_g, float a_heading, const KinematicParams& a_params, const RayFn& a_ray,
+			std::uint64_t a_nowMs)
+		{
+			const auto& cfg = Cfg();
+			if (!cfg.mantle || !cfg.mantleY || MantleYRefusal(a_f, a_g, a_nowMs)) {
+				return false;
+			}
+			return PlanMantle(g_kin.pos, RotY(a_heading, { 0.0f, 0.0f, 1.0f }), cfg.heightStand, cfg.mantleParams, a_params, a_ray, true).kind !=
+			       MantleKind::kNone;
+		}
+
+		// Y with no prompt of Elden Ring's up: a climb up / vault if there is a ledge in front that fits (MGSV's own Y: its action
+		// button, which climbs and vaults in MGSV). Nothing in front, or nothing that fits: the press stays MGSV's alone.
+		void TryMantleY(const Frame& a_f, const proto::GuestState& a_g, float a_heading, const KinematicParams& a_params, const RayFn& a_ray,
+			std::uint64_t a_nowMs)
+		{
+			const auto& cfg = Cfg();
+			const char* why = MantleYRefusal(a_f, a_g, a_nowMs);
+			if (why) {
+				Log::Debug("puppet: Y -- no climb: {}", why);
+				return;
+			}
+			const auto plan = PlanMantle(g_kin.pos, RotY(a_heading, { 0.0f, 0.0f, 1.0f }), cfg.heightStand, cfg.mantleParams, a_params, a_ray, true);
+			if (plan.kind == MantleKind::kNone) {
+				if (plan.ledge && (++g_mantlesRefused <= 10 || g_mantlesRefused % 20 == 0)) {
+					Log::Info("puppet: Y at a ledge {:.2f} m ahead -- no climb: {}{} (refused #{})", std::max(0.0f, plan.face - cfg.radius), plan.why,
+						plan.height > 0.0f ? std::format(" (its top {:.2f} m up)", plan.height) : std::string(), g_mantlesRefused);
+				}
+				return;
+			}
+			BeginMantle(a_f, plan, "Y");
+		}
+
+		// [Hints]: what to say for the obstacle Snake keeps walking into (nothing when it fits none, or that kind was said enough).
+		void Hint(const MantlePlan& a_plan, std::uint64_t a_nowMs)
+		{
+			const auto& cfg = Cfg();
+			// One hint per encounter: live 2026-10-31 the three of a kind went out in three seconds at the first wall (planned once a
+			// second while he kept pushing into it), and none at the next.
+			if (g_hintLastMs && a_nowMs - g_hintLastMs < kHintGapMs) {
+				return;
+			}
+			const bool  jumpable = cfg.jump && a_plan.ledge && a_plan.height >= cfg.mantleParams.minHeight &&
+			                      a_plan.height <= cfg.jumpApex + cfg.jumpAirStep - 0.15f;
+			std::string text;
+			int         kind = -1;
+			if (cfg.mantle && a_plan.kind == MantleKind::kVault && g_hintsShown[2] < cfg.hintCount) {
+				kind = 2;
+				text = cfg.mantleRunInto != "off" && a_plan.height <= cfg.mantleRunIntoMax ? "Y: vault over -- or run into it" : "Y: vault over";
+			} else if (cfg.mantle && a_plan.kind == MantleKind::kClimb && jumpable && g_hintsShown[0] < cfg.hintCount) {
+				kind = 0;
+				text = std::format("{}: jump onto it -- Y: climb up", cfg.jumpButtonName);
+			} else if (cfg.mantle && a_plan.kind == MantleKind::kClimb && g_hintsShown[1] < cfg.hintCount) {
+				kind = 1;
+				text = "Y: climb up";
+			} else if (!cfg.mantle && jumpable && g_hintsShown[0] < cfg.hintCount) {
+				kind = 0;
+				text = std::format("{}: jump onto it", cfg.jumpButtonName);
+			}
+			if (kind < 0) {
+				return;
+			}
+			++g_hintsShown[kind];
+			g_hintLastMs = a_nowMs;
+			Hud::Notify(text, Hud::Tone::kInfo);
+			Log::Info("puppet: hint \"{}\" (Snake walked into a {:.2f} m {} {:.2f} m ahead; hint {} of {})", text, a_plan.height,
+				a_plan.kind == MantleKind::kVault ? "obstacle" : "ledge", std::max(0.0f, a_plan.face - cfg.radius), g_hintsShown[kind], cfg.hintCount);
+		}
+	}
+
 	bool Usable(std::string* a_why)
 	{
 		const auto& a = Addr();
@@ -644,7 +822,16 @@ namespace phantom::er::Puppet
 		}
 		// Not while dying: the dead bit clears seconds before Elden Ring's respawn, and a puppet started then would
 		// stand Snake up (kHEvRespawn) in the middle of the death fade.
-		const bool playerOk = a_f.player && a_f.inGame && !a_f.dead && !g_deathAt;
+		// Nor with no HP: a save Elden Ring wrote while the Tarnished was dying loads him at 0 HP, dead bit clear, under its "Choose
+		// revival location" screen (README Known issues: Snake took over under it and the pad played him). A living player never
+		// has 0 (the puppet's NoDead keeps 1). UNVERIFIED live: the HP such a load shows was not read.
+		static bool zeroHpLogged = false;
+		const bool  zeroHp = a_f.player && a_f.inGame && !g_active && game::Hp(a_f.player) <= 0;
+		if (zeroHp && !zeroHpLogged) {
+			Log::Info("puppet: the Tarnished has 0 HP (a revival screen after a load?) -- Snake waits, Elden Ring keeps the pad");
+		}
+		zeroHpLogged = zeroHp;
+		const bool playerOk = a_f.player && a_f.inGame && !a_f.dead && !g_deathAt && !zeroHp;
 		const bool allowed = Cfg().puppet && g_holds == 0 && Usable();
 		if (g_active) {
 			std::string_view why;
@@ -679,6 +866,20 @@ namespace phantom::er::Puppet
 			Log::Info("puppet: back on -- carrying out Snake's earlier death");
 			KillForGuest(a_f);
 		}
+		if (g_hiddenForClimb && !g_active) {
+			const bool same = a_f.player && a_f.player.chr == g_climbChr;
+			if (same && g_deathAt && g_deathChr == g_climbChr) {
+				// He died on the ladder (an arrow, a fall off it): hidden as for any death, Snake fading at the ladder (g_anchor).
+				g_hiddenForDeath = true;
+				g_hiddenForClimb = false;
+			} else if (!same) {
+				g_hiddenForClimb = false;  // another character (a load): Elden Ring's as it made it
+			} else if (!g_climbWanted) {
+				Hide(a_f.player, false);  // Tarnished mode on the ladder, MGSV gone, [Ladder] snake auto without the guest's climb
+				g_hiddenForClimb = false;
+				Log::Info("puppet: the Tarnished shows again ({})", Held(Hold::kTarnished) ? "Tarnished mode" : "no Snake to draw on the ladder");
+			}
+		}
 	}
 
 	void OnWorldShift(const Vec3& a_delta)
@@ -686,6 +887,7 @@ namespace phantom::er::Puppet
 		// Not "Elden Ring moved the player by itself": its whole world moved (32 / 40 m steps, VERIFIED live riding).
 		g_lastSet += a_delta;
 		KinematicShift(g_kin, a_delta);  // the place, and a jump's takeoff height (its landing's fall damage)
+		g_mantle.Shift(a_delta);
 		g_unstick.Shift(a_delta);
 		g_fallWatch.Shift(a_delta.y);
 	}
@@ -703,7 +905,8 @@ namespace phantom::er::Puppet
 		// Elden Ring moved the character itself (grace, elevator, cutscene warp, being shoved): follow.
 		const Vec3 now = game::Position(p);
 		if (Length(now - g_lastSet) > cfg.resyncDistance) {
-			Log::Info("puppet: ER moved the player {:.2f} m by itself; re-anchoring", Length(now - g_lastSet));
+			Log::Info("puppet: ER moved the player {:.2f} m by itself; re-anchoring{}", Length(now - g_lastSet), g_mantle.Active() ? " (the climb up ends)" : "");
+			g_mantle.Abort();
 			g_kin.pos = now;
 			g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
 			g_kin.underRefusedS = 0;
@@ -859,6 +1062,63 @@ namespace phantom::er::Puppet
 		params.jumpAirStep = cfg.jumpAirStep;
 		params.jumpAirControl = cfg.jumpAirControl;
 		const RayFn ray = BodyRay(p.chr);
+		const auto  nowMs = ::GetTickCount64();
+		if (a_f.prompt >= 0) {
+			g_promptAtMs = nowMs;
+		}
+		const bool yDown = (InputBridge::LastButtons() & cfg.promptButton) != 0;
+		const bool yEdge = yDown && !g_yWasDown;
+		g_yWasDown = yDown;
+		if (g_mantle.Active()) {
+			// A climb up / vault under way: the puppet follows its path (checked against Elden Ring's world when it was planned);
+			// Snake's own motion, jumps and dives wait until it is over.
+			const auto phase = g_mantle.Current();
+			bool       done = false;
+			const auto at = g_mantle.Update(nowMs, (g.flags & proto::kGuestMantling) != 0, static_cast<std::uint64_t>(std::max(0, cfg.mantleWaitMs)), &done);
+			if (phase == MantleRun::Phase::kWaiting && g_mantle.Current() != MantleRun::Phase::kWaiting) {
+				Log::Info("puppet: the {} starts {} ms after kHEvMantle -- {}", Name(g_mantle.Plan().kind), g_mantle.WaitedMs(),
+					g_mantle.GuestPlayed() ? "MGSV plays it (kGuestMantling)" : std::format("MGSV didn't say it plays it within {} ms (no kGuestMantling)", cfg.mantleWaitMs));
+				g_mantlesGuest += g_mantle.GuestPlayed() ? 1 : 0;
+			}
+			if (at) {
+				g_kin.pos = *at;
+			}
+			g_kin.vy = 0.0f;
+			g_kin.airS = 0.0f;
+			g_kin.jumping = g_kin.hopping = false;
+			g_kin.ceilingEscape = false;
+			g_kin.underRefusedS = 0;
+			if (done) {
+				g_kin.grounded = true;
+				g_kin.groundY = g_kin.pos.y;
+				g_unstick.Reset();
+				Log::Info("puppet: {} done at ({:.2f}, {:.2f}, {:.2f})", Name(g_mantleWas.kind), g_kin.pos.x, g_kin.pos.y, g_kin.pos.z);
+			}
+			g_fallWatch.Reset();
+			game::SetPosition(p, g_kin.pos);
+			g_lastSet = g_kin.pos;
+			game::SetYaw(p, ErYawForHeading(heading, g_anchor.axes));
+			g_anchor.pe = g_kin.pos;
+			g_anchor.pm = GuestRoot(g);
+			PacingProbe::OnMoved(a_f, g_kin.pos, step);
+			return;
+		}
+		if (nowMs - g_ledgePlanMs >= 100) {
+			g_ledgePlanMs = nowMs;
+			const bool ledge = LedgeAhead(a_f, g, heading, params, ray, nowMs);
+			if (ledge != g_ledgeAhead) {
+				g_ledgeAhead = ledge;
+				InputBridge::SetLedge(ledge);
+				Log::Debug("puppet: {}", ledge ? "a ledge in front fits: Y is the host's (a climb)" : "no ledge in front: Y is MGSV's");
+			}
+		}
+		if (yEdge && cfg.mantle && cfg.mantleY) {
+			TryMantleY(a_f, g, heading, params, ray, nowMs);
+			if (g_mantle.Active()) {
+				g_anchor.pm = GuestRoot(g);
+				return;  // from the next frame on, the move
+			}
+		}
 		if (jumpEdge) {
 			TryJump(g, params, ray);
 		}
@@ -917,6 +1177,29 @@ namespace phantom::er::Puppet
 			g_wallFrames += blocked ? 1 : 0;
 			g_walls += blocked && !g_wasBlocked ? 1 : 0;
 			g_wasBlocked = blocked;
+		}
+		{
+			// Running into a ledge ([Mantle] run_into): Snake climbs or vaults it as with Y; and the hints ([Hints]) the first few
+			// times he walks into one he could get over.
+			const float dt = std::clamp(a_f.dt, 1.0f / 240.0f, 0.1f);
+			const float asked = LengthXZ(step) / dt;
+			const bool  free = !MantleBusy(g) && !a_f.interacting;
+			g_runBlockedS = r.blocked && asked >= cfg.mantleRunSpeed && free ? g_runBlockedS + dt : 0.0f;
+			if (cfg.mantle && cfg.mantleRunInto != "off" && g_runBlockedS >= cfg.mantleRunBlockedS && nowMs - g_runPlanMs >= 150) {
+				g_runPlanMs = nowMs;
+				const auto plan = PlanMantle(g_kin.pos, step, cfg.heightStand, cfg.mantleParams, params, ray, true);
+				if (plan.kind != MantleKind::kNone && (cfg.mantleRunInto == "all" || plan.height <= cfg.mantleRunIntoMax)) {
+					++g_mantlesRun;
+					BeginMantle(a_f, plan, "running into it");
+				}
+			}
+			g_hintBlockedS = r.blocked && asked >= 0.5f && free && cfg.hints ? g_hintBlockedS + dt : 0.0f;
+			if (!g_mantle.Active() && g_hintBlockedS >= cfg.hintBlockedS && nowMs - g_hintPlanMs >= 1000 &&
+				std::min({ g_hintsShown[0], g_hintsShown[1], g_hintsShown[2] }) < cfg.hintCount) {
+				g_hintPlanMs = nowMs;
+				g_hintBlockedS = 0.0f;
+				Hint(PlanMantle(g_kin.pos, step, cfg.heightStand, cfg.mantleParams, params, ray, true), nowMs);
+			}
 		}
 		if (r.blocked && LengthXZ(step) > 1e-3f && ::GetTickCount64() - g_lastBump > 400) {
 			++g_bumps;
@@ -989,6 +1272,9 @@ namespace phantom::er::Puppet
 			const ULONGLONG now = ::GetTickCount64();
 			if (g_hiddenForDeath && !g_active && a_f.player.chr == g_deathChr) {
 				Hide(a_f.player, true);  // keep it hidden through the death (the game re-sets the bit around warps)
+			}
+			if (g_hiddenForClimb && !g_active && a_f.player.chr == g_climbChr) {
+				Hide(a_f.player, true);  // ...and through a ladder's climb
 			}
 			if (g_killedByGuest && a_f.dead) {
 				g_killConfirmed = true;
@@ -1159,6 +1445,18 @@ namespace phantom::er::Puppet
 		KillForGuest(a_f);
 	}
 
+	bool CastWorld(const Vec3& a_from, const Vec3& a_delta, Vec3& a_hit, const std::uint8_t* a_ignore, bool a_groundOnly)
+	{
+		const BodyFilters f = Filters();
+		const RayFn       ground = [&](const Vec3& a_f, const Vec3& a_d, Vec3& a_h) { return BodyCast(a_f, a_d, a_h, a_ignore, f.ground, f.keep, f.layers); };
+		if (a_groundOnly) {
+			return ground(a_from, a_delta, a_hit);
+		}
+		const std::uint32_t ray = Cfg().rayFilter;
+		const RayFn world = [&](const Vec3& a_f, const Vec3& a_d, Vec3& a_h) { return game::CastRay(a_f, a_d, a_h, a_ignore, ray); };
+		return NearerOf(world, f.ground != ray || f.keep || f.layers != game::kCastRayLayers ? ground : RayFn{})(a_from, a_delta, a_hit);
+	}
+
 	bool          Active() { return g_active; }
 	const Anchor& CurrentAnchor() { return g_anchor; }
 	bool          Riding() { return g_active && g_riding; }
@@ -1182,6 +1480,14 @@ namespace phantom::er::Puppet
 		g_holds = static_cast<std::uint8_t>(a_on ? (g_holds | bit) : (g_holds & ~bit));
 	}
 	bool Held(Hold a_reason) { return (g_holds & static_cast<std::uint8_t>(a_reason)) != 0; }
+	void SetClimbVisual(bool a_on) { g_climbWanted = a_on; }
+	void SetClimbAnchor(const Anchor& a_anchor)
+	{
+		if (!g_active) {
+			g_anchor = a_anchor;
+		}
+	}
+	bool ClimbVisual() { return g_climbWanted && g_hiddenForClimb && !g_active; }
 
 	std::string SetMotion(std::string_view a_mode, const Frame& a_f)
 	{
@@ -1211,6 +1517,52 @@ namespace phantom::er::Puppet
 		return Describe();
 	}
 
+	std::string MantleCommand(const std::vector<std::string>& a_w, const Frame& a_f)
+	{
+		auto&             cfg = Cfg();
+		const std::string sub = a_w.size() > 1 ? a_w[1] : "status";
+		if (sub == "on" || sub == "off") {
+			cfg.mantle = sub == "on";
+		} else if (sub == "run" && a_w.size() > 2 && (a_w[2] == "off" || a_w[2] == "low" || a_w[2] == "all")) {
+			cfg.mantleRunInto = a_w[2];
+		} else if (sub == "hints" && a_w.size() > 2 && a_w[2] == "reset") {
+			g_hintsShown[0] = g_hintsShown[1] = g_hintsShown[2] = 0;
+			g_hintLastMs = 0;
+		} else if (sub == "plan" || sub == "go") {
+			if (!g_active || g_rootMotion || !a_f.player || a_f.player.chr != g_chr) {
+				return "mantle: Snake isn't playing (kinematic motion)";
+			}
+			const float heading = a_w.size() > 2 ? std::strtof(a_w[2].c_str(), nullptr) * std::numbers::pi_v<float> / 180.0f
+			                                     : MgsvHeading(a_f.guest.rootYaw, g_anchor.axes) + g_anchor.delta;
+			KinematicParams params;
+			params.radius = cfg.radius;
+			params.stepUp = cfg.stepUp;
+			params.snapDown = cfg.snapDown;
+			params.chestHeight = cfg.chestHeight;
+			params.bodyHeight = cfg.ceiling ? StanceHeight(a_f.guest) : 0.0f;
+			params.groundProbes = cfg.groundProbes;
+			const auto plan = PlanMantle(g_kin.pos, RotY(heading, { 0.0f, 0.0f, 1.0f }), cfg.heightStand, cfg.mantleParams, params, BodyRay(a_f.player.chr), true);
+			std::string out = std::format("facing {:.0f} deg from ({:.2f}, {:.2f}, {:.2f}): {} -- {}{}", heading * 180.0f / std::numbers::pi_v<float>, g_kin.pos.x,
+				g_kin.pos.y, g_kin.pos.z, Name(plan.kind), plan.kind == MantleKind::kNone ? plan.why : "fits",
+				plan.ledge ? std::format(" (face {:.2f} m ahead, top {:.2f} m up{}, {:.2f} s)", std::max(0.0f, plan.face - cfg.radius), plan.height,
+								 plan.kind == MantleKind::kVault ? std::format(", {:.2f} m deep, drop {:+.2f} m", plan.depth, plan.drop) : std::string(), plan.duration)
+				           : std::string());
+			if (sub == "go" && plan.kind != MantleKind::kNone) {
+				BeginMantle(a_f, plan, "console");
+				out += " -> started";
+			}
+			return out;
+		} else if (sub != "status") {
+			return "mantle [plan [yaw_deg] | go [yaw_deg] | on|off | run off|low|all | hints reset]";
+		}
+		return std::format("[Mantle] {} (Y {}, run_into {} up to {:.2f} m at {:.1f} m/s); {} climbs up / vaults ({} running into it, {} MGSV played, {} refused){}; "
+		                   "a ledge ahead now: {} ({} Y presses kept from MGSV); hints {}/{}/{} of {} (jump/climb/vault, [Hints] {}); last: {} {:.2f} m",
+			cfg.mantle ? "on" : "off", cfg.mantleY ? "on" : "off", cfg.mantleRunInto, cfg.mantleRunIntoMax, cfg.mantleRunSpeed, g_mantles, g_mantlesRun,
+			g_mantlesGuest, g_mantlesRefused, g_mantle.Active() ? std::format(", {} under way", Name(g_mantle.Plan().kind)) : std::string(),
+			g_ledgeAhead ? "yes" : "no", InputBridge::LedgePresses(), g_hintsShown[0],
+			g_hintsShown[1], g_hintsShown[2], cfg.hintCount, cfg.hints ? "on" : "off", Name(g_mantleWas.kind), g_mantleWas.height);
+	}
+
 	std::string Describe()
 	{
 		if (!g_active) {
@@ -1232,10 +1584,13 @@ namespace phantom::er::Puppet
 			return std::format("puppet off ({}{})", held, usable ? "ready to start" : why);
 		}
 		return std::format("puppet ON {} frames ({} motion, moved {:.2f} of {:.2f} m asked, catch-up owed {:.2f} m, unstuck {} (stalls {}), walls {} ({} frames), "
-		                   "ceilings {}, breakers {}, Snake jumped {} ({} refused), hops {} (refused {}, no move {}){}): delta {:.3f}, feet ({:.2f}, "
+		                   "ceilings {}, breakers {}, Snake jumped {} ({} refused), hops {} (refused {}, no move {}){}, climbs up / vaults {} ({} running, {} played by MGSV, "
+		                   "{} refused{}), hints {}/{}/{}): delta {:.3f}, feet ({:.2f}, "
 		                   "{:.2f}, {:.2f}) {} vy {:.2f}, ground {:.2f}, riding {}, dropped jumps {}, host falls {}, endless falls {}, HP {} (bar {:.0f}%), heals {} ({} HP){}\n{}; {}",
 			g_frames, g_rootMotion ? "root" : "kinematic", g_movedM, g_wantedM, LengthXZ(g_rmDebt), g_unstick.Count(), g_unstick.Stalls(), g_walls, g_wallFrames, g_ceilings, g_bumps,
-			g_jumps, g_jumpsRefused, g_hops, g_hopsRefused, g_hopsNoMove, Cfg().hop ? "" : " [hop off]", g_anchor.delta, g_kin.pos.x, g_kin.pos.y, g_kin.pos.z,
+			g_jumps, g_jumpsRefused, g_hops, g_hopsRefused, g_hopsNoMove, Cfg().hop ? "" : " [hop off]", g_mantles, g_mantlesRun, g_mantlesGuest,
+			g_mantlesRefused, g_mantle.Active() ? std::format(", {} now", Name(g_mantle.Plan().kind)) : std::string(), g_hintsShown[0], g_hintsShown[1],
+			g_hintsShown[2], g_anchor.delta, g_kin.pos.x, g_kin.pos.y, g_kin.pos.z,
 			g_kin.grounded ? "grounded" : g_kin.jumping ? "jumping" : g_kin.hopping ? "hopping" : "airborne",
 			g_kin.vy, g_kin.groundY, g_riding ? (g_horse ? "D-Horse" : "a vehicle") : "no", g_dropped, g_falls, g_endlessFalls, g_hpLast, g_hpFrac * 100.0f, g_heals, g_healedHp,
 			g_killedByGuest ? ", DYING for Snake" : (g_deathPending ? ", death pending" : ""),

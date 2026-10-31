@@ -206,6 +206,16 @@ blast's fixed token stay as they are (the headshot's kill guarantee is counted i
 Re-read twice a second while Snake plays; every change is logged (`progression (level): rune level 15, right hand 18000000 (+0 of
 25) -> Snake's damage x0.87`). `pr er progression [off|level|weapon|both]` shows the readout and switches the mode live.
 
+**Elden Ring's hits on Snake: one scale, `[Combat] hurt_mult`** (1 by default; `pr er "combat set hurt_mult 0.6"` tries one live).
+Players of the video found camps deadly: each soldier's hit costs Snake ~11.6% of his life (their report), because with
+`hurt_share` it costs him the share of the Tarnished's max HP it takes (~61 HP of a level-15 Tarnished's 522). That is Elden
+Ring's own balance for the Tarnished: nine hits kill either. What makes a camp harder for Snake is that he has no flask and no roll: MGSV's recovery waits ~2.4 s after
+each hit (`[Combat] RegenGate`, guest), so three soldiers swinging together (~2 hits/s between them) take his life in ~4-5 s,
+where the Tarnished would drink and roll away. The default stays 1 (Elden Ring's numbers, as with every boss, and a Vigor point
+counts exactly as for the Tarnished); `hurt_mult` scales every Elden Ring hit on Snake -- not falls (their own speeds) -- and the
+HP the Tarnished lost in Tarnished mode or on a ladder, carried over: 0.6 makes a soldier's hit ~7% (15 hits), 0.5 ~5.8%
+(18 hits). The README's "Life" paragraph says so.
+
 **Vigor needs no option.** Elden Ring's hits already cost Snake the share of the Tarnished's max HP they take (`hurt_share`,
 `combat::HurtForGuest`): a Margit hit of 300 is 52% of a 572 HP Tarnished's bar and so 52% of Snake's life; with 1200 HP it is 25%
 of either. Every Vigor point, HP talisman or Crimson Tears upgrade makes Snake exactly as much tougher as the

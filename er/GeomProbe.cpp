@@ -148,6 +148,13 @@ namespace phantom::er::GeomProbe
 				a.hp = SafeRead<std::int16_t>(param + kParamHp).value_or(-1);
 				a.pos = p;
 				a.posValid = true;
+				// The rotation rows sit above the translation (+0x220/+0x230/+0x240): the third is the ladder's forward, the way a
+				// climber on it faces (live 2026-10-31, Stormveil AEG219_067: (0.891, 0, 0.454); Elden Ring's own end of the climb
+				// at the top stood 0.52 m along it from the ladder's axis).
+				float f[3]{};
+				if (SafeReadBytes(ins + g_posOffset - 0x10, f, sizeof(f)) && std::isfinite(f[0]) && std::isfinite(f[2])) {
+					a.fwd = { f[0], f[1], f[2] };
+				}
 				out.push_back(a);
 			}
 		}
@@ -285,8 +292,8 @@ namespace phantom::er::GeomProbe
 			std::string out = std::format("{} ladders (param is_ladder) within {:.0f} m of ({:.1f}, {:.1f}, {:.1f}):", list.size(), radius, me.x, me.y, me.z);
 			for (std::size_t i = 0; i < list.size() && i < 40; ++i) {
 				const auto& a = list[i];
-				out += std::format("\n {:2} {} at ({:.2f}, {:.2f}, {:.2f}) {:.1f} m (dy {:+.1f}) ins {}", i, a.name, a.pos.x, a.pos.y, a.pos.z, Length(a.pos - me),
-					a.pos.y - me.y, static_cast<void*>(a.ins));
+				out += std::format("\n {:2} {} at ({:.2f}, {:.2f}, {:.2f}) {:.1f} m (dy {:+.1f}) fwd ({:.3f}, {:.3f}) ins {}", i, a.name, a.pos.x, a.pos.y, a.pos.z,
+					Length(a.pos - me), a.pos.y - me.y, a.fwd.x, a.fwd.z, static_cast<void*>(a.ins));
 			}
 			return out;
 		}

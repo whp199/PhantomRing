@@ -21,20 +21,11 @@ namespace phantom
 				// tell a restarted guest from the old one (er/Link.cpp) and the launcher find it.
 				return static_cast<std::uint32_t>(::GetCurrentProcessId());
 			}
-			static constexpr unsigned char kCode[] = { 0x0f, 0x05, 0xc3 };  // syscall; ret
-			void* stub = nullptr;
-			for (std::uint64_t a = 0x710000000000ull; a < 0x7f0000000000ull && !stub; a += 0x10000000000ull) {
-				stub = ::VirtualAlloc(reinterpret_cast<void*>(a), 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-			}
-			if (!stub) {
-				return 0;
-			}
-			std::memcpy(stub, kCode, sizeof(kCode));
-			::FlushInstructionCache(::GetCurrentProcess(), stub, sizeof(kCode));
-			std::int64_t ret;
-			__asm__ volatile("call *%[stub]" : "=a"(ret) : "a"(39LL), [stub] "r"(stub) : "rcx", "r11", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory");
-			::VirtualFree(stub, 0, MEM_RELEASE);
-			return ret > 0 ? static_cast<std::uint32_t>(ret) : 0;
+			// Under Wine the plugins find it in /proc first (er/Link.cpp HostUnixPid, mgsv/Link.cpp UnixPidFromProc) and pass
+			// it in a_envOverride. The raw getpid syscall stub that used to be here crashed both games under Proton
+			// experimental-11.0-20261027b (a syscall from outside Wine's modules is handled as a Windows one), so
+			// unknown stays 0: the tools then go by heartbeats alone.
+			return 0;
 		}
 	}
 
