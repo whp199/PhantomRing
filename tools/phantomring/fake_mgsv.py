@@ -73,7 +73,11 @@ walking (the odometer stands still), and a climb pose (triangle: Snake's upper m
 walk cycle at the climb's pace, still at speed 0). kHEvMantle (a = height cm, b = 0 climb up / 1 vault, v0[0] = duration s) sets
 GuestFlags.Mantling for that long, 50 ms after it (MGSV's own reaction), with no walking meanwhile. Both are logged.
     !climbplay on|off   off: kHEvClimb is logged but no climb is played (no GuestFlags.Climbing: a guest that can't)
+    !climbhome <ms>     after kHEvClimb a = 0 Snake stays on MGSV's ladder this long (GuestFlags.Climbing, no walking) before he
+                        is home: the real guest takes him back from its airport ladder 0.18-0.23 s after the end (default 0)
     !mantleplay on|off  off: kHEvMantle is logged but no GuestFlags.Mantling (the host times the move out by itself)
+    !projmesh on|off    (v13, --model humanoid) each grenade in flight is drawn as a rigid kOwnerProjectile draw of a 9 cm grenade
+                        stand-in, as the real guest tags MGSV's own (the host learns it and draws it on its flown copy); default on
 
     python3 -m phantomring.fake_mgsv [--seconds N] [--create] [--summary out.json] [--quiet]
 """
@@ -171,6 +175,12 @@ def matrix_3x4(x, y, z, yaw=0.0) -> tuple[float, ...]:
 	return (c, 0.0, s, x, 0.0, 1.0, 0.0, y, -s, 0.0, c, z)
 
 
+
+# Every button MGSV's pad carried a press of (`!status`: "presses X 2 down 1"): what the host kept from MGSV shows by its absence
+# (the quick item's View + X / View + D-pad down never reach MGSV, docs/HOST.md "Flasks and the quick item").
+PAD_BUTTON_NAMES = ((0x0001, "up"), (0x0002, "down"), (0x0004, "left"), (0x0008, "right"), (0x0010, "start"), (0x0020, "back"),
+	(0x0040, "l3"), (0x0080, "r3"), (0x0100, "lb"), (0x0200, "rb"), (0x1000, "a"), (0x2000, "b"), (0x4000, "x"), (0x8000, "y"))
+
 class FakeGuest:
 	def __init__(self, link: proto.Link, quiet: bool, model: str = "triangle", stand: bool = False, hud: str = ""):
 		self.link = link
@@ -220,10 +230,11 @@ class FakeGuest:
 			"buttonsSeen": 0, "neutralFrames": 0, "hostStates": 0, "hostFlagsSeen": 0, "hostEvents": {},
 			"actorsSeen": 0, "fireSent": 0, "buddyFireSent": 0, "diedSent": 0, "drawFramesPublished": 0,
 			"hudFramesPublished": 0, "renderMessages": 0, "renderDropped": 0, "consoleServed": 0, "warps": 0,
-			"rideFrames": 0, "lifeMin": LIFE_MAX, "healed": 0, "backPresses": 0, "startPresses": 0, "menuButtons": 0,
+			"rideFrames": 0, "lifeMin": LIFE_MAX, "healed": 0, "backPresses": 0, "startPresses": 0, "menuButtons": 0, "pressCounts": {},
 		}
 		self.last_packet = None
 		self.grenades = []        # thrown, flying over the fake's flat ground (v5)
+		self.proj_meshes = True   # v13: (--model humanoid) each grenade in flight drawn as a kOwnerProjectile draw (`!projmesh on|off`)
 		self.mines = {}           # placed id -> dict (v5)
 		self.clouds = []          # lingering gas / smoke reports
 		self.next_id = 1
@@ -241,6 +252,8 @@ class FakeGuest:
 		self.climb = None         # v15: kHEvClimb a=1 -> {"down", "speed", "since", "phase"} until a=0 (GuestFlags.Climbing)
 		self.mantle = None        # v15: kHEvMantle -> {"vault", "height", "start", "end"} (GuestFlags.Mantling from start to end)
 		self.climb_play = True    # !climbplay on|off
+		self.climb_home_ms = 0    # !climbhome <ms>: still staged this long after kHEvClimb a = 0
+		self.climb_home_until = 0.0
 		self.mantle_play = True   # !mantleplay on|off
 		self.climbing = self.mantling = False  # this frame: GuestFlags.Climbing / Mantling
 		self.buddy = "walker"     # --buddy / !buddy walker|horse
@@ -332,6 +345,9 @@ class FakeGuest:
 				st["maxThumbLX"] = max(st["maxThumbLX"], lx)
 				st["buttonsSeen"] |= pad.buttons
 				pressed = pad.buttons & ~self.last_buttons
+				for bit, name in PAD_BUTTON_NAMES:
+					if pressed & bit:
+						st["pressCounts"][name] = st["pressCounts"].get(name, 0) + 1
 				if pressed & 0x0020:  # Back/View: MGSV opens its iDroid with it
 					st["backPresses"] += 1
 					self.log("pad: Back pressed (MGSV would open its iDroid)")
@@ -391,7 +407,10 @@ class FakeGuest:
 				else:
 					was = self.climb
 					self.climb = None
-					self.log(f"host: kHEvClimb a=0 -> off the ladder{(' after %.1f s' % (t - was['since'])) if was else ''}")
+					if was and self.climb_home_ms > 0 and self.climb_play:
+						self.climb_home_until = t + self.climb_home_ms / 1000.0
+					self.log(f"host: kHEvClimb a=0 -> off the ladder{(' after %.1f s' % (t - was['since'])) if was else ''}"
+						f"{(', home in %d ms' % self.climb_home_ms) if was and self.climb_home_ms > 0 and self.climb_play else ''}")
 			elif ev.type == HostEventType.Mantle:
 				# v15: Snake climbs onto / vaults over an Elden Ring ledge: MGSV plays its matching move for v0[0] s.
 				dur = max(0.1, float(ev.v0[0]))
@@ -417,8 +436,12 @@ class FakeGuest:
 			self.log(f"mantle over ({'vault' if self.mantle['vault'] else 'climb up'}, {self.mantle['height']:.2f} m) -> GuestFlags.Mantling off")
 			self.mantle = None
 		mantling = self.mantle is not None and self.mantle_play and t >= self.mantle["start"]
-		climbing = self.climb is not None and self.climb_play
-		if climbing:
+		going_home = self.climb is None and t < self.climb_home_until  # the real guest's way back from its ladder
+		if self.climb_home_until and self.climb is None and t >= self.climb_home_until:
+			self.climb_home_until = 0.0
+			self.log("home from MGSV's ladder -> GuestFlags.Climbing off")
+		climbing = (self.climb is not None and self.climb_play) or going_home
+		if climbing and self.climb is not None:
 			# The climb cycle's phase at its pace (one cycle per ~0.6 m of rungs).
 			self.climb["phase"] += dt * self.climb["speed"] / 0.6 * 2 * math.pi
 		busy = climbing or mantling or (self.mantle is not None and self.mantle_play)  # MGSV's move holds Snake (no walking)
@@ -588,7 +611,8 @@ class FakeGuest:
 					f"{'PARKED (Tarnished mode), ' if self.parked else ''}menu {'open' if self.in_menu else 'closed'}, "
 					f"{('CLIMBING %s at %.2f m/s, ' % ('down' if self.climb['down'] else 'up', self.climb['speed'])) if self.climb else ''}"
 					f"{('MANTLING (%s %.2f m), ' % ('vault' if self.mantle['vault'] else 'climb up', self.mantle['height'])) if self.mantle else ''}"
-					f"pad: Back {st['backPresses']} Start {st['startPresses']} in-menu presses {st['menuButtons']}, events {st['hostEvents']}")
+					f"pad: Back {st['backPresses']} Start {st['startPresses']} in-menu presses {st['menuButtons']}, "
+					f"presses {' '.join(f'{k} {v}' for k, v in sorted(st['pressCounts'].items())) or 'none'}, events {st['hostEvents']}")
 			return self.combat_command(cmd.split())
 		try:
 			return 0, luasubset.run_chunk(chunk, self.env)
@@ -600,9 +624,15 @@ class FakeGuest:
 			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !grab <action> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
 			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off !binoculars on|off "
-			"!climbplay on|off !mantleplay on|off")
+			"!climbplay on|off !climbhome <ms> !mantleplay on|off")
 		if not w:
 			return 0, usage
+		if w[0] == "projmesh" and len(w) > 1 and w[1] in ("on", "off"):
+			self.proj_meshes = w[1] == "on"
+			return 0, f"grenades in flight {'drawn as kOwnerProjectile draws' if self.proj_meshes else 'not drawn'} (--model humanoid only)"
+		if w[0] == "climbhome" and len(w) > 1:
+			self.climb_home_ms = max(0, int(float(w[1])))
+			return 0, f"after kHEvClimb a = 0 Snake is home {self.climb_home_ms} ms later (GuestFlags.Climbing and no walking until then)"
 		if w[0] == "climbplay" and len(w) > 1:
 			self.climb_play = w[1] == "on"
 			return 0, f"ladder climb {'played' if self.climb_play else 'NOT played'} on kHEvClimb (GuestFlags.Climbing)"
@@ -904,7 +934,11 @@ class FakeGuest:
 	def publish_draw_list(self, riding: bool):
 		if self.humanoid:
 			walker = (0.0, -1.0, 0.0) if riding else (1.6 * math.cos(self.yaw) - 0.4 * math.sin(self.yaw), 0.0, -1.6 * math.sin(self.yaw) - 0.4 * math.cos(self.yaw))
-			draws, mats, _ = self.humanoid.draw(self.climb_anim_time(), self.yaw, walker)
+			# v13: MGSV's own draws of a grenade in flight, tagged kOwnerProjectile as the real guest's [Capture] ProjectileMeshes does (the
+			# host learns the mesh from them and draws it on its flown copy; `!projmesh off`: none).
+			projectiles = [((g["pos"][0] - self.root[0], g["pos"][1] - self.root[1], g["pos"][2] - self.root[2]), 9.0 * g["t"])
+				for g in self.grenades if not g["landed"]] if self.proj_meshes else []
+			draws, mats, _ = self.humanoid.draw(self.climb_anim_time(), self.yaw, walker, projectiles)
 			payload = proto.build_draw_list(self.frame, self.root, self.yaw, draws, mats)
 			self.link.write_draw_slot(self.draw.back, self.frame, payload)
 			self.draw.publish()

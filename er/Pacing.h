@@ -39,7 +39,9 @@ namespace phantom::er
 
 		// Draw_Pre: this frame's draw list (records + matrices relative to Snake's root, DRAW CONTRACT), blended. False:
 		// smoothing off or nothing to blend; the caller takes the newest list as before.
-		bool Draws(const Frame& a_frame, std::vector<proto::DrawRecord>& a_records, std::vector<float>& a_matrices, std::uint64_t& a_frameOut);
+		// a_yawOut: the anchorYaw (Snake's root yaw in MGSV) of the list the result is closest to.
+		bool Draws(const Frame& a_frame, std::vector<proto::DrawRecord>& a_records, std::vector<float>& a_matrices, std::uint64_t& a_frameOut,
+			float* a_yawOut = nullptr);
 
 		std::string Command(const std::vector<std::string>& a_words);
 		std::string Describe();

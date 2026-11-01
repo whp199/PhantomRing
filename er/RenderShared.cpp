@@ -114,7 +114,7 @@ namespace phantom::er::render
 		}
 		set(a_c.lightDir, lightDir, intensity);
 		set(a_c.lightColor, lightColor, rc.exposure);
-		set(a_c.ambientUp, ambUp, 0);
+		set(a_c.ambientUp, ambUp, rc.minAmbient);  // w: stage C's minimum light (PSGbuffer's RT4)
 		set(a_c.ambientDown, ambDown, 0);
 		a_c.output[0] = 0;
 		a_c.output[1] = rc.hdrPaperWhite;

@@ -31,7 +31,7 @@ cbuffer FrameCB : register(b0)
 	float4 gCamPos;       // xyz
 	float4 gLightDir;     // xyz to the light (ER world); w = intensity
 	float4 gLightColor;   // rgb; w = exposure
-	float4 gAmbientUp;    // rgb sky ambient
+	float4 gAmbientUp;    // rgb sky ambient; w stage C: [Render] min_ambient
 	float4 gAmbientDown;  // rgb ground ambient
 	float4 gOutput;       // x encoding (0 sRGB, 1 none, 2 PQ/HDR10, 3 scRGB), y paper white nits, z debug view, w dissolve (0 solid .. 1 gone)
 	float4 gDepth;        // Elden Ring scene depth test: x on, y its near plane, zw its size / back-buffer size
@@ -506,7 +506,9 @@ GbufOut PSGbuffer(VSOut i, bool front : SV_IsFrontFace)
 	o.m = float4(saturate(s.metal * gMat.z), gloss, gGbuf.z, gGbuf.y);
 	o.a = float4(saturate(s.albedo * gGbuf.w), gGbuf.x);
 	o.x = float2(0, 0);
-	o.e = float4(0, 0, 0, 0);
+	// [Render] min_ambient: Elden Ring's emissive materials fill RT4 (their pipelines write it, every other opaque one leaves 0) and its
+	// lighting adds it unlit -- a floor of light on Snake in a dark tower at night (0 = off).
+	o.e = float4(o.a.rgb * gAmbientUp.w, 0);
 	float view = gOutput.z;
 	if (view > 0.5) {
 		// Debug views through ER's lighting: 1 flat grey albedo, 2 no normal map, 6 SRM as albedo.

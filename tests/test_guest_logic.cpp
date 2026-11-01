@@ -416,9 +416,31 @@ static void TestTransforms()
 		const auto still = LeadPoint({ 1, 0, 2 }, { 0.5f, 0, 0.5f }, 1.2f, 8.0f, 1.0f);
 		CHECK(Near(still.x, 1) && Near(still.z, 2));
 		const auto capped = LeadPoint({ 0, 0, 0 }, { 0, 0, 9.0f }, 1.2f, 8.0f, 1.0f);
+		// A Snake just starting (1.5 m/s): at least 5 m ahead (a closer order is one MGSV's walker takes and ignores); standing: none.
+		const auto start = LeadPoint({ 0, 0, 0 }, { 1.5f, 0, 0 }, 0.8f, 8.0f, 1.0f, 5.0f);
+		CHECK(std::fabs(start.x - 5.0f) < 1e-4f && std::fabs(start.z) < 1e-4f);
+		const auto idle = LeadPoint({ 0, 0, 0 }, { 0.2f, 0, 0 }, 0.8f, 8.0f, 1.0f, 5.0f);
+		CHECK(std::fabs(idle.x) < 1e-4f);
+		const auto fast = LeadPoint({ 0, 0, 0 }, { 0, 0, 9.0f }, 1.2f, 8.0f, 1.0f, 5.0f);  // still capped
+		CHECK(std::fabs(fast.z - 8.0f) < 1e-4f);
 		CHECK(Near(capped.z, 8.0, 1e-4));
 	}
 
+	// One kGEvMelee per MGSV strike (README Known issues, the punch's second ~25 HP; live 2026-10-31): the stamp is the frame the
+	// strike began, the attack id stays after it -- a held RT, a grab, a choke or an interrogation re-read every frame send
+	// nothing more; a new stamp with an attack is the next strike; the first look and attack 0 never send.
+	{
+		StrikeEdge e;
+		CHECK(!e.Update(45506, 80));  // under way when the guest attached
+		int sent = 0;
+		for (int frame = 0; frame < 600; ++frame) {
+			sent += e.Update(45506, 80);  // RT held 10 s: the punch, then the hold, choke, interrogation -- no new strike
+		}
+		CHECK(sent == 0);
+		CHECK(e.Update(48671, 80) && !e.Update(48671, 80));  // the next press: one event
+		CHECK(!e.Update(48700, 0));                           // a stamp with no attack
+		CHECK(e.Update(48738, 83) && e.Update(48805, 80));    // a combo: kick, punch -- one each
+	}
 	// The host's puppet starts (Placed.cpp re-announces Snake's mines to each one): off, on, on, off, on = 2 starts.
 	{
 		RisingEdges starts;
@@ -427,6 +449,30 @@ static void TestTransforms()
 		CHECK(starts.Update(true) == 1);
 		CHECK(starts.Update(false) == 1);
 		CHECK(starts.Update(true) == 2);
+	}
+	// Placed explosives after a death (Placed.cpp): dropped from the death until the puppet runs again with nobody dying.
+	{
+		using C = AfterDeath::Change;
+		RisingEdges starts;
+		AfterDeath  d;
+		auto step = [&](bool a_dead, bool a_puppeting) { return d.Update(a_dead, a_puppeting, starts.Update(a_puppeting)); };
+		CHECK(step(false, true) == C::kNone && !d.On());
+		// The usual death: the kill (dying, still puppeting), the dead bit (the puppet off), the respawn (a new start).
+		CHECK(step(true, true) == C::kDied && d.On());
+		CHECK(step(true, false) == C::kNone && d.On());
+		CHECK(step(false, false) == C::kNone && d.On());  // the death over, no puppet yet: still dropping
+		CHECK(step(false, true) == C::kRestarted && !d.On());
+		// Elden Ring refused the kill (review of 0.6.0): no dead bit, the host gives up and the puppet runs on, no new start. It
+		// used to stay "after the death" for good and drop every mine, C4 and decoy after it.
+		CHECK(step(true, true) == C::kDied && d.On());
+		CHECK(step(true, true) == C::kNone && d.On());
+		CHECK(step(false, true) == C::kRanOn && !d.On());
+		CHECK(step(false, true) == C::kNone && !d.On());
+		// A death with the puppet off (Tarnished mode): over only once the puppet runs.
+		CHECK(step(false, false) == C::kNone);
+		CHECK(step(true, false) == C::kDied);
+		CHECK(step(false, false) == C::kNone && d.On());
+		CHECK(step(false, true) == C::kRestarted && !d.On());
 	}
 
 	// 21 mm (MGSV's normal focal target) on 24 mm film: ~59.5 deg vertical.
@@ -562,8 +608,18 @@ static void TestProjectileTag()
 	CHECK(!Matches(r, 503, tube, p) && !Matches(r, 503, aside, p));
 	// Review: not further down the line than the round can have gone (a prop / the walker / a soldier's gun 40 m out was
 	// tagged one frame after the shot, before the rocket itself had left the tube).
-	const float downRange[3] = { 40.0f, 1.4f, 0.0f };
-	CHECK(!Matches(r, 501, downRange, p) && !Matches(r, 503, far, p));
+	const float downRange[3] = { 40.0f, 1.4f, 0.0f }, wayOut[3] = { 60.0f, 1.4f, 0.0f };
+	CHECK(!Matches(r, 501, downRange, p) && !Matches(r, 503, wayOut, p));
+	// MGSV's rocket as measured live (2026-10-31, the FB MR R-LAUNCHER): 41.7 m down the line 10 frames after the shot, then
+	// 4.2-6.3 m a frame -- every frame of it inside the window is tagged.
+	{
+		float x = 41.7f;
+		for (std::uint64_t f = 510; f <= 530; ++f) {
+			const float at[3] = { x, 1.4f, 0.05f };
+			CHECK(Matches(r, f, at, p));
+			x += f < 513 ? 4.17f : 6.25f;
+		}
+	}
 	// A grenade-launcher round falls off its line: allowed by the drop so far -- a little, never the 1.2 m of half a second.
 	const float dropped[3] = { 20.0f, 1.4f - 0.5f * p.gravity * 0.25f * 0.25f, 0.0f };
 	CHECK(Matches(r, 515, dropped, p));
@@ -571,6 +627,92 @@ static void TestProjectileTag()
 	CHECK(!Matches(r, 530, wide, p));
 	r.v0[0] = 0;
 	CHECK(!Matches(r, 503, ahead, p));  // no direction: nothing
+}
+
+
+// The classifier against what MGSV really drew (live 2026-10-31, MGSV + recorder on the airport apron: recordings/throw_grenade.prrec,
+// recordings/fire_rocket.prrec; the release from each kGEvThrow / explosive kGEvFire, the draws from the tagged lists' matrices).
+static void TestProjectileTagLive()
+{
+	using namespace phantom::guest::projectile;
+	const TagParams p;
+	// Frag grenade (equip 354): kGEvThrow frame 26317 from 826.08,-11.04,1179.54 at 11.52,4.52,0.00 m/s; its draw (mesh b1332cea...,
+	// 642 indices, one bone) in the lists of frames +8..+30, every one tagged, nothing else.
+	Release g;
+	g.frame = 26317;
+	g.p0[0] = 826.08f, g.p0[1] = -11.04f, g.p0[2] = 1179.54f;
+	g.v0[0] = 11.52f, g.v0[1] = 4.52f, g.v0[2] = 0.0f;
+	const float arc[][2] = { { 827.62f, -10.53f }, { 827.81f, -10.47f }, { 828.00f, -10.42f }, { 828.39f, -10.33f }, { 828.96f, -10.22f },
+		{ 829.54f, -10.13f }, { 830.12f, -10.06f }, { 830.69f, -10.02f }, { 831.27f, -10.00f }, { 831.85f, -10.01f } };
+	const int arcFrame[] = { 8, 9, 10, 12, 15, 18, 21, 24, 27, 30 };
+	for (int i = 0; i < 10; ++i) {
+		const float at[3] = { arc[i][0], arc[i][1], 1179.54f };
+		CHECK(Matches(g, g.frame + arcFrame[i], at, p));
+	}
+	// Snake's own one-bone draws at the release (hand, the held grenade before it left, the holstered pistol, the slung rifle and the
+	// launcher on his back: all within ~0.8 m of the hand and his root 1.2 m below) -- never, in any frame of the window.
+	const float gear[][3] = { { 826.08f, -11.04f, 1179.54f }, { 826.30f, -10.95f, 1179.60f }, { 825.90f, -11.60f, 1179.30f },
+		{ 825.70f, -10.90f, 1179.54f }, { 825.85f, -11.10f, 1179.20f }, { 826.00f, -12.20f, 1179.54f } };
+	for (std::uint64_t f = g.frame + 1; f <= g.frame + p.windowFrames; ++f) {
+		for (const auto& at : gear) {
+			CHECK(!Matches(g, f, at, p));
+		}
+	}
+	// D-Walker led 2.8 m beside him (Walker.cpp): its one-bone parts within 1.23 m of its feet, 0.48-1.76 m up. A throw straight at it:
+	// the arc goes through them -- Matches alone would take some (the part's place on the arc), InBuddy never lets them be tagged.
+	{
+		Release t = g;
+		t.v0[0] = 0.0f, t.v0[2] = 11.52f;  // toward +z, where the walker stands
+		const float walker[3] = { 826.08f, -11.95f, 1179.54f + 2.8f };
+		bool anyArc = false, anyTagged = false;
+		for (std::uint64_t f = t.frame + 1; f <= t.frame + p.windowFrames; ++f) {
+			const float tt = static_cast<float>(f - t.frame) / 60.0f;
+			const float on[3] = { t.p0[0], t.p0[1] + t.v0[1] * tt - 0.5f * p.gravity * tt * tt, t.p0[2] + t.v0[2] * tt };
+			const bool  inside = InBuddy(on, walker, p);
+			anyArc = anyArc || (inside && Matches(t, f, on, p));  // a walker part exactly there would match the arc
+			anyTagged = anyTagged || (inside ? false : Matches(t, f, on, p));
+		}
+		CHECK(anyArc && anyTagged);  // part of the arc runs through the walker's body, the rest is tagged as before
+		const float parts[][3] = { { 0.0f, 0.48f, 0.0f }, { 1.23f, 1.76f, 0.0f }, { -0.8f, 1.2f, 0.9f }, { 0.0f, 1.76f, -1.2f } };
+		for (const auto& d : parts) {
+			const float at[3] = { walker[0] + d[0], walker[1] + d[1], walker[2] + d[2] };
+			CHECK(InBuddy(at, walker, p));
+		}
+		const float out1[3] = { walker[0] + 1.7f, walker[1] + 1.0f, walker[2] }, out2[3] = { walker[0], walker[1] + 2.6f, walker[2] },
+					out3[3] = { walker[0], walker[1] - 0.6f, walker[2] };
+		CHECK(!InBuddy(out1, walker, p) && !InBuddy(out2, walker, p) && !InBuddy(out3, walker, p));
+		CHECK(!InBuddy(out1, nullptr, p));
+		const float nanWalker[3] = { NAN, 0.0f, 0.0f };
+		CHECK(!InBuddy(walker, nanWalker, p));
+	}
+	// FB MR R-LAUNCHER (equip 54): kGEvFire frame 17221 from the muzzle 822.12,-10.42,1179.34; the rocket flew 99 m before it hit (the
+	// first: 129 m, the second 52 m). Its LOD pairs drawn 4.17 m a frame (250 m/s) down the line, every one tagged out to 71 m.
+	Release r;
+	r.frame = 17221;
+	r.round = true;
+	r.p0[0] = 822.12f, r.p0[1] = -10.42f, r.p0[2] = 1179.34f;
+	r.v0[0] = 0.99990f, r.v0[1] = -0.01364f, r.v0[2] = 0.00569f;  // MGSV's own a_dir (the draws' line; the trace prints it rounded)
+	const float line[][4] = { { 1, 826.29f, -10.47f, 1179.37f }, { 2, 830.46f, -10.53f, 1179.38f }, { 4, 838.80f, -10.64f, 1179.43f },
+		{ 8, 855.48f, -10.87f, 1179.53f }, { 10, 863.82f, -10.98f, 1179.58f }, { 14, 880.51f, -11.21f, 1179.67f }, { 17, 893.02f, -11.38f, 1179.75f } };
+	for (const auto& e : line) {
+		const float at[3] = { e[1], e[2], e[3] };
+		CHECK(Matches(r, r.frame + static_cast<std::uint64_t>(e[0]), at, p));
+	}
+	// ... the launcher itself and the loaded rocket in it before the shot (behind / at the muzzle), never.
+	const float tube[][3] = { { 821.70f, -10.42f, 1179.34f }, { 822.30f, -10.43f, 1179.34f }, { 821.20f, -10.60f, 1179.30f } };
+	for (std::uint64_t f = r.frame + 1; f <= r.frame + p.windowFrames; ++f) {
+		for (const auto& at : tube) {
+			CHECK(!Matches(r, f, at, p));
+		}
+	}
+	// What is noted at all: only thrown explosives (Throw.cpp NoteThrow) and Snake's explosive rounds (Combat.cpp NoteRound). The decoy
+	// (406, thrown: "not an explosive we send"), C4 (391) and the sleep mine (418), placed or thrown, never are -- no release, no tag
+	// (live: 0 tagged lists in 1968 with both placed and the decoy thrown).
+	CHECK(phantom::guest::logic::ExplosiveOf(354).use == phantom::guest::logic::ExplosiveUse::kThrown);
+	CHECK(phantom::guest::logic::ExplosiveOf(378).use == phantom::guest::logic::ExplosiveUse::kThrown);
+	CHECK(phantom::guest::logic::ExplosiveOf(406).use == phantom::guest::logic::ExplosiveUse::kDecoy);
+	CHECK(phantom::guest::logic::ExplosiveOf(391).use == phantom::guest::logic::ExplosiveUse::kPlaced);
+	CHECK(phantom::guest::logic::ExplosiveOf(418).use == phantom::guest::logic::ExplosiveUse::kPlaced);
 }
 
 // Capture.cpp's pointer-keyed caches (docs/GUEST.md 15.3): an entry is redone only when the copy it was made from is gone.
@@ -828,6 +970,7 @@ int main()
 	TestTransforms();
 	TestCombat();
 	TestProjectileTag();
+	TestProjectileTagLive();
 	if (g_failures) {
 		std::printf("test_guest_logic: %d FAILED\n", g_failures);
 		return 1;

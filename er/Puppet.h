@@ -18,6 +18,7 @@
 #include "Host.h"
 #include "Kinematic.h"
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,11 @@ namespace phantom::er
 
 		[[nodiscard]] bool          Active();
 		[[nodiscard]] const Anchor& CurrentAnchor();  // valid while Active()
+		// While MGSV plays a staged move (kGuestClimbing / kGuestMantling: Snake at one of the airport's ladders or obstacles) and the
+		// puppet runs: the anchor his draw list is drawn with, turned so that his body there faces Elden Ring's move (er/StagedFacing.h)
+		// -- a_listYaw: the list's anchorYaw. nullopt: CurrentAnchor() as it is. Only for his drawn body: the camera, the buddy and
+		// everything mapped from around his home keep CurrentAnchor().
+		[[nodiscard]] std::optional<Anchor> StagedDrawAnchor(float a_listYaw);
 		[[nodiscard]] bool          Riding();
 		[[nodiscard]] bool          RidingHorse();  // ...D-Horse (its own speed, step-up, radius and eye height)
 		[[nodiscard]] float         GroundY();
@@ -49,6 +55,9 @@ namespace phantom::er
 		[[nodiscard]] float         HpFrac();
 		// Seconds since Snake (or the puppet) died, until Elden Ring respawns the player; -1 when nobody is
 		// dying. While >= 0 the renderer fades Snake out ([Render] death_visual) and the Tarnished stays hidden.
+		// Only for Snake's own deaths: a death of the Tarnished while the player played him (Tarnished mode, Snake not playing)
+		// is -1 here -- he dies on screen as he is, and Snake isn't drawn at the anchor Tarnished mode left him at (live
+		// 2026-10-31: Snake popped up over the dying Tarnished). Dying() covers both (the respawn rule).
 		[[nodiscard]] float         DeathSeconds();
 		// From a death (Snake's, or Elden Ring's own) until Elden Ring respawns the player. Not the dead bit: Elden Ring
 		// clears that ~6 s after YOU DIED while the screen is still fading, seconds before the respawn load (VERIFIED

@@ -5,6 +5,7 @@
 #include "CaptureAssets.h"
 #include "CaptureMesh.h"
 #include "CaptureRing.h"
+#include "Climb.h"
 #include "Config.h"
 #include "FultonAnchor.h"
 #include "D3D11Hooks.h"
@@ -193,9 +194,25 @@ namespace phantom::guest::capture
 				db = bx * bx + by * by + bz * bz;
 			}
 			std::uint32_t owner = ~0u;
-			// (v13) The grenade / rocket Snake just released: a rigid draw where it must be by now (ProjectileTag.h), near him or not.
+			// (v13) The grenade / rocket Snake just released: a draw where it must be by now (ProjectileTag.h), near him or not.
+			// Rigid, or skinned with a single weight: MGSV draws its thrown grenade as a one-bone skinned mesh (m_useWeightCount
+			// 1, bone 0 the identity; live 2026-10-31 `!capture probe` after a sleep grenade's release: vs 0x4bd72652708ef87d,
+			// 618 indices, its m_world on the throw's parabola within 0.04 m frame after frame) -- the rigid-only rule tagged
+			// nothing live. A one-bone draw is judged where its bone puts it (m_world * bone 0), as it is published.
 			const float origin[3] = { world[3], world[7], world[11] };
-			if (!(object[32] > 0.0f) && projectile::Tag(rec ? rec->frame : in.frame, origin)) {
+			float       tagAt[3] = { world[3], world[7], world[11] };
+			bool        tagShape = !(object[32] > 0.0f);
+			if (!tagShape && object[32] <= 1.0f) {
+				float bone0[12]{};
+				if (const auto* bones = a_s.vsInfo->CBufferNamed("VSBones"); bones && d3d::ReadConstants(a_s, a_s.vsCb[bones->slot], 0, bone0, sizeof(bone0))) {
+					float m[12];
+					Mul34(world, bone0, m);
+					tagAt[0] = m[3], tagAt[1] = m[7], tagAt[2] = m[11];
+					tagShape = std::isfinite(tagAt[0]) && std::isfinite(tagAt[1]) && std::isfinite(tagAt[2]);
+				}
+			}
+			// A two-triangle card is no grenade or rocket body (live: the rocket's flame / trail quads, 4 vertices, came along).
+			if (tagShape && a_a.indexCount > 6 && projectile::Tag(rec ? rec->frame : in.frame, tagAt, in.buddy ? in.buddyPos : nullptr)) {
 				owner = proto::kOwnerProjectile;
 			} else if (ds < 2.5f * 2.5f && ds <= db) {
 				owner = proto::kOwnerPlayer;
@@ -229,7 +246,8 @@ namespace phantom::guest::capture
 			const bool  skinned = bonesCb && object[32] > 0.0f && a_s.vsInfo->Reads("BLENDINDICES");
 			if (owner == proto::kOwnerPlayer && !skinned) {
 				std::scoped_lock lock(g_ownLock);
-				if (!state::Staged()) {
+				// Not staged, but still far from where he stood after a move (its way home failed): the staging site's props are near him.
+				if (!state::Staged() && !climb::AwayFromHome(root)) {
 					if (g_ownRigid.size() < 4096) {
 						g_ownRigid.insert(c.srcHash);
 					}

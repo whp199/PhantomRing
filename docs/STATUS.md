@@ -1,4 +1,4 @@
-# Status (2026-10-31, 0.5.0-alpha)
+# Status (2026-11-01, 0.6.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,158 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## 0.6.0-alpha, 2026-11-01: release integration with both games
+
+Both real games on the default mapping (`pr launch --er-headless 3840x2160`, `pr er-continue`, the virtual pad -- exclusive since
+this round, no controller plugged in: `real pad polls hidden 0`; Elden Ring 1.17.2, MGSV 1.0.15.4; ~1 h 50 min, one launch), the
+player's save at Stormveil, then Stormveil Cliffside, the Church of Elleh at night, Gatefront and The First Step. The saves taken at
+the start (`backups/20261101-000309`) were put back afterwards, sha256 equal file by file (15 of 15: `PhantomRing0000.sl2` and its `.bak` restored, `ER0000*`, `MGS_ER0000*`, `steam_autocloud.vdf` and MGSV's 7 files unchanged). Frames through the
+host's `hud shot`; the dev console's `call setpos` was used to reach spots (a ladder's foot, the meadow by the Church of Elleh).
+
+- **Two code reviews' findings** (the agents' round, then this one's six; commit "Review fixes: the dead bit first ..."): the puppet's
+  own dead bit before every other stop reason, View + Start ignored while dying, only flasks pressed without an EquipParamGoods row,
+  "pressed" for a non-consumable, a deadline per Elden Ring-only button and no cycle retry while a use is followed, placed
+  explosives no longer dropped for good after a kill Elden Ring refused, the player's stick ends the odometer's stillness after a
+  climb. Unit tests: `TestRevival`, `TestQuickItem`, `test_guest_logic` (AfterDeath), `TestOdoThaw`.
+- **Deaths** (open item a): `pr er die` (Snake's death as MGSV reports it), a 36 m fall (`call setpos` 36 m up) and a Godrick soldier
+  with a torch (Elden Ring's hits through the hit hook, the guest's own death) -- frames at 0.3, 1, 2.4, 4, 6, 9 s of each: Snake lying
+  where he died (the soldier standing over him; D-Walker beside him after the fall; YOU DIED), the Tarnished in none; the death trace
+  `the Tarnished hidden ... hidden by us yes ... Snake drawn (46-65 draws)` at every point to 9 s, `another character` at 15.3 s (the
+  respawn load), `ER player respawned` 13.1-18.4 s after, Snake back at the grace (frames). Four more kills by the same patrol (log
+  only, one framed at 11 s): the same lines. 0 `the Tarnished is visible` warnings.
+- **Grenade and rocket in flight** (open item b; both switches left on): a sleep grenade (LT, an RT tap): `throw equip 378 drawn with
+  MGSV's mesh from now on ... 0.22 m across` 226 ms after the release; a frame 0.5 s after it shows MGSV's blue sleep-grenade canister
+  over the meadow; the blast 4.98 s later 15.8 m out. Three rockets into the open: `round bullet 46 drawn with MGSV's mesh ... 2 part(s)
+  ... 0.53 m across`, hits 105-129 m out 2.4 s after the shot; 28 frames 50-170 ms apart: the rocket flies straight away from the
+  camera, so only its exhaust shows (a glow at the launcher for ~0.3 s, then a shrinking white dot down range) and the orange blast.
+  The guest also tagged four or five rigid meshes (0 bones) near a rocket's path: not the learned template, left out, never drawn.
+- **Muzzle flash**: frames during an SVG-76 burst show orange sparks in front of the rifle.
+- **Fence vault** (open item c): Limgrave's wooden rail fence AEG700_068_1003 east of the Church of Elleh -- `mantle plan`: `vault over --
+  fits (face 0.49 m ahead, top 1.10 m up, 0.15 m deep, drop +0.12 m, 1.40 s)`; Y -> `Snake vaults over a 1.10 m obstacle ... (Y, squared
+  up to the face) -> kHEvMantle a=110 b=1 1.40 s`, `MGSV plays it` 16 ms later, `vault over done` 1.40 s after, MGSV's move 1184 ms
+  (`staged at MGSV's 100 cm obstacle`); frames: at the fence, over it bent with a hand down, standing on the far side.
+  Running into it (Snake standing, from 5 m, the stick full): `Snake vaults over a 1.16 m obstacle 0.25 m deep 0.00 m ahead (running
+  into it) -> kHEvMantle a=116 b=1 1.41 s`, MGSV 16 ms later (`not facing it: turned again`), done 1.41 s later, MGSV's move 1152 ms;
+  frames: over the rails, then on the far side with the fence whole behind him. Earlier tries broke the fence instead: crawling
+  (Snake was prone) and at a segment 1.31 m from one side, 1.45 m from the other (over `run_into_max` 1.3: it broke, as README says);
+  the torch patrol's swings broke two more segments (Elden Ring's hits were set harmless with `combat set hurt_mult 0` for the fence
+  runs, 1 again afterwards).
+- **Memory of Grace's question** (open item d): Start -> Inventory -> Tools -> Memory of Grace -> Use with Snake playing: `menu watch:
+  Elden Ring's dialog box is up (a question) -- Elden Ring has the pad until it closes`, `menu OPEN ... DIALOG BOX up`, no MGSV HUD over
+  it (frame); B held 300 ms meanwhile: MGSV's pad `Connected|Neutral buttons 0` in all 12 samples; NO (selected by default) with A ->
+  `dialog box closed`, the place and runes unchanged, MGSV's HUD back (frame).
+- **Flasks**: after a 14.7 m/s landing (`fall damage 30%`, then 61% of the HP bar) View then X 150 ms later -> `Elden Ring healed 250 HP
+  (37% of 680) -> Snake +2868 life (kHEvHeal 717)`, `used 1336 ms after the press, 2 left`; View held 600 ms then X -> drunk, no
+  iDroid; View held 1.5 s -> `View held 400 ms+ (still held after 1000 ms) -> MGSV Start held 1200 ms`, the iDroid (frame), the X at
+  1.5 s MGSV's; View 600 ms let go -> the iDroid at the release; a View tap -> Elden Ring's map; View + D-pad down -> the next item
+  (each of six switches took the second press: `the quick slot is still 0 -- one more press`); the Cerulean flask drunk to 0, the
+  switch's corner "Quick item: Flask of Cerulean Tears (empty -- rest at a grace)" (frame), View + X then `refused (empty)`.
+- **Ladder** (Stormveil's AEG219_067_4000, 14.5 m; its foot found in Tarnished mode: `prompt 5000` 0.48 m before it, 0.22 m to its
+  side): up `+14.6 m` in 18.8 s with a 5 s stop at +7 m (`kHEvClimb ... still on it at 0.00 m/s`, +6.991 m at both ends of the stop,
+  frames 2.5 s apart: the same pose, hands on the rungs), `15.5 m climbed in MGSV, 4 moved along MGSV's ladder (seamless), 0 loops`;
+  down ("Descend", `prompt 5010`) `-14.5 m` in 19.1 s with a 4.5 s stop, `16.1 m, 4 moved, 0 loops`. The Tarnished nowhere (frames).
+- **The stick after a ladder** (open item e): Elden Ring's climb over (none) at 0, the stick pushed +53 / +35 ms, MGSV home +205 /
+  +195 ms, the puppet ON +301 / +317 ms, the guest `the player's stick 110 / 122 ms after the move -- Snake's motion counts again`,
+  Snake walking in MGSV +522 / +440 ms. Before this round (real MGSV) a stick pushed 162 ms after the end never moved him in 3 s.
+- **D-Walker** (open item f): Gatefront, a 22 s run: 127 samples, **median 2.81 m, p90 2.81, max 2.82** (target < 3.5; it was 4.83 /
+  6.7 / 10.0), 2.4-2.6 m standing after; a run out of the Church of Elleh's grace (it started 5.6 m away): 2.79 / 3.43 / 4.28. Frames of
+  a 27 m run: beside Snake on his left in every one, legs walking. Once it stood between him and a fence he walked at.
+- **Regression** (README How to play, each once, The First Step): run, camera, A crouch / stand, R3 (`Snake jumps -- 1.20 m up at 3.5
+  m/s`), X dive (`hop #1: 0.60 m up`), LT + RT fire (the tranquilizer pistol 7 -> 6 rounds), B reload (6 -> 8), D-pad up / down (weapon
+  0x7 -> 0x24 -> 0x7), RB binoculars (`marking: binoculars up`), LB call menu, Start (Elden Ring's menu) and B, View tapped (its map) and
+  B, View held (`View held 400 ms+ (let go) -> MGSV Start held 1200 ms` -> `MGSV menu open (kGuestInMenu)`) and Start, View + Start
+  (`Tarnished mode ON` / `OFF`), View + X (`Flask of Crimson Tears used 914 ms after the press, 3 left`).
+- **10 minutes of continuous play** (The First Step; 318 actions in 600 s: runs, walks, camera, stances, jumps, dives, aim and fire,
+  reloads, weapon switches, binoculars, the call menu, Elden Ring's menu and map, the iDroid, the chord, flasks): both sides alive
+  throughout (heartbeats 4-29 ms at the end); 10 jumps (3 refused crouched / prone), 9 dive hops, 6 Tarnished-mode round trips, 5
+  iDroids, 19 shots, 6 flasks drunk (2 presses in the air after a jump: `its count didn't drop within 3000 ms`); one run off The First
+  Step's cliff (`landed at 21.8 m/s -> fall damage 100%`), respawn 14.1 s later, the death trace hidden throughout; **0 warnings and 0
+  errors** in either log for the 10 minutes. The whole session: the host log 0, the guest log one warning (`life: native playerLife
+  write did not stick (7801 -> 7149 written, 7801 now)`, once, in the torch patrol's fight).
+- **A Tarnished-mode death** (`tarnished on`, `pr er die er`, the torch patrol around): frames at 0.3-9 s show the Tarnished dying and
+  lying by the fence and no Snake anywhere (the ER agent's fix: Snake was drawn over him before); `the Tarnished died while Snake
+  wasn't playing -- Snake takes over after his respawn`, respawn 18.4 s later. A View + Start held 1.4 s during that death counted
+  no chord at all (nothing for `ChordRefusedWhileDying` to refuse: unit-tested only).
+- Seen in the traces: after each respawn load the new player object is fully visible (`the Tarnished VISIBLE ... base transparency
+  0.92 ... another character`) for up to ~4 s while Elden Ring's loading screen is still up, and hidden in the frame it closes (the
+  puppet's start); no frame showed him.
+- Not done: spirit ashes, hiding a real controller (none was plugged in), the View + Start refusal during a death (no chord counted).
+
+## 0.6.0-alpha, 2026-10-31 night: the round's work with both games
+
+Both real games on the default mapping (`pr launch --er-headless 3840x2160`, `pr er-continue`, the virtual pad; Elden Ring 1.17.2,
+MGSV 1.0.15.4; ~1 h 50 min, one Elden Ring-only relaunch with MGSV kept running), the player's save at Stormveil, then Gatefront,
+the Church of Elleh and The First Step. A DualSense was plugged in with its left stick resting pushed and stray presses now and
+then; the run kept it out of Snake's way by injecting a near-zero stick between its own presses (its buttons still came through:
+they opened Elden Ring's menus twice and a Memory of Grace question once, and Renna's talk at the church at night gave the Lone Wolf
+Ashes). The saves taken at the start (`backups/20261031-205326`) were put back afterwards, sha256 equal file by file; that undid
+the talk.
+
+- **The review's nine findings fixed** (commit "Review fixes", unit tests in `test_guest_climb`, `TestClimbPace`, `TestStagedFacing`).
+- **Flasks as Snake** (View held + X): after a 15.5 m/s fall (42% of his life) `Elden Ring healed 250 HP (37% of 680) -> Snake +2868
+  life (kHEvHeal 717)`, Snake 4570 -> 7438 / 7801 1.5 s after the press; the count 4 -> 3 -> 2 -> 1 -> 0 (`Flask of Crimson Tears used
+  917 ms after the press, N left`); the fifth refused (`empty: refused`, the corner "Flask of Crimson Tears: empty -- rest at a
+  grace"); walking through a drink Snake moved ~5 m; frames: only Elden Ring's flask (glowing, in the air at his chest) of the
+  Tarnished, never his body.
+- **Ladders, seamless** (Stormveil's AEG219_067_4000, 14.5 m): up `+14.6 m` in 18.9 s with a 5 s stop half way (`kHEvClimb a=1 b=0
+  (still on it at 0.00 m/s)` -> guest `now up at still (on the rungs)`; frames 2.5 s apart in the stop: the same pose), `15.0 m climbed
+  in MGSV, 4 moved along MGSV's ladder (seamless), 0 loops`; down `-14.5 m` in 14.0 s, `15.7 m, 4 moved, 0 loops`; frames at three
+  points up: hands on the rungs, the Tarnished nowhere. After both climbs the puppet started with MGSV still at its ladder: `delta
+  from his facing before it (known)` -> `MGSV has Snake home -- delta 2.280 -> 2.280 rad` (no turn). Guest-only checks: `!climb off`
+  then `!climb up` 70 ms later -> `a new climb (up) while the last one ends` -> climb #4 84 ms after the last; `!climb up`, then
+  `pr stop --er` -> `climb: ended here -- Elden Ring is gone (no heartbeat)`, back on the sandbox 0.18 s later; the relaunched Elden
+  Ring had `Snake driving` 21 s after its plugin loaded.
+- **Climb-ups** (the Church of Elleh's rubble): Y onto 1.71 m -> MGSV's drum (`MGSV's move took 1988 ms ... rose 1.20 m`) and 0.57 m ->
+  the crate (2002 ms, 1.12 m), a 1.15 m one from the console -> the drum (1971 ms); `2 Y presses kept from MGSV`. Elden Ring's path
+  ended 0.6-1.0 s before MGSV's move: `[Mantle] climb_base_s` 1.8 + `climb_per_m` 0.2 now -- after the relaunch Y onto 1.69 m:
+  `climb up done` 8 ms after MGSV's `move over`. Frames through each: hands on the top, a knee up, standing on it, facing the face.
+- **Grass** (Gatefront, rain, late day; 198 peeks of 16 x 16 over Snake standing in it): 50,688 texels, 31,500 of them Snake's, 669 covered
+  by grass in front of him, 0 by anything behind him; frames: blades across his boots in front, none through him from behind.
+- **Muzzle flash**: an orange spark in front of the rifle in the frame of a shot (29 -> 28 rounds). Grenades and rockets in flight
+  were not framed (the D-pad presses picked the rifle and a mine instead).
+- **Placed explosives at a death**: a sleep mine set (`mines: mine 1 placed`), the Tarnished killed -> `placed #1: equip 418 dropped (the
+  Tarnished died) -> kGEvPlacedGone; in MGSV removed`, `mine 1 gone (MGSV)`, respawn 18.4 s later, nothing announced again.
+- **D-Walker** (running 18 s, MGSV's sandbox positions at ~5 Hz): follow distance median 4.83 m, p90 6.7, max 10.0 (target < 3.5: not
+  met); MGSV's output meanwhile (`[Audio] Meter` on for this run only) median -36.5 dBFS, loudest half-second -34.6, peak -17.8.
+- **Punches** (the second ~25 HP of pass B, COMBAT 7a): `combat strike` on a Stormveil soldier, free 317 -> 274 -> 234 -> 194 and held in
+  place 194 -> 154 -> 114, `wanted -40` each; the real MGSV's punches on a Gatefront soldier 219 -> 192 -> 165 (`wanted -27`); HP read
+  ~14 times a second for 2-4 s after each: never a second drop.
+- **Regression** (README How to play, each once, The First Step): run, camera, A crouch / stand, R3 (`Snake jumps -- 1.20 m up`), X
+  dive (`hop #1: 0.60 m up`), LT + RT fire, B reload, D-pad up / down (weapon 0x1a2 -> 0x24 -> 0x7), RB binoculars (`marking: binoculars
+  up`), LB call menu, Start (Elden Ring's menu) and B, View tapped (its map) and B, View held (`MGSV Start held` -> `MGSV menu open
+  (kGuestInMenu)`) and Start, View + Start (`Tarnished mode ON` / `OFF`), View + X (`Flask of Crimson Tears used ... 3 left`).
+- **10 minutes of continuous play** (The First Step; 317 actions in 601 s: runs, walks, camera, stances, jumps, dives, aim and fire,
+  reloads, weapon switches, binoculars, the call menu, Elden Ring's menu and map, the iDroid, the chord, flasks): both sides alive
+  throughout (heartbeats 2-20 ms at the end); 8 jumps, 8 dive hops, 7 Tarnished-mode round trips, 6 iDroids, 10 flask presses (4
+  drunk, 6 refused empty); **0 warnings and 0 errors** in either log for the 10 minutes (MGSV's log for the whole session: one
+  warning, the deliberate Elden Ring stop mid-climb). Snake died to an enemy 24 s after the run; in a frame 2.4 s later the Tarnished
+  showed, kneeling, and Snake wasn't drawn -- the death visuals should keep the Tarnished hidden (HOST.md "Death visuals"); seen
+  once, not reproduced (the games were stopped for the restore).
+- Not done: running into a rail fence (none found intact in reach), a vault by Y (the one vault spot found was 2 degrees wide; the
+  console chose a climb there), Fort Haight's 19 m tower, spirit ashes, a grenade or rocket framed in flight.
+
+## 2026-10-31 evening: host round -- flasks, rougher ledges, grass, muzzle flashes and projectile meshes (Elden Ring alone)
+
+Elden Ring 1.17.2 with stand-in guests only (`pr launch --er-only --shm /dev/shm/phantomring_h --er-headless 3840x2160`, fake MGSV
+and the MGSV agent's real-MGSV recordings, the virtual pad; ~1 h 45 min, eight launches as fixes went in), the player's save at
+Stormveil, then the Church of Elleh and Gatefront. The saves taken at the start (`backups/20261031-184141`) were put back
+afterwards, sha256 equal file by file (8 of 8). Details in docs/HOST.md.
+
+- **Flasks without leaving Snake** (View held + X; View held + D-pad down switches): four Crimson Tears drunk, each `Elden Ring
+  healed 250 HP (37% of 680) -> Snake +2204 life (kHEvHeal 551)` 0.9 s after the press, the fake's life 3000 -> 5204, the corner
+  "Flask of Crimson Tears: 3 left" ... "none left", the fifth refused ("empty -- rest at a grace", HP unchanged); drinking while
+  walking kept him moving; the Cerulean flask used; switching both ways; MGSV's pad never saw X, View or D-pad down; frames:
+  only Elden Ring's flask shows during the drink, at his chest.
+- **Ledges**: Gatefront's boulder that had Snake stuck against its 0.40 m lip -> Y climbs it (+0.76 m); a Church of Elleh boulder
+  at 21 degrees -> `squared up to the face`, +0.88 m; the church's low wall vaulted running into it (1.03 m). Rail fences: they
+  break when walked into; the vault-instead-of-break change is not yet seen live (the Tree Sentinel killed Snake there once).
+- **Grass**: of ~52,000 of the real Snake's texels in tall grass (dusk, noon), 3383 covered by grass -- all of it in front of him,
+  none behind; `gbuffer_point last` / `clear` frames side by side show the old see-through and the fix.
+- **Muzzle flash** (a ~0.4 m burst of sparks) and **projectile meshes** (MGSV's grenade and rocket learned from the tagged
+  recordings, the grenade flown as MGSV's mesh) on by default; **MGSV's HUD** cut for the first 1.6 s of a climb; a **floor of
+  light** on Snake (`min_ambient` 0.004) drawn only where he is the nearest surface.
+- Not run: the real MGSV, spirit ashes, a dark tower, Limgrave's fence vault, keyboard Tab + Space.
 
 ## 0.5.0-alpha, 2026-10-31: ladders, climb-ups, vaults and the uphill jump with both games
 
@@ -329,17 +481,20 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
 
 - Getting on D-Walker with the test pad: in the 10-minute play, Y right after walking up to it (1.4-1.6 m) never mounted
   it (11 tries); on their own, the same walk and press mounted it (twice, one after the play). Not understood yet.
-- Elden Ring's grass is drawn over Snake's models even where it stands behind them (seen on the box in tall grass).
-- D-Walker's footsteps are loud: -21 dBFS (peaks near clipping) vs Elden Ring's -35. MGSV's Wwise is found, but
-  per-object volume, sends and attenuation calls have no audible effect so far ([docs/GUEST.md](GUEST.md) 18.2).
-- D-Walker still answers ~2-3 s late: while Snake runs it is ~5 m away (median; up to 7-13 m before it is moved
-  closer), 3 m beside him 2 s after he stops.
-- MGSV's own effects (explosions, muzzle flashes, smoke, flames) are never drawn in Elden Ring; blasts are drawn with Elden
-  Ring's pot effects instead (Fire Pot fireball, Holy Water Pot flash, Sleep Pot mist, Fetid Pot cloud; seen live,
-  [docs/COMBAT.md](COMBAT.md) §9), D-Walker's flamethrower with Dragonfire flames. The smoke looks more like brown
-  dust than MGSV's white smoke. Muzzle flashes: none.
-- The grenade in flight is a simple ball, a rocket a small dark ball with a glowing trail, not MGSV's models. CQC
-  throws/chokes need a target MGSV doesn't have. C4: MGSV's own detonator (Y with C4 in hand) never answers in the sandbox;
+- Elden Ring's grass over Snake where it stands behind him: fixed 2026-10-14 (`gbuffer_point = clear`); per-texel checks in tall
+  grass since then -- 0.6.0 with both games: of 31,500 of Snake's texels, 669 covered by grass in front of him, none from behind.
+- D-Walker's footsteps: quieter since 0.6.0 (`[Audio] WalkerDistance` 8; MGSV's output running with it following: median -36.5
+  dBFS, peak -17.8; it was -21 dBFS with peaks near clipping).
+- D-Walker still answers orders ~1-2 s late; while Snake runs it is led beside him since 0.6.0 (live with both games 2026-11-01:
+  median 2.81 m, p90 2.81, max 2.82; it was 4.8 / 6.7 / 10 m), but its own walking AI starts 0.2-3 s after him (it glides meanwhile).
+- MGSV's own effects (explosions, smoke, flames) are never drawn in Elden Ring; blasts are drawn with Elden Ring's pot effects
+  instead (Fire Pot fireball, Holy Water Pot flash, Sleep Pot mist, Fetid Pot cloud; seen live, [docs/COMBAT.md](COMBAT.md) §9),
+  D-Walker's flamethrower with Dragonfire flames. The smoke looks more like brown dust than MGSV's white smoke. Muzzle flashes: a
+  small burst of Elden Ring's sparks (on since 0.6.0).
+- Grenades and rockets in flight: MGSV's own models once the guest tags them (on since 0.6.0; with both games 2026-11-01 MGSV's
+  sleep grenade framed in flight, a rocket only from behind: its exhaust hides the body), otherwise a ball / a dark ball with a
+  glowing trail -- the first throw of an item each session, the one the model is learned from. CQC throws/chokes need a target
+  MGSV doesn't have. C4: MGSV's own detonator (Y with C4 in hand) never answers in the sandbox;
   PhantomRing sets the oldest C4 off on a Y tap instead (`[Combat] C4Backup`, on since live pass A 2026-10-14: 2 of 2 taps).
 - Breaking things: sturdy ones (defence 90: Limgrave's wooden palisade fences) don't break even in a blast; a few low
   crates stayed up under CQC strikes; pots that break when the Tarnished just walks into them weren't near the test
@@ -374,8 +529,8 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
 - Full proxies (`[Proxies] Enabled`, off by default): inert since round 1 -- live pass B kept MGSV at alert phase 0 for 11
   minutes, no stand-in shot Snake -- but LT never swung the aim onto a stand-in: not worth turning on yet.
 - Ladders: walking on into the hole at a ladder's top drops Snake down the shaft (face it and press Y on "Descend"). Snake climbs
-  them himself since 0.5.0; MGSV's 8 m ladder loops every ~5.5 m of a longer climb (a ~1 s seam in his pose).
-- Flasks, spirit ashes and Torrent need Tarnished mode.
+  them himself since 0.5.0, without a seam since 0.6.0 (MGSV's 8 m ladder: he is moved along it, 0 loops on 14.5 m live).
+- Spirit ashes (untried) and Torrent need Tarnished mode; flasks don't since 0.6.0 (View held + X).
 - Snake's jump (R3, protocol v14 `kGuestJumping`: the guest lifts him in MGSV, the host jumps the puppet; HOST.md "Jumps",
   GUEST.md §6): live pass A 2026-10-14: 1.2 m, onto 1.1-1.3 m rock steps and a plank walkway at Stormveil's cliffside (the
   way in that needed it), the camera rides with him; MGSV's look is a short fall. Uphill fixed in 0.5.0 (it ended 2 cm up).

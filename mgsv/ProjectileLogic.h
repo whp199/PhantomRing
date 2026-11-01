@@ -32,11 +32,31 @@ namespace phantom::guest::projectile
 		float         tolerance{ 0.45f };    // m around the predicted point (plus two frames of the projectile's travel)
 		float         minOut{ 0.6f };        // m it must be out of the hand / ahead of the muzzle (Snake's hand, the launcher tube)
 		float         lineRadius{ 0.5f };    // m off a round's line
-		float         roundMaxSpeed{ 120.0f };  // m/s: no explosive round of Snake's is faster (the host flies them at 16-80)
+		// m/s: no explosive round of Snake's is faster. MGSV's rocket is: live 2026-10-31 (FB MR R-LAUNCHER) its draw was 41.7 m
+		// down the line 10 frames after the shot and then gained 4.2-6.3 m a frame (250-375 m/s); 120 never let it be tagged.
+		float         roundMaxSpeed{ 420.0f };
 		float         roundMaxDrop{ 0.4f };  // m: a grenade-launcher round's drop allowed off the line (a rocket's line doesn't widen)
+		// The buddy's own body (InBuddy): D-Walker's one-bone parts -- the kind of draw a grenade is -- sit within 1.23 m of its feet
+		// horizontally and 0.48-1.76 m above them (live 2026-10-31, 10439 of them in recordings/throw_grenade.prrec), and since it is
+		// led 2.8 m beside Snake (Walker.cpp) a throw his way passes right through them.
+		float         buddyRadius{ 1.6f };
+		float         buddyBelow{ 0.5f };
+		float         buddyAbove{ 2.5f };
 	};
 
 	inline float Dot3(const float a[3], const float b[3]) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+	// Is a draw at a_at inside the body of the buddy standing at a_buddy (its feet; nullptr = no buddy out)? Such a draw is never a
+	// projectile: a part of D-Walker on a grenade's arc would be taken from the walker (and offered to the host as the grenade's
+	// mesh); the grenade itself passing through it only loses those frames' tags (the host flies its own copy meanwhile).
+	inline bool InBuddy(const float a_at[3], const float* a_buddy, const TagParams& a_p)
+	{
+		if (!a_buddy || !std::isfinite(a_buddy[0]) || !std::isfinite(a_buddy[1]) || !std::isfinite(a_buddy[2])) {
+			return false;
+		}
+		const float dx = a_at[0] - a_buddy[0], dz = a_at[2] - a_buddy[2], dy = a_at[1] - a_buddy[1];
+		return dx * dx + dz * dz <= a_p.buddyRadius * a_p.buddyRadius && dy >= -a_p.buddyBelow && dy <= a_p.buddyAbove;
+	}
 
 	// Is a rigid draw whose origin is a_at (MGSV world), drawn in game frame a_frame, the projectile a_r released?
 	inline bool Matches(const Release& a_r, std::uint64_t a_frame, const float a_at[3], const TagParams& a_p)

@@ -595,14 +595,15 @@ static void TestExplosionRows(const std::string& a_dir, const std::vector<std::u
 			CHECK(ObjectOnly(patched.data()));
 		}
 	}
-	// The muzzle flash: the Fire Pot's fireball without its attack, its sparks or anything after it, cut with its short life.
+	// The muzzle flash: the Fire Pot's bullet showing the Spark Aromatic's small burst (300522) instead of its fireball, without its
+	// attack, its sparks or anything after it, cut with its short life.
 	if (const auto* t = row(d.explosionTemplate[7])) {
 		std::array<std::uint8_t, params::kBullet.rowSize> copy;
 		std::memcpy(copy.data(), t, copy.size());
 		MakeCarrier(copy.data(), d.explosionSfx[7], false);
 		MakeFlash(copy.data(), d.muzzleLife);
-		CHECK(!Harmful(copy.data()) && FlightSfx(copy.data()) == 300122 && At<std::int32_t>(copy.data(), params::bullet::kHitBulletId) <= 0 &&
-		      At<std::int8_t>(copy.data(), params::bullet::kSfxDeleteByLifeDead) == 1 && At<float>(copy.data(), params::bullet::kLife) < 0.1f);
+		CHECK(!Harmful(copy.data()) && FlightSfx(copy.data()) == 300522 && At<std::int32_t>(copy.data(), params::bullet::kHitBulletId) <= 0 &&
+		      At<std::int8_t>(copy.data(), params::bullet::kSfxDeleteByLifeDead) == 1 && At<float>(copy.data(), params::bullet::kLife) <= 0.1f);
 		CHECK(WalkChain(copy.data(), row).ids.empty());
 	} else {
 		CHECK(!"muzzle template missing");

@@ -71,6 +71,7 @@ namespace phantom::er
 			bool          dead{ false };
 			bool          dying{ false };     // Snake/the player died and has not respawned yet
 			bool          aiming{ false };    // GuestState kGuestAiming
+			bool          hudHeld{ false };   // HideLayerFor: MGSV's layer is cut now (the start of a climb)
 			bool          hudFresh{ false };  // a guest HUD frame arrived in the last 1.5 s
 		};
 
@@ -107,6 +108,9 @@ namespace phantom::er
 		void        Notify(std::string a_text, Tone a_tone);  // any module: a corner message from the next Tick on
 		Model       Snapshot();                  // any thread (Present)
 		void        NoteHudFrame();              // Present thread: a guest HUD frame arrived
+		// MGSV's HUD layer cut (no fade out) for a_ms from now; it fades in again after (a climb up / vault / ladder climb starts:
+		// [Overlay] climb_hide_ms).
+		void        HideLayerFor(int a_ms);
 		std::string Command(std::string_view a_args);  // dev console "hud ..."
 		std::string Describe();
 	}

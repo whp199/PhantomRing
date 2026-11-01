@@ -104,6 +104,8 @@ namespace phantom::er::Renderer
 		std::atomic<std::uint64_t> g_markerFrames{ 0 }, g_markerPresentFrames{ 0 };
 		bool                       g_gbufDone{ false };    // stage C's G-buffer point handled this frame
 		std::uint64_t              g_pointClear{ 0 }, g_pointLast{ 0 };  // frames Snake went in after ER's depth clear / after its last G-buffer list
+		std::uint64_t              g_pointEarlier{ 0 };  // ...before its first G-buffer list, the depth cleared in an earlier batch of the frame
+		constexpr int              kBeforeBatch = -2;    // GbufferPoint: Snake goes in before the batch's first list
 		bool                       g_velDone{ false };     // stage C's velocity point handled this frame
 		bool                       g_gbufDrawn{ false };   // Snake is in this frame's G-buffer
 		std::string                g_stageWhy;             // why stage C is not drawing (logged on change)
@@ -1026,6 +1028,21 @@ namespace phantom::er::Renderer
 				return RenderDepth::NthIndex(RenderDepth::kListGbuffer, point, a_n, a_lists);
 			}
 			const int c = RenderDepth::LastIndex(RenderDepth::kListDepthClear, static_cast<UINT>(last + 1), a_lists);
+			RenderDepth::Target depth;
+			if (c < 0 && RenderDepth::Current(depth) && RenderDepth::FullyClearedThisFrame(depth.resource)) {
+				// The clear came in an earlier batch of this frame (none of whose lists drew into the G-buffer: GbufferPoint runs for
+				// the frame's first batch that has G-buffer lists): Snake goes in before this batch's first G-buffer list -- still
+				// before every one of Elden Ring's G-buffer draws, so none of the scene behind him is drawn where he is (the
+				// see-through of the last point, roadmap 5.1: grass behind him over his back).
+				const int first = RenderDepth::NthIndex(RenderDepth::kListGbuffer, 1, a_n, a_lists);
+				if (first >= 0) {
+					if (g_pointEarlier++ == 0) {
+						Log::Info("render: stage C: Elden Ring cleared its scene depth in an earlier batch: Snake goes in before its first G-buffer list ({} of {})",
+							first, a_n);
+					}
+					return first > 0 ? first - 1 : kBeforeBatch;
+				}
+			}
 			if (c < 0) {
 				if (g_pointLast++ == 0) {
 					Log::Warn("render: stage C: no clear of Elden Ring's scene depth in its G-buffer batch (last G-buffer list {} of {}): Snake goes in after "
@@ -1056,7 +1073,11 @@ namespace phantom::er::Renderer
 			}
 			const bool stageC = rc.stage == "gbuffer";
 			// Split points in this batch (after list g, after list v, before list k), -1 = none.
-			const int g = !stageC || g_gbufDone ? -1 : GbufferPoint(a_n, a_lists);
+			int        g = !stageC || g_gbufDone ? -1 : GbufferPoint(a_n, a_lists);
+			const bool gBefore = g == kBeforeBatch;  // Snake before the batch's first list (its depth cleared in an earlier batch)
+			if (gBefore) {
+				g = -1;
+			}
 			const int v = stageC && !g_velDone ? RenderDepth::LastIndex(RenderDepth::kListVelocity, a_n, a_lists) : -1;
 			// Before the composite: Snake (stage B / C's fallback) until he is in, and the world markers when there are any
 			// (most frames have none: a split per back-buffer batch for nothing would also redraw Snake in stage B).
@@ -1064,7 +1085,7 @@ namespace phantom::er::Renderer
 			const bool wantMarkers = !g_markersDrawn && RenderScene::HasMarkers();
 			const bool wantNvg = !g_nvgDone && RenderScene::HasNvg();
 			const int  k = wantScene || wantMarkers || wantNvg ? RenderDepth::CompositeIndex(a_n, a_lists) : -1;
-			if (g < 0 && v < 0 && k < 0) {
+			if (g < 0 && !gBefore && v < 0 && k < 0) {
 				RenderDepth::OnExecute(a_n, a_lists);
 				RenderProbe::OnExecute(a_queue, a_n, a_lists);
 				return false;
@@ -1081,8 +1102,8 @@ namespace phantom::er::Renderer
                 }
 			};
 			// With Snake before Elden Ring's own G-buffer draws, a `render gbuf peek` is copied after its last G-buffer list.
-			const int gLast = g >= 0 && rc.gbufferPoint != 0 ? RenderDepth::LastIndex(RenderDepth::kListGbuffer, a_n, a_lists) : g;
-			if (g >= 0) {
+			const int gLast = (g >= 0 || gBefore) && (rc.gbufferPoint != 0 || rc.minAmbient > 0.0f) ? RenderDepth::LastIndex(RenderDepth::kListGbuffer, a_n, a_lists) : g;
+			if (g >= 0 || gBefore) {
 				run(static_cast<UINT>(g + 1));
 				g_gbufDone = true;
 				std::string why;
@@ -1091,7 +1112,7 @@ namespace phantom::er::Renderer
 					const bool drew = Submit(true, [&](render::Recording& a_rec) {
 						// Elden Ring's view constants come from its G-buffer lists' bindings: all of them (an earlier point has not
 						// run the rest yet, but they are recorded).
-						return Gbuffer::RecordGbuffer(a_rec, snap.get(), rc.gbufferPoint != 0 ? a_n : static_cast<UINT>(g + 1), a_lists, gLast <= g);
+						return Gbuffer::RecordGbuffer(a_rec, snap.get(), rc.gbufferPoint != 0 ? a_n : static_cast<UINT>(g + 1), a_lists, gLast <= g && !gBefore);
 					});
 					if (drew && drawing) {
 						g_gbufDrawn = true;
@@ -1104,9 +1125,15 @@ namespace phantom::er::Renderer
 					StageReason(why);
 				}
 			}
-			if (gLast > g && static_cast<UINT>(gLast) >= at && Gbuffer::PeekPending()) {
+			const bool emissive = g_gbufDrawn && Gbuffer::WantsEmissive(snap.get());
+			if (gLast >= 0 && static_cast<UINT>(gLast) >= at && (emissive || (gLast > g && Gbuffer::PeekPending()))) {
 				run(static_cast<UINT>(gLast + 1));
-				Submit(true, [&](render::Recording& a_rec) { return Gbuffer::RecordPeek(a_rec); });
+				if (emissive) {
+					Submit(true, [&](render::Recording& a_rec) { return Gbuffer::RecordEmissive(a_rec, snap.get()); });
+				}
+				if (Gbuffer::PeekPending()) {
+					Submit(true, [&](render::Recording& a_rec) { return Gbuffer::RecordPeek(a_rec); });
+				}
 			}
 			if (v >= 0 && static_cast<UINT>(v) >= at) {
 				run(static_cast<UINT>(v + 1));
@@ -1200,9 +1227,10 @@ namespace phantom::er::Renderer
 		s += std::format("\n  {}: {} frames before the HUD, {} at Present{}", RenderMarkers::Describe(), g_markerFrames.load(), g_markerPresentFrames.load(),
 			g_markerFailed ? " (marker pipeline FAILED)" : "");
 		s += std::format("\n  {} ({} submissions)", RenderNvg::Describe(), g_nvgFrames.load());
-		s += std::format("\n  G-buffer point: {} ({} frames after Elden Ring's depth clear, {} after its last G-buffer list: no clear seen)",
+		s += std::format("\n  G-buffer point: {} ({} frames after Elden Ring's depth clear, {} before its first G-buffer list (the clear in an earlier batch), "
+		                 "{} after its last G-buffer list: no clear seen)",
 			Cfg().render.gbufferPoint < 0 ? "clear" : Cfg().render.gbufferPoint == 0 ? "last" : std::format("after its G-buffer list #{}", Cfg().render.gbufferPoint),
-			g_pointClear, g_pointLast);
+			g_pointClear, g_pointEarlier, g_pointLast);
 		if (Cfg().render.debugLayer || DebugLayer::Enabled()) {
 			s += "\n  " + DebugLayer::Describe();
 		}
@@ -1233,7 +1261,7 @@ namespace phantom::er::Renderer
 			return "render set <key> <value>: stage (gbuffer|post|present) debug_view (0 lit,1 albedo,2 normals,3 uv,4 facing,5 bones,6 srm; stage C: 1 grey albedo, 2 no normal map, 6 srm as albedo) "
 				   "latency_frames cull (back|front|none) front_ccw flip_x xray (0..1 opacity) er_depth er_depth_bias er_depth_near day_night exposure light_intensity "
 				   "draw_player draw_buddy albedo_srgb normal_xy (auto|rg|ag) enabled gbuffer_depth (finite|infinite) gbuffer_stencil gbuffer_point (0 last, k = k-th) gbuffer_light_set gbuffer_ao "
-				   "gbuffer_translucency albedo_scale gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref role_guard (off|log|on) poster_check (off|log|on) velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b) "
+				   "gbuffer_translucency albedo_scale min_ambient gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref role_guard (off|log|on) poster_check (off|log|on) velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b) "
 				   "nvg nvg_gain nvg_curve nvg_floor nvg_tint (r,g,b) nvg_grain nvg_vignette nvg_scanlines nvg_fade_ms";
 		}
 		if (verb != "set" || key.empty()) {
@@ -1286,6 +1314,7 @@ namespace phantom::er::Renderer
 		else if (key == "gbuffer_ao") r.gbufferAo = f();
 		else if (key == "gbuffer_translucency") r.gbufferTranslucency = f();
 		else if (key == "albedo_scale") r.albedoScale = f();
+		else if (key == "min_ambient") r.minAmbient = std::clamp(f(), 0.0f, 4.0f);
 		else if (key == "gloss_scale") r.glossScale = f();
 		else if (key == "gloss_bias") r.glossBias = f();
 		else if (key == "metal_scale") r.metalScale = f();

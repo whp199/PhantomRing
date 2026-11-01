@@ -2,12 +2,15 @@
 
 #include "Chord.h"
 #include "Config.h"
+#include "ErPresses.h"
 #include "Hook.h"
 #include "Kbm.h"
 #include "Link.h"
 #include "Log.h"
+#include "VirtualPad.h"
 
 #include <windows.h>
+#include <dbt.h>
 #include <xinput.h>
 
 #include <algorithm>
@@ -28,7 +31,11 @@ namespace phantom::er::InputBridge
 		// Test automation (console `input virtualpad on`): with no controller connected Elden Ring enumerates none and never
 		// polls; this reports a neutral gamepad on user 0 to both its capability query and its polls, so `press` reaches
 		// Elden Ring itself too (its menus, the grace, Y prompts), not only MGSV. A player with a real pad never needs it.
-		std::atomic<bool> g_virtualPad{ false };
+		// Exclusive (`on` / `exclusive`, er/VirtualPad.h): every real pad is ignored meanwhile, for Elden Ring and MGSV alike;
+		// shared ([Keyboard] virtual_pad, `shared`): only while no real pad answers on user 0.
+		std::atomic<int> g_virtualPad{ static_cast<int>(VirtualPadMode::kOff) };
+		std::atomic<std::uint64_t> g_realHidden{ 0 };  // polls of a connected real pad that the exclusive virtual pad hid
+		VirtualPadMode PadMode() { return static_cast<VirtualPadMode>(g_virtualPad.load(std::memory_order_relaxed)); }
 		SetStateFn g_setState{ nullptr };
 		bool       g_installed{ false };
 
@@ -42,6 +49,7 @@ namespace phantom::er::InputBridge
 		std::atomic<bool>          g_ledgeLatch{ false };      // ... and stays out of MGSV's pad until released
 		std::atomic<std::uint32_t> g_ledgePresses{ 0 };
 		std::atomic<ULONGLONG>     g_erPressUntil{ 0 };        // PressForEr: Elden Ring alone sees the prompt button until then
+		std::atomic<ULONGLONG>     g_mgsvPressUntil{ 0 };      // PressForMgsv: MGSV alone sees the prompt button until then
 		DWORD                      g_erPressPacket{ 0x60000000 };
 		DWORD                      g_erPressRaw{ 0 };
 		WORD                       g_erPressShown{ 0 };
@@ -70,6 +78,14 @@ namespace phantom::er::InputBridge
 		std::atomic<std::uint32_t> g_idroidCancels{ 0 };   // View holds sent to MGSV that became the chord (Start within chord_window_ms)
 		std::atomic<std::uint32_t> g_guestMenuCloses{ 0 };  // ...after which MGSV opened its menu anyway and got a Start tap to close it
 		std::atomic<std::uint16_t> g_guestMask{ 0 };        // Start/View the chord holds: out of MGSV's pad, its own menu included
+		// The quick item's shift ([Flask], er/Chord.h): View + the item button / the cycle button, counted for the game thread
+		// (er/QuickItem.h), and those presses kept out of MGSV's pad until released (X: MGSV's dive, D-pad down: its handgun).
+		std::atomic<std::uint32_t> g_itemUses{ 0 };
+		std::atomic<std::uint32_t> g_itemCycles{ 0 };
+		std::atomic<std::uint16_t> g_itemMask{ 0 };
+		// PressErButtons: Elden Ring alone sees these buttons pressed, each until its own deadline (the hidden Tarnished uses / cycles
+		// his quick item; er/ErPresses.h).
+		ErPresses g_erPresses;
 		// The View that opened MGSV's iDroid stays out of MGSV's pad until released: once the iDroid is up MGSV gets the
 		// whole pad, and a still-held View would be its Back (pause menu / back out of the iDroid).
 		std::atomic<bool> g_backHeldOver{ false };
@@ -82,14 +98,18 @@ namespace phantom::er::InputBridge
 			const auto&     c = Cfg();
 			PadGate::Params p;
 			p.viewHoldMs = c.viewHoldMs;
+			p.idroidOpenMs = c.idroidOpenMs;
 			p.idroidStartMs = c.guestIdroidStartMs;
 			p.startWaitMs = c.startWaitMs;
 			p.chordMs = c.chordMs;
 			p.chordWindowMs = c.chordWindowMs;
+			p.itemShift = c.flask && (c.flaskButton | c.flaskCycleButton) != 0;
 			PadGate::Input in;
 			in.nowMs = ::GetTickCount64();
 			in.start = (a_buttons & XINPUT_GAMEPAD_START) != 0;
 			in.view = (a_buttons & XINPUT_GAMEPAD_BACK) != 0;
+			in.item = c.flaskButton && (a_buttons & c.flaskButton) != 0;
+			in.cycle = c.flaskCycleButton && (a_buttons & c.flaskCycleButton) != 0;
 			in.mode = static_cast<PadGate::Mode>(g_padMode.load(std::memory_order_relaxed));
 			const auto o = g_gate.Update(in, p);
 			if (!in.view) {
@@ -112,6 +132,14 @@ namespace phantom::er::InputBridge
 				g_guestMenuCloses.fetch_add(1, std::memory_order_relaxed);
 			}
 			g_guestMask.store(static_cast<std::uint16_t>((o.guestMaskStart ? XINPUT_GAMEPAD_START : 0) | (o.guestMaskView ? XINPUT_GAMEPAD_BACK : 0)),
+				std::memory_order_relaxed);
+			if (o.itemUses) {
+				g_itemUses.fetch_add(static_cast<std::uint32_t>(o.itemUses), std::memory_order_relaxed);
+			}
+			if (o.itemCycles) {
+				g_itemCycles.fetch_add(static_cast<std::uint32_t>(o.itemCycles), std::memory_order_relaxed);
+			}
+			g_itemMask.store(static_cast<std::uint16_t>((o.guestMaskItem ? c.flaskButton : 0) | (o.guestMaskCycle ? c.flaskCycleButton : 0)),
 				std::memory_order_relaxed);
 			g_erStart.store(o.erStart, std::memory_order_relaxed);
 			g_erBack.store(o.erView, std::memory_order_relaxed);
@@ -183,6 +211,7 @@ namespace phantom::er::InputBridge
 				if (g_backHeldOver.load(std::memory_order_relaxed)) {
 					pad.buttons &= static_cast<std::uint16_t>(~XINPUT_GAMEPAD_BACK);
 				}
+				pad.buttons &= static_cast<std::uint16_t>(~g_itemMask.load(std::memory_order_relaxed));  // the quick item's presses
 				if (g_guestMenu.load(std::memory_order_relaxed)) {
 					// MGSV's own menu (iDroid, pause) is open: it gets the whole pad, Start/View and Y included, to work it
 					// and to close it; Elden Ring gets a neutral pad meanwhile. Not the Start/View held for the chord; and
@@ -195,6 +224,9 @@ namespace phantom::er::InputBridge
 					if (g_prompt.load(std::memory_order_relaxed) || g_promptLatch.load(std::memory_order_relaxed) ||
 						g_deferLatch.load(std::memory_order_relaxed) || g_ledgeLatch.load(std::memory_order_relaxed)) {
 						pad.buttons &= static_cast<std::uint16_t>(~Cfg().promptButton);  // ER's press (or the host's climb), not MGSV's
+					}
+					if (::GetTickCount64() < g_mgsvPressUntil.load(std::memory_order_acquire)) {
+						pad.buttons |= Cfg().promptButton;  // a ledge press the host gave back (no climb fits after all)
 					}
 					if (g_maskEr.load(std::memory_order_relaxed)) {
 						// Start/View are Elden Ring's while Snake plays (its menu and map): MGSV opening its iDroid or pause
@@ -280,10 +312,24 @@ namespace phantom::er::InputBridge
 			}
 			// Injected test input behaves exactly like the real pad: published to MGSV, masked for ER.
 			DWORD raw = g_getState(a_index, a_state);
-			if (raw != ERROR_SUCCESS && a_index == 0 && a_state && g_virtualPad.load(std::memory_order_relaxed)) {
-				*a_state = {};  // the test virtual pad: connected, neutral
+			switch (a_state ? VirtualPadPoll(PadMode(), a_index, raw == ERROR_SUCCESS) : PadPoll::kReal) {
+			case PadPoll::kVirtual:
+				if (raw == ERROR_SUCCESS) {
+					g_realHidden.fetch_add(1, std::memory_order_relaxed);
+				}
+				*a_state = {};  // the test virtual pad: connected, neutral (a real pad's sticks and buttons are dropped)
 				a_state->dwPacketNumber = 1;
 				raw = ERROR_SUCCESS;
+				break;
+			case PadPoll::kDisconnected:
+				if (raw == ERROR_SUCCESS) {
+					g_realHidden.fetch_add(1, std::memory_order_relaxed);
+				}
+				*a_state = {};
+				raw = ERROR_DEVICE_NOT_CONNECTED;
+				break;
+			case PadPoll::kReal:
+				break;
 			}
 			raw = Kbm::Apply(a_index, a_state, raw);  // keyboard and mouse as Snake's pad ([Keyboard]), published and masked as a real one
 			const DWORD result = ApplyInjection(a_index, a_state, raw);
@@ -344,6 +390,8 @@ namespace phantom::er::InputBridge
 					// Start/View only as the gate passes them on (a View tap at its release, Start after start_wait_ms, never
 					// the chord's).
 					extra = static_cast<WORD>(GatedButtons(0) & Cfg().allowButtons);
+					// The quick item (er/QuickItem.h): the hidden Tarnished's own button press, Elden Ring's alone.
+					extra |= g_erPresses.Held(::GetTickCount64());
 				}
 				const auto allowed = static_cast<WORD>((g.wButtons & allow) | extra);
 				g.wButtons = allowed;
@@ -424,7 +472,11 @@ namespace phantom::er::InputBridge
 		DWORD WINAPI GetCapsDetour(DWORD a_index, DWORD a_flags, XINPUT_CAPABILITIES* a_caps)
 		{
 			const DWORD r = g_getCaps(a_index, a_flags, a_caps);
-			if (r != ERROR_SUCCESS && a_index == 0 && a_caps && g_virtualPad.load(std::memory_order_relaxed)) {
+			const auto  poll = a_caps ? VirtualPadPoll(PadMode(), a_index, r == ERROR_SUCCESS) : PadPoll::kReal;
+			if (poll == PadPoll::kDisconnected) {
+				return ERROR_DEVICE_NOT_CONNECTED;  // exclusive: a real pad on users 1-3 is not there
+			}
+			if (poll == PadPoll::kVirtual) {
 				*a_caps = {};
 				a_caps->Type = XINPUT_DEVTYPE_GAMEPAD;
 				a_caps->SubType = XINPUT_DEVSUBTYPE_GAMEPAD;
@@ -437,20 +489,56 @@ namespace phantom::er::InputBridge
 			return r;
 		}
 
+		// Elden Ring re-enumerates its controllers (XInput users 0-3 among them) only on WM_DEVICECHANGE DBT_DEVICEARRIVAL /
+		// DBT_DEVICEREMOVECOMPLETE carrying a DEV_BROADCAST_DEVICEINTERFACE of the HID interface class (eldenring.exe 2.7.2.0: its
+		// window procedure at 0x141F6FB90 checks wParam 0x8000 / 0x8004, dbcc_devicetype 5 and the class GUID at 0x1430CF278 =
+		// GUID_DEVINTERFACE_HID, then flags its pad object (+0x899) for the re-enumeration at 0x141F70370 -> 0x141F2C570, the
+		// XInputGetState(0..3) loop). The DBT_DEVNODES_CHANGED this used to post does nothing there: with no controller plugged
+		// in Elden Ring never polled the virtual pad (2026-10-31: 16 polls at its start, then none). The message carries a pointer,
+		// so it is sent (not posted), from a thread of its own: the window's thread may be waiting for the game thread.
+		struct HidArrival
+		{
+			DEV_BROADCAST_DEVICEINTERFACE_W hdr;
+			wchar_t                         more[64];
+		};
+		HidArrival g_arrival{};
+		std::atomic<std::uint32_t> g_arrivalsSent{ 0 }, g_arrivalsAnswered{ 0 };
+
 		BOOL CALLBACK NotifyWindow(HWND a_hwnd, LPARAM)
 		{
 			DWORD pid = 0;
-			::GetWindowThreadProcessId(a_hwnd, &pid);
-			if (pid == ::GetCurrentProcessId()) {
-				// What Windows sends when a device comes or goes: Elden Ring re-enumerates its controllers on it.
+			const DWORD tid = ::GetWindowThreadProcessId(a_hwnd, &pid);
+			if (pid == ::GetCurrentProcessId() && tid != 0) {
 				::PostMessageW(a_hwnd, WM_DEVICECHANGE, 0x0007 /* DBT_DEVNODES_CHANGED */, 0);
+				DWORD_PTR result = 0;
+				g_arrivalsSent.fetch_add(1, std::memory_order_relaxed);
+				if (::SendMessageTimeoutW(a_hwnd, WM_DEVICECHANGE, 0x8000 /* DBT_DEVICEARRIVAL */, reinterpret_cast<LPARAM>(&g_arrival.hdr),
+						SMTO_BLOCK | SMTO_ABORTIFHUNG, 2000, &result)) {
+					g_arrivalsAnswered.fetch_add(1, std::memory_order_relaxed);
+				}
 			}
 			return TRUE;
 		}
+
+		DWORD WINAPI NotifyThread(LPVOID)
+		{
+			if (!g_arrival.hdr.dbcc_size) {
+				g_arrival.hdr.dbcc_size = sizeof(g_arrival);
+				g_arrival.hdr.dbcc_devicetype = 5;  // DBT_DEVTYP_DEVICEINTERFACE
+				g_arrival.hdr.dbcc_classguid = GUID{ 0x4D1E55B2, 0xF16F, 0x11CF, { 0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30 } };  // HID
+				const wchar_t name[] = L"\\\\?\\HID#VID_045E&PID_028E&IG_00#phantomring-virtual-pad#{4d1e55b2-f16f-11cf-88cb-001111000030}";
+				std::memcpy(g_arrival.hdr.dbcc_name, name, std::min(sizeof(name), sizeof(g_arrival.more) + sizeof(g_arrival.hdr.dbcc_name)));
+			}
+			::EnumWindows(&NotifyWindow, 0);
+			Log::Info("input: Elden Ring told a HID game controller arrived ({} window(s) answered of {}) -- it re-enumerates its controllers",
+				g_arrivalsAnswered.load(), g_arrivalsSent.load());
+			return 0;
+		}
 	}
 
-	std::string SetVirtualPad(bool a_on)
+	std::string SetVirtualPad(bool a_on, bool a_exclusive)
 	{
+		const auto mode = !a_on ? VirtualPadMode::kOff : a_exclusive ? VirtualPadMode::kExclusive : VirtualPadMode::kShared;
 		if (a_on && !g_getCaps) {
 			HMODULE xinput = ::GetModuleHandleW(L"xinput1_4.dll");
 			auto*   caps = xinput ? reinterpret_cast<void*>(::GetProcAddress(xinput, "XInputGetCapabilities")) : nullptr;
@@ -459,10 +547,20 @@ namespace phantom::er::InputBridge
 				return "virtual pad: XInputGetCapabilities hook failed";
 			}
 		}
-		g_virtualPad.store(a_on, std::memory_order_relaxed);
-		::EnumWindows(&NotifyWindow, 0);
-		Log::Info("input: test virtual pad {} (Elden Ring was told devices changed)", a_on ? "ON: user 0 reports a neutral gamepad" : "off");
-		return std::format("virtual pad {}; Elden Ring polls: {} calls so far", a_on ? "on" : "off", g_calls.load());
+		g_virtualPad.store(static_cast<int>(mode), std::memory_order_relaxed);
+		if (mode == VirtualPadMode::kExclusive) {
+			Kbm::Install();  // its DirectInput hooks also see a game controller Elden Ring reads that way (made neutral meanwhile)
+		}
+		if (HANDLE t = ::CreateThread(nullptr, 0, &NotifyThread, nullptr, 0, nullptr)) {
+			::CloseHandle(t);
+		}
+		const char* what = mode == VirtualPadMode::kExclusive ? "EXCLUSIVE: user 0 is a neutral gamepad, every real XInput pad is ignored (Elden Ring "
+		                                                        "and MGSV see only `press` and the keyboard)" :
+		                   mode == VirtualPadMode::kShared    ? "ON (shared): user 0 reports a neutral gamepad while no real one answers there" :
+		                                                        "off: the real pads as they are";
+		Log::Info("input: test virtual pad {} (Elden Ring was told devices changed)", what);
+		return std::format("virtual pad {}; Elden Ring polls: {} calls so far, real pad polls hidden: {}", VirtualPadName(mode), g_calls.load(),
+			g_realHidden.load());
 	}
 
 	void PollIfIdle()
@@ -533,6 +631,10 @@ namespace phantom::er::InputBridge
 
 	void SetGuestMenu(bool a_open) { g_guestMenu.store(a_open && g_installed, std::memory_order_relaxed); }
 	void PressForEr(unsigned a_ms) { g_erPressUntil.store(::GetTickCount64() + a_ms, std::memory_order_release); }
+	void PressForMgsv(unsigned a_ms) { g_mgsvPressUntil.store(::GetTickCount64() + a_ms, std::memory_order_release); }
+	void PressErButtons(std::uint16_t a_buttons, unsigned a_ms) { g_erPresses.Press(a_buttons, ::GetTickCount64() + a_ms); }
+	std::uint32_t ItemUses() { return g_itemUses.load(std::memory_order_relaxed); }
+	std::uint32_t ItemCycles() { return g_itemCycles.load(std::memory_order_relaxed); }
 	void HoldLeftStickUntilReleased() { g_lstickHoldWanted.store(true, std::memory_order_relaxed); }
 	void SetPadMode(PadGate::Mode a_mode) { g_padMode.store(static_cast<int>(a_mode), std::memory_order_relaxed); }
 	std::uint32_t Chords() { return g_chords.load(std::memory_order_relaxed); }
@@ -560,12 +662,14 @@ namespace phantom::er::InputBridge
 		return m;
 	}
 	std::uint64_t LastErPollMs() { return g_lastErCall.load(std::memory_order_relaxed); }
-	bool          VirtualPadOn() { return g_virtualPad.load(std::memory_order_relaxed); }
+	bool          VirtualPadOn() { return PadMode() != VirtualPadMode::kOff; }
+	bool          VirtualPadExclusive() { return PadMode() == VirtualPadMode::kExclusive; }
+	std::uint64_t RealPadPollsHidden() { return g_realHidden.load(std::memory_order_relaxed); }
 
 	void Rumble(std::uint16_t a_low, std::uint16_t a_high)
 	{
 		const int pad = PadIndex();
-		if (g_setState && pad >= 0) {
+		if (g_setState && pad >= 0 && PadMode() != VirtualPadMode::kExclusive) {  // exclusive: the real pad is not the player's to shake
 			XINPUT_VIBRATION v{ a_low, a_high };
 			g_setState(static_cast<DWORD>(pad), &v);
 		}

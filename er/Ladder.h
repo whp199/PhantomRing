@@ -70,6 +70,11 @@ namespace phantom::er
 	// fromsoftware-rs LadderState names (common_define.hks), for the log; "?" for others.
 	std::string_view LadderStateName(int a_state);
 
+	// Elden Ring's climb is over for good: none right after EndTop (6) / EndBottom (7) -- not a frame of none between two of its
+	// states. MGSV is told then (kHEvClimb a = 0), not after the settle, so that it has Snake home when the puppet starts (0.6.0:
+	// the stick did nothing for 0.2-0.5 s after a ladder while MGSV took him back from its own ladder).
+	constexpr bool LadderEndedForGood(int a_prevState, int a_state) { return a_state == -1 && (a_prevState == 6 || a_prevState == 7); }
+
 	// How a ladder state moves the climber: +1 up (StartBottom, Up*, EndTop), -1 down (StartTop, Down*, EndBottom, the coast =
 	// the slide down), 0 still on it (Idle*, Attack*, Damage*, unknown), and none (-1 state) = 0 too.
 	int LadderMotion(int a_state);
@@ -79,7 +84,9 @@ namespace phantom::er
 	// starts and again whenever it turns (up / down / still on it for kStillMs) or its pace changes by more than kPaceChange
 	// (never more often than kMinGapMs); a = 0 when it ends. b = 0 up / 1 down (a still climber keeps the last direction); v0[0] = the vertical
 	// speed (m/s): the Tarnished's own, measured (eased over kSpeedTauS), or a_defaultSpeed until a measure exists (its first
-	// kWarmupMs of moving). Pure (tests/test_host_chord.inc TestClimbPace).
+	// kWarmupMs of moving); exactly 0 = still on the rungs (the guest holds MGSV's climber still), and a moving climb never sends 0:
+	// with no speed to tell (a_defaultSpeed <= 0) it sends -1, "unknown" (MGSV's own pace). Pure (tests/test_host_chord.inc
+	// TestClimbPace).
 	class ClimbPace
 	{
 	public:
@@ -103,6 +110,14 @@ namespace phantom::er
 		Out Update(std::uint64_t a_nowMs, int a_state, float a_y, float a_defaultSpeed);
 		// The hand-over ended (off the ladder, a load, a death): a = 0 if a = 1 went out.
 		Out End();
+		// Elden Ring moved its world origin (er/WorldShift.h; live: 32 m at Fort Haight's tower mid-climb): the last height moves with
+		// it, so that frame's speed isn't a 32 m step.
+		void Shift(float a_dy)
+		{
+			if (haveY_) {
+				lastY_ += a_dy;
+			}
+		}
 		[[nodiscard]] bool  Started() const { return started_; }
 		[[nodiscard]] float Speed() const { return speed_; }  // measured |vy| (m/s), eased
 		[[nodiscard]] std::uint32_t Sent() const { return sent_; }

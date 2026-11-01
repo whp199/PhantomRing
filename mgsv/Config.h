@@ -70,6 +70,8 @@ namespace phantom::guest
 		// The spot leads Snake along his velocity by this long (s, clamped to 8 m), so a running Snake has the walker
 		// beside him, not catching up from behind; 0 = beside where he is.
 		float       buddyFollowLeadSec{ 0.8f };
+		float       buddyFollowLeadMin{ 0.0f };   // m: a moving Snake's spot at least this far ahead (0 = off; 5 tried live, no better)
+		int         buddyFollowSettleMs{ 0 };     // ms after an order without a "standing still" re-order or a catch-up warp (0 = off)
 		// While D-Walker walks to its spot, move that spot with Snake (the walker AI re-reads it) instead of whistling again.
 		bool        buddyFollowSteer{ true };
 		bool        buddyFollowRespectCommands{ true };  // the player's own buddy command (a mode) pauses auto-follow until they whistle or pick Normal Mode
@@ -96,6 +98,20 @@ namespace phantom::guest
 		bool        buddyHorseTreadmill{ true };
 		// ... and while riding, Snake is also placed by the same jump in the same frame (in case the saddle doesn't carry him).
 		bool        buddyHorseMoveRider{ false };
+		// D-Walker led alongside a moving Snake (Walker.cpp, WalkerLogic.h, GUEST.md 18.3 "Led alongside"): its own location
+		// object placed every frame at a point that tracks the spot WalkerLeadSide (m, negative: the screen's left) /
+		// WalkerLeadAhead beside him, closing the gap with WalkerLeadTau (s), never faster than WalkerLeadMaxSpeed (m/s); a
+		// walker farther than WalkerLeadAcquire (m) from the spot is left to MGSV. Only in the FollowModes, never ridden.
+		bool        buddyWalkerLead{ true };
+		float       buddyWalkerLeadSide{ -2.8f };
+		float       buddyWalkerLeadAhead{ 0.0f };
+		float       buddyWalkerLeadTau{ 0.35f };
+		float       buddyWalkerLeadMaxSpeed{ 9.0f };
+		float       buddyWalkerLeadAcquire{ 6.0f };
+		float       buddyWalkerLeadTurnRate{ 6.0f };  // rad/s the walker is turned toward where it goes (0 = its own facing)
+		// The treadmill moves D-Walker by its location object in the same frame as Snake (no Lua SetPosition a frame or two later:
+		// Elden Ring saw it flash the radius away and back).
+		bool        buddyWalkerTreadmill{ true };
 
 		// [Motion]
 		HoldMode holdMode{ HoldMode::kNativeTreadmill };  // the Lua Warp turns MGSV's camera behind Snake (GUEST.md 19)
@@ -124,13 +140,23 @@ namespace phantom::guest
 		// real MGSV wall ladder (a mafr_lddr001 TppLadder entity: its foot x, y, z and yaw in degrees; docs/GUEST.md 22.1).
 		bool  climb{ true };
 		float climbLadder[4]{ 879.31f, -11.77f, 1240.43f, 60.0f };  // mafr_lddr001_0011, 85 m from the apron sandbox
+		// A long climb moves him along MGSV's ladder by its rung index instead of looping through its ends (LadderRung.h)
+		bool  climbSeamless{ true };
 		// [Mantle] Snake's climb-up / vault for an Elden Ring ledge (kHEvMantle / kGuestMantling): staged at a real obstacle. Each
 		// site: where he stands x, y, z (feet), the way he faces (deg), its height (cm). Unset (all 0) = that kind is refused.
 		bool  mantle{ true };
 		float mantleVault[5]{ 826.39f, -11.95f, 1218.62f, 90.0f, 100.0f };  // the terminal's jersey barrier (MGSV climbs over it)
-		float mantleLow[5]{};
-		float mantleHigh[5]{};
+		// Climb-ups that end standing on top (live 2026-10-31, the storage yard under the shed ~70 m north-east of the apron):
+		// a wooden crate (103 cm; MGSV's climb-up, his root +1.12 m, Y to on his feet 1.99 s) and an oil drum (119 cm; +1.20 m,
+		// 1.98 s). MGSV's climb-up looks the same for both; the vault's first half (cutAtTop) remains the fallback with neither.
+		float mantleLow[5]{ 843.05f, -11.77f, 1244.75f, -90.0f, 103.0f };
+		float mantleHigh[5]{ 854.15f, -12.0f, 1243.76f, -90.0f, 119.0f };
 		int   mantleLowMaxCm{ 110 };  // a climb-up this high or lower takes the Low site (when both are set)
+		// A lower one (live 2026-10-31 night, a wider walk-probe search of the same yard): the stacked sacks beside the crates, 75 cm.
+		// MGSV's same 2.0 s move (Y to on his feet on top: 2002 ms), but up in 0.2 s, a knee onto the sacks, no hands on top -- the
+		// step-up of a low obstacle; his root +0.77 m. A climb-up up to StepMaxCm takes it (0 / unset = the Low site as before).
+		float mantleStep[5]{ 843.93f, -11.78f, 1241.65f, -90.0f, 75.0f };
+		int   mantleStepMaxCm{ 89 };
 
 		// [Pacing] (FramePace.h)
 		int  jobSleepUs{ 500 };  // MGSV's own Sleep(1) (its job system's poll) as a delay of this many us; 0 = 1 ms as MGSV asks
@@ -185,6 +211,7 @@ namespace phantom::guest
 		// ---- C4's detonator (C4.cpp, docs/GUEST.md 18.8a) ----
 		bool          c4Detonator{ true };    // MGSV's own detonator watched (its blast Elden Ring's); a press it refuses is the guest's
 		bool          c4Backup{ true };       // a tap MGSV never answers is the guest's (live: MGSV's own detonator answered 0 of 5)
+		bool          placedClearOnDeath{ true };  // the Tarnished died: Snake's placed explosives are removed from MGSV's own list too (Placed.h)
 		std::uint32_t c4Buttons{ 0x20 };      // PlayerPad bits of the detonator (0x20 = ACTION: MGSV's own, Y by default)
 		std::int64_t  c4GraceMs{ 250 };       // how long MGSV has to answer a tap before the backup sets one off
 		bool          c4DetonateAll{ false }; // every live C4 per press (MGSV's own: the oldest only)
@@ -200,6 +227,8 @@ namespace phantom::guest
 		// D-Walker's own sounds as a gain on their Wwise objects (Sound.cpp). EXPERIMENTAL, no audible effect yet (GUEST.md
 		// 18.2): 1 = off (no hooks); anything else installs the Wwise detours and the `!sound` diagnostics.
 		float     walkerVolume{ 1.0f };
+		float     walkerDistance{ 8.0f };  // [Audio] WalkerDistance: D-Walker's sounds this many times further from the listener (Sound.h)
+		bool      audioMeter{ false };     // [Audio] Meter: MGSV's own output metered in the game (AudioMeter.h)
 
 		// [Menu]
 		bool safePauseMenu{ true };  // MGSV's pause menu keeps only Controls & Manual and Options (no checkpoint/ACC/title)

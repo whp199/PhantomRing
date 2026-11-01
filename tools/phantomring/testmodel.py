@@ -309,6 +309,29 @@ def walker_mesh() -> tuple[bytes, int]:
 	return proto.build_mesh_msg(mesh, elements, bytes(vb), ib), len(mb.indices)
 
 
+def grenade_mesh() -> tuple[bytes, int]:
+	"""A hand grenade stand-in for kOwnerProjectile draws (protocol v13): a 9 cm body and its lever; rigid, like walker_mesh."""
+	mb = MeshBuilder()
+	mb.box(0, (0.0, 0.0, 0.0), (0.035, 0.045, 0.035))
+	mb.box(0, (0.0, 0.05, 0.02), (0.008, 0.012, 0.03))
+	elements = [
+		proto.RenInputElement(semantic=b"POSITION", semanticIndex=0, format=R32G32B32_FLOAT, inputSlot=0, alignedByteOffset=0),
+		proto.RenInputElement(semantic=b"NORMAL", semanticIndex=0, format=R8G8B8A8_UNORM, inputSlot=0, alignedByteOffset=12),
+		proto.RenInputElement(semantic=b"TEXCOORD", semanticIndex=0, format=R32G32_FLOAT, inputSlot=0, alignedByteOffset=16),
+	]
+	vb = bytearray()
+	for pos, n, tg, uv, w, bi, col in mb.verts:
+		vb += struct.pack("<3f", *pos) + bytes(int(round((c * 0.5 + 0.5) * 255)) for c in (*n, 0.0)) + struct.pack("<2f", *uv)
+	ib = struct.pack(f"<{len(mb.indices)}I", *mb.indices)
+	mesh = proto.RenMesh(elementCount=len(elements), vertexStride=24, vertexBytes=len(vb), indexFormat=R32_UINT, indexBytes=len(ib),
+		topology=TRIANGLELIST, streams=1)
+	mesh.streamStride[0] = 24
+	mesh.streamBytes[0] = len(vb)
+	body = b"".join(bytes(e) for e in elements) + bytes(vb) + ib
+	mesh.key = fnv64(bytes(mesh), body)
+	return proto.build_mesh_msg(mesh, elements, bytes(vb), ib), len(mb.indices)
+
+
 # ---- textures -----------------------------------------------------------------------------------
 def _rgb565(c):
 	return ((c[0] >> 3) << 11) | ((c[1] >> 2) << 5) | (c[2] >> 3)
@@ -424,21 +447,25 @@ class Humanoid:
 	def __init__(self):
 		self.mesh_msg, self.index_count = humanoid_mesh()
 		self.walker_msg, self.walker_index_count = walker_mesh()
+		self.grenade_msg, self.grenade_index_count = grenade_mesh()
 		self.tex = {"albedo": camo_albedo(), "normal": weave_normal(), "srm": srm_map(), "walker": walker_albedo(),
 			"walker_srm": srm_map(spec=120, rough=90, metal=200)}
 		key = lambda msg: struct.unpack_from("<Q", msg, 0)[0]
 		self.mesh_key = key(self.mesh_msg)
 		self.walker_key = key(self.walker_msg)
+		self.grenade_key = key(self.grenade_msg)
 		self.tex_keys = {k: key(v) for k, v in self.tex.items()}
 
 	def messages(self):
 		yield proto.RenType.Mesh, self.mesh_msg
 		yield proto.RenType.Mesh, self.walker_msg
+		yield proto.RenType.Mesh, self.grenade_msg
 		for msg in self.tex.values():
 			yield proto.RenType.Texture, msg
 
-	def draw(self, t: float, yaw: float, walker_offset):
-		"""(draw records, matrices) for this frame: Snake skinned with len(BONES) matrices, D-Walker rigid."""
+	def draw(self, t: float, yaw: float, walker_offset, projectiles=()):
+		"""(draw records, matrices) for this frame: Snake skinned with len(BONES) matrices, D-Walker rigid, and each projectile in
+		flight (offset from Snake's root, tumble angle) as a rigid kOwnerProjectile draw of the grenade stand-in."""
 		model = pose(t)
 		mats = skin_matrices(model, yaw)
 		snake = proto.DrawRecord(mesh=self.mesh_key, indexCount=self.index_count, startIndex=0, baseVertex=0, firstMatrix=0,
@@ -452,4 +479,13 @@ class Humanoid:
 			firstMatrix=len(mats) - 1, matrixCount=1, flags=int(proto.DrawFlags.Rigid), owner=proto.DrawOwner.Buddy, material=2)
 		walker.textures[0] = self.tex_keys["walker"]
 		walker.textures[2] = self.tex_keys["walker_srm"]
-		return [snake, walker], mats, model
+		draws = [snake, walker]
+		for offset, spin in projectiles:
+			g = mat_mul(translate(*offset), rot_x(spin))
+			mats.append(tuple(g[r][c] for r in range(3) for c in range(4)))
+			rec = proto.DrawRecord(mesh=self.grenade_key, indexCount=self.grenade_index_count, startIndex=0, baseVertex=0,
+				firstMatrix=len(mats) - 1, matrixCount=1, flags=int(proto.DrawFlags.Rigid), owner=proto.DrawOwner.Projectile, material=3)
+			rec.textures[0] = self.tex_keys["walker"]
+			rec.textures[2] = self.tex_keys["walker_srm"]
+			draws.append(rec)
+		return draws, mats, model

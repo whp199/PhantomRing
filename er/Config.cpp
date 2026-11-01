@@ -108,6 +108,7 @@ namespace phantom::er
 		interactionMinMs = static_cast<int>(ini.GetInt("Input", "interaction_min_ms", interactionMinMs));
 		interactionMaxMs = static_cast<int>(ini.GetInt("Input", "interaction_max_ms", interactionMaxMs));
 		viewHoldMs = static_cast<int>(ini.GetInt("Input", "view_hold_ms", viewHoldMs));
+		idroidOpenMs = static_cast<int>(ini.GetInt("Input", "idroid_open_ms", idroidOpenMs));
 		guestIdroidStartMs = static_cast<int>(ini.GetInt("Input", "guest_idroid_start_ms", guestIdroidStartMs));
 		guestMenuOwnsPad = ini.GetBool("Input", "guest_menu_owns_pad", guestMenuOwnsPad);
 		padGlyphDevice = static_cast<int>(ini.GetInt("Input", "pad_glyph_device", padGlyphDevice));
@@ -140,6 +141,7 @@ namespace phantom::er
 		ladderDescendPrompt = static_cast<int>(ini.GetInt("Ladder", "descend_prompt", ladderDescendPrompt));
 		ladderTopStand = std::clamp(static_cast<float>(ini.GetFloat("Ladder", "top_stand", ladderTopStand)), 0.0f, 2.0f);
 		IntList(ini, "Input", "menu_ui_states", menuUiStates, 0x45);
+		IntList(ini, "Input", "dialog_ui_states", dialogUiStates, 0x45);
 
 		hideMode = ini.Get("Puppet", "hide_mode", hideMode);
 		motion = ini.Get("Puppet", "motion", motion);
@@ -230,6 +232,8 @@ namespace phantom::er
 		mantleWaitMs = static_cast<int>(ini.GetInt("Mantle", "wait_ms", mantleWaitMs));
 		mantlePromptQuietMs = static_cast<int>(ini.GetInt("Mantle", "prompt_quiet_ms", mantlePromptQuietMs));
 		mantleBuddyClear = static_cast<float>(ini.GetFloat("Mantle", "buddy_clear", mantleBuddyClear));
+		mantleSlantY = std::clamp(static_cast<float>(ini.GetFloat("Mantle", "max_slant", mantleSlantY)), 0.0f, 85.0f);
+		mantleSlantRun = std::clamp(static_cast<float>(ini.GetFloat("Mantle", "run_max_slant", mantleSlantRun)), 0.0f, 85.0f);
 
 		hints = ini.GetBool("Hints", "enabled", hints);
 		hintCount = static_cast<int>(ini.GetInt("Hints", "count", hintCount));
@@ -250,6 +254,48 @@ namespace phantom::er
 				Log::Warn("[Jump] button = {} is not r3|a|l3; using r3", b);
 				jumpButton = 0x0080;
 				jumpButtonName = "R3";
+			}
+		}
+
+		{
+			// [Flask]: pad buttons by name (the shift is View's: View held + button).
+			struct Named
+			{
+				const char*   name;
+				std::uint16_t bit;
+				const char*   shown;
+			};
+			static constexpr Named kButtons[] = { { "a", 0x1000, "A" }, { "b", 0x2000, "B" }, { "x", 0x4000, "X" }, { "y", 0x8000, "Y" },
+				{ "dpad_up", 0x0001, "D-pad up" }, { "dpad_down", 0x0002, "D-pad down" }, { "dpad_left", 0x0004, "D-pad left" },
+				{ "dpad_right", 0x0008, "D-pad right" }, { "lb", 0x0100, "LB" }, { "rb", 0x0200, "RB" }, { "l3", 0x0040, "L3" },
+				{ "r3", 0x0080, "R3" }, { "none", 0, "none" }, { "off", 0, "none" } };
+			auto button = [&](const char* a_key, std::uint16_t& a_bit, std::string* a_name) {
+				const auto v = ini.Get("Flask", a_key, "");
+				if (v.empty()) {
+					return;
+				}
+				for (const auto& n : kButtons) {
+					if (v == n.name) {
+						a_bit = n.bit;
+						if (a_name) {
+							*a_name = n.shown;
+						}
+						return;
+					}
+				}
+				Log::Warn("[Flask] {} = {} is not a pad button (a b x y dpad_up dpad_down dpad_left dpad_right lb rb l3 r3 none); kept the default", a_key, v);
+			};
+			flask = ini.GetBool("Flask", "enabled", flask);
+			button("button", flaskButton, &flaskButtonName);
+			button("cycle_button", flaskCycleButton, &flaskCycleName);
+			button("er_use_button", flaskErUse, nullptr);
+			button("er_cycle_button", flaskErCycle, nullptr);
+			flaskPressMs = std::clamp(static_cast<int>(ini.GetInt("Flask", "press_ms", flaskPressMs)), 40, 1000);
+			flaskConfirmMs = std::clamp(static_cast<int>(ini.GetInt("Flask", "confirm_ms", flaskConfirmMs)), 500, 10000);
+			flaskWhileRiding = ini.GetBool("Flask", "while_riding", flaskWhileRiding);
+			if (flaskButton & 0x0030) {
+				Log::Warn("[Flask] button can't be Start or View (View is its shift); no quick item use");
+				flaskButton = 0;
 			}
 		}
 
@@ -572,6 +618,7 @@ namespace phantom::er
 		r.gbufferAo = static_cast<float>(ini.GetFloat("Render", "gbuffer_ao", r.gbufferAo));
 		r.gbufferTranslucency = static_cast<float>(ini.GetFloat("Render", "gbuffer_translucency", r.gbufferTranslucency));
 		r.albedoScale = static_cast<float>(ini.GetFloat("Render", "albedo_scale", r.albedoScale));
+		r.minAmbient = std::clamp(static_cast<float>(ini.GetFloat("Render", "min_ambient", r.minAmbient)), 0.0f, 4.0f);
 		r.glossScale = static_cast<float>(ini.GetFloat("Render", "gloss_scale", r.glossScale));
 		r.glossBias = static_cast<float>(ini.GetFloat("Render", "gloss_bias", r.glossBias));
 		r.metalScale = static_cast<float>(ini.GetFloat("Render", "metal_scale", r.metalScale));
@@ -636,6 +683,7 @@ namespace phantom::er
 		o.enabled = ini.GetBool("Overlay", "enabled", o.enabled);
 		o.hud = ini.GetBool("Overlay", "hud", o.hud);
 		o.hudFadeMs = static_cast<int>(ini.GetInt("Overlay", "hud_fade_ms", o.hudFadeMs));
+		o.climbHideMs = std::clamp(static_cast<int>(ini.GetInt("Overlay", "climb_hide_ms", o.climbHideMs)), 0, 5000);
 		o.reticle = ini.Get("Overlay", "reticle", o.reticle);
 		if (o.reticle != "auto" && o.reticle != "on" && o.reticle != "off") {
 			Log::Warn("[Overlay] reticle = {} is not auto|on|off; using auto", o.reticle);

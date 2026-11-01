@@ -9,6 +9,7 @@
 #include "Skeleton.h"
 #include "State.h"
 #include "Verify.h"
+#include "Walker.h"
 
 #include <windows.h>
 
@@ -102,6 +103,10 @@ namespace phantom::guest::follow
 		std::atomic<std::uint64_t>  g_modesKept{ 0 };       // whistles whose mode reset the detour undid
 		std::uint64_t               g_modeSkips{ 0 };       // updates left alone because of the walker's mode
 		std::atomic<bool>           g_fallbackLogged{ false };
+		// Auto-follow acts on D-Walker now (Normal Mode or a FollowModes one, following on, no player hold, not ridden, nothing
+		// busy): the game thread's lead (Walker.cpp) may take it alongside Snake. Stamped by each Update (Lua thread, 4 Hz).
+		std::atomic<bool>           g_leadOk{ false };
+		std::atomic<std::uint64_t>  g_leadOkMs{ 0 };
 
 		// Every voice line MGSV posts through its voice system (Addresses.h kVoicePost), counted and logged: D-Walker's mode
 		// announcements come from its mode watcher (return kWalkerVoiceReturn). Auto-follow must cause none.
@@ -202,6 +207,17 @@ namespace phantom::guest::follow
 			return ctl;
 		}
 
+		// The walker AI's state byte (Addresses.h kWalkerRecordState: 05 idle, 06 settling, 09 turning, 0A walking, 0C stopping), -1 =
+		// not known.
+		int WalkerState(std::uint16_t a_id)
+		{
+			std::uint8_t st = 0;
+			const auto   record = g_modeSites ? RecordOf(WalkerController(), a_id & 0x1FF) : 0;
+			return record && ReadBytes(record + addr::kWalkerRecordState, &st, 1) ? st : -1;
+		}
+		std::uint64_t g_aiIdleSince{ 0 };
+		std::uint64_t g_ledOrders{ 0 };
+
 		// D-Walker's mode (0..5) for the buddy object a_id, -1 = not known (no controller yet, sites differ).
 		int WalkerMode(std::uint16_t a_id)
 		{
@@ -242,6 +258,10 @@ namespace phantom::guest::follow
 
 		float Side(bool a_running)
 		{
+			// Led alongside Snake (Walker.cpp): its order is the lead's own lane, ahead of it -- the AI walks where it is taken.
+			if (walker::Leading()) {
+				return Cfg().buddyWalkerLeadSide;
+			}
 			const float side = Cfg().buddyFollowSide;
 			const float running = Cfg().buddyFollowSideRunning;
 			return a_running && std::fabs(running) > std::fabs(side) ? running : side;
@@ -256,7 +276,7 @@ namespace phantom::guest::follow
 		// is now arrives behind a running Snake and spends the run catching up (live: up to 14 m behind).
 		logic::Vec3 Lead(const state::FrameView& a_fr)
 		{
-			return logic::LeadPoint(a_fr.root, a_fr.velocity, Cfg().buddyFollowLeadSec, 8.0f, 1.0f);
+			return logic::LeadPoint(a_fr.root, a_fr.velocity, Cfg().buddyFollowLeadSec, 8.0f, 1.0f, Cfg().buddyFollowLeadMin);
 		}
 
 		logic::Vec3 Target(const state::FrameView& a_fr) { return Spot(Lead(a_fr), ViewYaw(a_fr, a_fr.yaw), Running(a_fr)); }
@@ -271,7 +291,12 @@ namespace phantom::guest::follow
 		void CatchUp(const state::FrameView& a_fr, const state::LuaView& a_lua, std::uint64_t a_nowMs)
 		{
 			const float limit = Cfg().buddyFollowCatchUp;
-			if (!(limit > 0.0f) || !Running(a_fr) || a_nowMs - g_lastCatchUp < 1500) {
+			if (!(limit > 0.0f) || !Running(a_fr) || a_nowMs - g_lastCatchUp < 1500 || walker::Leading()) {
+				return;  // (led alongside him: never warped as well)
+			}
+			// A warp while the walker is still taking an order (~1-2 s, then ~1 s to start) restarts its reaction: live, a
+			// catch-up 1.8 s after Snake started put off its first step to 2.4 s after the start.
+			if (a_nowMs - g_last < static_cast<std::uint64_t>(Cfg().buddyFollowSettleMs)) {
 				return;
 			}
 			const logic::Vec3 toSnake = a_fr.root - a_fr.camPos;
@@ -611,6 +636,18 @@ namespace phantom::guest::follow
 	void Update(std::uint64_t a_nowMs, bool a_ready)
 	{
 		const auto& c = Cfg();
+		// Whatever path returns below: the lead is allowed only where it is set true (after every check of auto-follow's own).
+		bool leadOk = false;
+		struct StoreLeadOk
+		{
+			bool&         ok;
+			std::uint64_t now;
+			~StoreLeadOk()
+			{
+				g_leadOk.store(ok);
+				g_leadOkMs.store(now);
+			}
+		} storeLeadOk{ leadOk, a_nowMs };
 		if (a_ready && c.buddy == "horse") {
 			HorseUpdate(a_nowMs);
 			return;
@@ -690,6 +727,7 @@ namespace phantom::guest::follow
 			g_record = 0;  // its own mode drives it now: no steering, no catch-up
 			return;
 		}
+		leadOk = true;
 		if (spotted) {
 			CatchUp(fr, lua, a_nowMs);
 		}
@@ -700,6 +738,30 @@ namespace phantom::guest::follow
 				++g_steers;
 			}
 		}
+		// Led alongside Snake (Walker.cpp puts it beside him every frame): its AI only has to keep walking -- the legs. The AI plans
+		// once per order and stands when that is done (live 2026-10-31: walking 0.3 s after its order, idle for the rest of a 12 s
+		// run, gliding): a new order to its lane ahead of him (Side() is the lead's) whenever it stood (idle / settling) 0.8 s while
+		// he moves, at most every 1.5 s (its reaction to one is ~1-2 s). Nothing else while led: no whistle, no stall logic.
+		if (walker::Leading()) {
+			const int st = WalkerState(lua.buddyId);
+			if (moving && (st == 0x05 || st == 0x06)) {
+				g_aiIdleSince = g_aiIdleSince ? g_aiIdleSince : a_nowMs;
+			} else {
+				g_aiIdleSince = 0;
+			}
+			// ... and when he stops, an order beside where he stands (the lead lets go 0.5 s later): without it the AI walked on to its
+			// last order ahead of him and stood 5 m off (live: standing p90 5.3 m).
+			const bool stopped = started && !moving;
+			if (stopped || (moving && (started || (g_aiIdleSince && a_nowMs - g_aiIdleSince >= 800 && a_nowMs - g_last >= 1500)))) {
+				g_last = a_nowMs;
+				g_stuckSince = a_nowMs;
+				g_aiIdleSince = 0;
+				++g_ledOrders;
+				Order(lua.buddyId, spot, fr.yaw, stopped ? "led, Snake stopped" : started ? "led, Snake started moving" : "led, its AI stood");
+			}
+			return;
+		}
+		g_aiIdleSince = 0;
 		if (dist < c.buddyFollowDistance) {
 			return;
 		}
@@ -709,7 +771,9 @@ namespace phantom::guest::follow
 		const bool steerable = spotted && c.buddyFollowSteer && g_record;
 		// MGSV's walker doesn't come closer than ~3 m to the player: standing that close to an idle Snake it has arrived.
 		const bool besideIdle = !moving && (lua.buddyPos - fr.root).LengthXZ() < 3.5f;
-		const bool stalled = a_nowMs - g_stuckSince > 1000 && !besideIdle;
+		// ... and an order is given time to be taken: a new one for "standing still" 1 s after the last restarted the walker's
+		// ~2 s reaction (live 2026-10-31: orders 1.0 and 2.1 s after Snake started, it walked 3.4 s after).
+		const bool stalled = a_nowMs - g_stuckSince > 1000 && !besideIdle && a_nowMs - g_last >= static_cast<std::uint64_t>(c.buddyFollowSettleMs);
 		const bool due = a_nowMs - g_last >= static_cast<std::uint64_t>(c.buddyFollowEveryMs);
 		if (!(started || (steerable ? stalled && due : (soon || due) && !besideIdle))) {
 			return;
@@ -759,6 +823,8 @@ namespace phantom::guest::follow
 
 	void RequestWhistle() { g_requested = true; }
 
+	bool LeadAllowed() { return g_leadOk.load() && ::GetTickCount64() - g_leadOkMs.load() < 1000; }
+
 	bool WhistleHorseNow(const char* a_why)
 	{
 		if (g_ok < 0) {
@@ -778,7 +844,7 @@ namespace phantom::guest::follow
 		return std::format("{} ({}), whistles {}, walker {:.1f} m from its spot ({}; lead {:.1f} s; {} retargeted, {} steered, {} moved by the treadmill; record {:#x})", g_why,
 			g_playerHold ? "paused by the player's command" : g_enabled && Cfg().buddyFollow ? "on" : "off", g_whistles, g_lastDist,
 			g_hooked ? std::format("spot {:.1f} ahead / {:.1f} right", Cfg().buddyFollowAhead, Cfg().buddyFollowSide) : std::string("spot = Snake"),
-			Cfg().buddyFollowLeadSec, g_retargets, g_steers, g_shifts, g_record) + std::format(", {} catch-ups; player commands {} (last {})", g_catchUps, g_playerCommands.load(), g_playerLast.load()) +
+			Cfg().buddyFollowLeadSec, g_retargets, g_steers, g_shifts, g_record) + std::format(", {} catch-ups, {} orders while led; player commands {} (last {})", g_catchUps, g_ledOrders, g_playerCommands.load(), g_playerLast.load()) +
 		       std::format("; method {}, walker mode {} (follows in mask {:#x}; {} updates left to its mode), {} record orders, {} whistles kept its mode, controller {:#x}",
 				   MethodName(g_method), ModeName(g_lastMode), g_modeMask.load(), g_modeSkips, g_orders, g_modesKept.load(), g_walkerCtl.load());
 	}

@@ -708,8 +708,12 @@ namespace phantom::er::Explosion
 				c.breakerHitsCharacters = a_w[3] == "on";
 			} else if (a_w[2] == "muzzle_flash") {
 				c.muzzleFlash = a_w[3] == "on";  // [Combat] muzzle_flash live
+			} else if (a_w[2] == "muzzle_life") {
+				c.muzzleLife = std::clamp(v, 0.01f, 3.0f);  // the carrier is rewritten on the next flash
+			} else if (a_w[2] == "muzzle_ahead") {
+				c.muzzleAhead = std::clamp(v, 0.0f, 1.0f);
 			} else {
-				return "boom set breaker_speed|breaker_radius|breaker_lead|breaker_obj|explosion_obj <v> | hits_characters|muzzle_flash on|off";
+				return "boom set breaker_speed|breaker_radius|breaker_lead|breaker_obj|explosion_obj|muzzle_life|muzzle_ahead <v> | hits_characters|muzzle_flash on|off";
 			}
 			g_objAtk = {};
 			for (auto& p : g_prep) {
@@ -721,7 +725,7 @@ namespace phantom::er::Explosion
 			// boom look <kind> <bullet id> [sfx]: try another template live (not saved); its carrier is rewritten on the next use.
 			const auto kind = explosion::FromName(a_w[2]);
 			if (!kind) {
-				return "boom look <lethal|stun|sleep|smoke|flame|breaker> <bullet id> [sfx id]";
+				return "boom look <lethal|stun|sleep|smoke|flame|breaker|shrapnel|muzzle> <bullet id> [sfx id]";
 			}
 			const auto k = static_cast<std::size_t>(*kind);
 			Cfg().explosionTemplate[k] = static_cast<std::uint32_t>(std::strtoul(a_w[3].c_str(), nullptr, 10));

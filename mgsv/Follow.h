@@ -36,6 +36,9 @@ namespace phantom::guest::follow
 
 	// Console: whistle once on the next Update (`!whistle`), or switch following (`!follow on|off`).
 	void RequestWhistle();
+	// Any thread: auto-follow acts on D-Walker right now (Normal Mode or a FollowModes one, following on, no player hold, not
+	// ridden, Snake not busy, parked or staged) -- the condition for Walker.cpp's lead. Stale after 1 s without an Update.
+	bool LeadAllowed();
 	// MGSV's Lua thread: D-Horse's whistle at once (boot, before the sandbox is ready); false if its checks failed.
 	bool WhistleHorseNow(const char* a_why);
 	void SetEnabled(bool a_on);

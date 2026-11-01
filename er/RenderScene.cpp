@@ -26,6 +26,9 @@ namespace phantom::er::RenderScene
 {
 	namespace
 	{
+		// While Snake dies (Puppet::DeathSeconds() >= 0): how many of his draws the last capture had, and why none (nullptr: drawn).
+		std::atomic<std::uint32_t> g_dyingDraws{ 0 };
+		std::atomic<const char*>   g_dyingWhy{ nullptr };
 		constexpr std::size_t kHistory = 6;
 		constexpr std::uint32_t kMaxDraws = 4096;
 		constexpr std::uint32_t kMaxMatrices = 1u << 16;
@@ -108,7 +111,7 @@ namespace phantom::er::RenderScene
 			std::vector<proto::DrawRecord> paced;
 			const proto::DrawRecord*       recs = nullptr;
 			std::uint32_t                  drawCount = 0, matrixCount = 0;
-			if (Pacing::Draws(a_f, paced, a_s.matrices, a_s.guestFrame)) {
+			if (Pacing::Draws(a_f, paced, a_s.matrices, a_s.guestFrame, &a_s.guestYaw)) {
 				recs = paced.data();
 				drawCount = static_cast<std::uint32_t>(paced.size());
 				matrixCount = static_cast<std::uint32_t>(a_s.matrices.size() / 12);
@@ -124,6 +127,7 @@ namespace phantom::er::RenderScene
 					return false;
 				}
 				a_s.guestFrame = list->frame;
+				a_s.guestYaw = list->anchorYaw;
 				recs = reinterpret_cast<const proto::DrawRecord*>(base + sizeof(proto::DrawList));
 				const auto* mats = reinterpret_cast<const float*>(base + sizeof(proto::DrawList) + list->drawCount * sizeof(proto::DrawRecord));
 				a_s.matrices.assign(mats, mats + std::size_t(list->matrixCount) * 12);
@@ -208,19 +212,42 @@ namespace phantom::er::RenderScene
 		}
 		// On a ladder ([Ladder] snake) the puppet is off while Elden Ring climbs with the hidden Tarnished: Snake is drawn at the
 		// anchor the host keeps on him (Puppet::ClimbVisual).
-		if (rc.enabled && s->dissolve < 1.0f && ReadCamera(s->camera) && (Puppet::Active() || dying >= 0.0f || Puppet::ClimbVisual()) && a_f.guestReady && !a_f.loading) {
+		const bool camera = ReadCamera(s->camera);
+		if (dying >= 0.0f) {
+			// Why Snake is (not) drawn while he dies (Puppet's death trace, the log): seen once in 0.6.0 testing he wasn't.
+			const char* why = !rc.enabled ? "rendering off" : s->dissolve >= 1.0f ? "dissolved (death_visual)" : !camera ? "no camera" :
+			                  !a_f.guestReady                                ? "MGSV not ready" :
+			                  a_f.loading                                    ? "loading" :
+			                                                                   nullptr;
+			g_dyingWhy.store(why, std::memory_order_relaxed);
+		}
+		if (rc.enabled && s->dissolve < 1.0f && camera && (Puppet::Active() || dying >= 0.0f || Puppet::ClimbVisual()) && a_f.guestReady && !a_f.loading) {
 			const Anchor& a = Puppet::CurrentAnchor();
 			AnchorMatrix(a, s->anchor);
 			s->mirrored = a.axes.mirrorX < 0;
 			s->riding = (a_f.guest.flags & proto::kGuestOnVehicle) != 0;
 			s->firstPerson = (a_f.guest.flags & proto::kGuestFirstPerson) != 0;
 			s->draw = CopyDrawList(*s, a_f);
+			// MGSV plays a staged move (a climb-up / vault at the airport's obstacle, or he is still on its ladder as the puppet
+			// starts): his body there faces that obstacle, turned to face Elden Ring's move instead (er/StagedFacing.h). Before the
+			// projectiles: they are placed through this same anchor.
+			if (s->draw && std::isfinite(s->guestYaw)) {
+				if (const auto staged = Puppet::StagedDrawAnchor(s->guestYaw)) {
+					AnchorMatrix(*staged, s->anchor);
+				}
+			}
 			// MGSV's projectile draws out, the flown grenades / rockets in (roadmap 5.4) -- also without a list from MGSV this
 			// frame: Throw / Rounds leave their ball out for a copy placed here, which must not vanish while MGSV stalls.
 			s->draw = Projectiles::Apply(*s);
 			if (s->draw) {
 				GroundBuddy(*s, a_f.dt);
 			}
+			if (dying >= 0.0f && !s->draw) {
+				g_dyingWhy.store("no draw list from MGSV", std::memory_order_relaxed);
+			}
+		}
+		if (dying >= 0.0f) {
+			g_dyingDraws.store(s->draw ? static_cast<std::uint32_t>(s->draws.size()) : 0u, std::memory_order_relaxed);
 		}
 		// The host's own world markers (er/RenderMarkers.h); their owners show none in menus, cutscenes, loads.
 		s->markers = RenderMarkers::Collect();
@@ -276,6 +303,13 @@ namespace phantom::er::RenderScene
 		while (g_history.size() > kHistory) {
 			g_history.pop_front();
 		}
+	}
+
+	std::string DyingDraw()
+	{
+		const char* why = g_dyingWhy.load(std::memory_order_relaxed);
+		const auto  n = g_dyingDraws.load(std::memory_order_relaxed);
+		return n ? std::format("Snake drawn ({} draws)", n) : std::format("Snake NOT drawn ({})", why ? why : "nothing to draw");
 	}
 
 	bool HasMarkers() { return g_hasMarkers.load(std::memory_order_relaxed); }

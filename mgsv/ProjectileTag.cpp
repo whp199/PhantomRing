@@ -50,7 +50,7 @@ namespace phantom::guest::projectile
 		g_rounds.fetch_add(1, std::memory_order_relaxed);
 	}
 
-	bool Tag(std::uint64_t a_frame, const float a_at[3])
+	bool Tag(std::uint64_t a_frame, const float a_at[3], const float* a_buddy)
 	{
 		if (!Cfg().projectileMeshes) {
 			return false;
@@ -60,6 +60,9 @@ namespace phantom::guest::projectile
 		const auto newest = g_newest.load(std::memory_order_relaxed);
 		if (!newest || (a_frame > newest && a_frame - newest > p.windowFrames)) {
 			return false;
+		}
+		if (InBuddy(a_at, a_buddy, p)) {
+			return false;  // a part of D-Walker (or whoever the buddy is) on the arc / the line: its own draw
 		}
 		std::scoped_lock lock(g_lock);
 		for (const auto& r : g_releases) {

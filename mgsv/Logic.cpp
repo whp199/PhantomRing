@@ -44,14 +44,14 @@ namespace phantom::guest::logic
 		return { a_at.x + s * a_ahead - c * a_side, a_at.y, a_at.z + c * a_ahead + s * a_side };
 	}
 
-	Vec3 LeadPoint(const Vec3& a_at, const Vec3& a_velocity, float a_seconds, float a_maxAhead, float a_minSpeed)
+	Vec3 LeadPoint(const Vec3& a_at, const Vec3& a_velocity, float a_seconds, float a_maxAhead, float a_minSpeed, float a_minAhead)
 	{
 		const Vec3  flat{ a_velocity.x, 0.0f, a_velocity.z };
 		const float speed = flat.LengthXZ();
 		if (!a_velocity.Finite() || !(speed >= a_minSpeed) || !(a_seconds > 0.0f)) {
 			return a_at;
 		}
-		const float ahead = std::min(speed * a_seconds, a_maxAhead);
+		const float ahead = std::min(std::max(speed * a_seconds, std::isfinite(a_minAhead) ? a_minAhead : 0.0f), a_maxAhead);
 		return a_at + flat * (ahead / speed);
 	}
 

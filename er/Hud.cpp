@@ -34,6 +34,8 @@ namespace phantom::er::Hud
 		Brain               g_brain;
 		Model               g_model;
 		std::atomic<std::int64_t> g_lastHudQpc{ 0 };
+		std::atomic<std::uint64_t> g_layerHeldUntil{ 0 };  // HideLayerFor (GetTickCount64)
+		std::atomic<std::uint64_t> g_layerHolds{ 0 };
 		std::atomic<std::uint64_t> g_hudFrames{ 0 };
 		int                 g_aimOverride{ -1 };  // console: -1 MGSV's flag, 0 never, 1 always
 		std::vector<std::pair<std::string, Tone>> g_pending;  // console messages for the next Tick
@@ -60,7 +62,8 @@ namespace phantom::er::Hud
 		const bool snakeScreen = a_cfg.enabled && a_in.puppet && a_in.guestAlive && !a_in.menuOpen && !a_in.cutscene && !a_in.loading && !a_in.dead && !a_in.dying;
 		// Only a fresh layer: a guest that stopped publishing (it skips only after an empty frame) must
 		// not leave its last frame frozen over Elden Ring.
-		o.hudOpacity = Approach(o.hudOpacity, snakeScreen && a_cfg.hud && a_in.hudFresh ? 1.0f : 0.0f, dt, static_cast<float>(a_cfg.hudFadeMs) / 1000.0f);
+		o.hudOpacity = a_in.hudHeld ? 0.0f
+		                            : Approach(o.hudOpacity, snakeScreen && a_cfg.hud && a_in.hudFresh ? 1.0f : 0.0f, dt, static_cast<float>(a_cfg.hudFadeMs) / 1000.0f);
 		const bool reticle = snakeScreen && a_in.aiming && (a_cfg.reticle == "on" || (a_cfg.reticle == "auto" && !(a_cfg.hud && a_in.hudFresh)));
 		o.reticleOpacity = Approach(o.reticleOpacity, reticle ? 1.0f : 0.0f, dt, kReticleFade);
 
@@ -169,10 +172,11 @@ namespace phantom::er::Hud
 		in.cutscene = a_f.cutscene;
 		in.loading = a_f.loading;
 		in.dead = a_f.dead;
-		in.dying = Puppet::DeathSeconds() >= 0.0f;
+		in.dying = Puppet::Dying();  // any death (Snake's, or the Tarnished's while Snake waits)
 		in.aiming = g_aimOverride >= 0 ? g_aimOverride == 1 : (a_f.guestReady && (a_f.guest.flags & proto::kGuestAiming) != 0);
 		const auto last = g_lastHudQpc.load(std::memory_order_relaxed);
 		in.hudFresh = last != 0 && Link::QpcToMs(Link::Qpc() - last) < 1500.0;
+		in.hudHeld = ::GetTickCount64() < g_layerHeldUntil.load(std::memory_order_relaxed);
 
 		std::scoped_lock lock(g_lock);
 		for (auto& [text, tone] : g_pending) {
@@ -207,12 +211,22 @@ namespace phantom::er::Hud
 		++g_hudFrames;
 	}
 
+	void HideLayerFor(int a_ms)
+	{
+		if (a_ms <= 0) {
+			return;
+		}
+		g_layerHeldUntil.store(::GetTickCount64() + static_cast<std::uint64_t>(a_ms), std::memory_order_relaxed);
+		++g_layerHolds;
+	}
+
 	std::string Describe()
 	{
 		const Model m = Snapshot();
-		std::string s = std::format("overlay: HUD layer {:.2f} reticle {:.2f} (aim {}) read {} attach {} | guest HUD frames {} (last {:.0f} ms ago)\n", m.hudOpacity,
-			m.reticleOpacity, g_aimOverride < 0 ? "MGSV" : (g_aimOverride ? "forced on" : "forced off"), m.readHud, m.attach, g_hudFrames.load(),
-			g_lastHudQpc.load() ? Link::QpcToMs(Link::Qpc() - g_lastHudQpc.load()) : -1.0);
+		std::string s = std::format("overlay: HUD layer {:.2f} reticle {:.2f} (aim {}) read {} attach {} | guest HUD frames {} (last {:.0f} ms ago) | cut at "
+		                            "a climb's start {} times ({} ms, [Overlay] climb_hide_ms)\n",
+			m.hudOpacity, m.reticleOpacity, g_aimOverride < 0 ? "MGSV" : (g_aimOverride ? "forced on" : "forced off"), m.readHud, m.attach, g_hudFrames.load(),
+			g_lastHudQpc.load() ? Link::QpcToMs(Link::Qpc() - g_lastHudQpc.load()) : -1.0, g_layerHolds.load(), Cfg().overlay.climbHideMs);
 		for (const auto& l : m.lines) {
 			s += std::format("  [{:.2f}] {}\n", l.opacity, l.text);
 		}

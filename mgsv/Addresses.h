@@ -351,6 +351,9 @@ namespace phantom::guest::addr
 	inline constexpr std::uint16_t kWalkerBuddyType = 0x2C;
 	inline constexpr std::uintptr_t kWalkerRecordMode = 0x5A;
 	inline constexpr std::uintptr_t kWalkerRecordPending = 0x5C;
+	// The walker AI's state byte in the same record (polled live 2026-10-12 / 10-31 through /proc/<pid>/mem): 05 idle, 06 settling,
+	// 09 turning, 0A walking, 0C stopping. Only read (Follow.cpp: a walker led alongside Snake whose AI stands gets a new order).
+	inline constexpr std::uintptr_t kWalkerRecordState = 0x56;
 
 	// ---- blasts (docs/GUEST.md 18.5) ------------------------------------------------------------------------
 	// Every blast MGSV makes reaches its "attack area" system, a static object (0x142C1E900, vtable 0x1422A54F0),
@@ -448,6 +451,21 @@ namespace phantom::guest::addr
 	// Remove(object): lea rsi,[rdi+rdi*2]; mov rbx,rcx; add rsi,[rcx+0xB0] (the system's own flag bytes)
 	inline constexpr Site kPlacedRemoveFlags{ 0x140FC7D33, { 0x48, 0x8d, 0x34, 0x7f, 0x48, 0x8b, 0xd9, 0x48, 0x03, 0xb1, 0xb0, 0x00, 0x00, 0x00 } };
 
+	// The interface's slot 5 (0x140FC7A20, at 0x1423A9FF8) removes one object: (interface = system + 0x20, u8 index in dl, u32 r8d):
+	// offline (+0x1E0 bit 0 clear) it calls Remove(system, index, 1, r8d) when the object is live -- which clears the live bit, the
+	// player's order record and the vars mirror (placedWeapons[i] = 0, 0x140FC7BA0) and releases its view. Placed.cpp removes
+	// Snake's placed explosives with it when the Tarnished dies (Elden Ring's world forgets them; docs/GUEST.md 18.8b).
+	// Offline path: mov rax,[rdi+0x90]; lea rcx,[rsi+rsi*2]; test byte [rcx+rax],1; je; lea rcx,[rdi-0x20]; mov edx,esi;
+	// mov r9d,ebp; mov r8b,1; call Remove
+	inline constexpr Site kPlacedRemoveSlot{ 0x1423A9FF8, { 0x20, 0x7a, 0xfc, 0x40, 0x01, 0x00, 0x00, 0x00 } };
+	inline constexpr Site kPlacedRemoveEntry{ 0x140FC7A20,
+		{ 0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xec, 0x30, 0x33, 0xdb, 0xf6,
+			0x81, 0xe0, 0x01, 0x00, 0x00, 0x01, 0x41, 0x8b, 0xe8, 0x48, 0x8b, 0xf9, 0x0f, 0xb6, 0xf2 } };
+	inline constexpr Site kPlacedRemoveOffline{ 0x140FC7B19,
+		{ 0x48, 0x8b, 0x87, 0x90, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x0c, 0x76, 0xf6, 0x04, 0x01, 0x01, 0x74, 0x11, 0x48, 0x8d, 0x4f, 0xe0, 0x8b, 0xd6, 0x44,
+			0x8b, 0xcd, 0x41, 0xb0, 0x01, 0xe8, 0xd5, 0x01, 0x00, 0x00 } };
+	inline constexpr std::uintptr_t kPlacedRemoveVf = 5;
+
 	// ---- C4's detonator (docs/GUEST.md 18.8a; static RE of the exe on disk, UNVERIFIED live) ----------------------------
 	// The player's support-item input (0x141095DF0, per frame) on a "placed" item (equip params +0x27C bits 6-8 == 2) that is
 	// remotely detonatable (status +0x280 bit 23: C4): an ACTION edge (pad object vfunc +0x40, PlayerPad bit 5 = Y by
@@ -501,6 +519,38 @@ namespace phantom::guest::addr
 	// SetPosition(AkGameObjectID, const AkSoundPosition* {Position xyz, Orientation xyz}); Wwise z = -Fox z (0x140337302)
 	inline constexpr Site kAkSetPosition{ 0x14033D030,
 		{ 0x48, 0x83, 0xec, 0x68, 0x48, 0x85, 0xc9, 0x75, 0x0a, 0xb8, 0x02, 0x00, 0x00, 0x00, 0x48, 0x83, 0xc4, 0x68, 0xc3 } };
+
+	// ---- MGSV's ladder action (docs/GUEST.md 22.2a; live RE 2026-10-31: !watch on the ladder's attach transform, a rung poke) -------
+	// One "ladder system" object S (vtable 0x1423C6050; sub-objects 0x1423C6080 at +0x20, 0x1423C60C0 at +0x38, 0x1423C60E8 at
+	// +0x50; [S+0x40] == Player2SystemImpl+0x58) runs the ladder states. Its handlers (0x1411EB3C0 .. 0x1411EF980: rcx = S, edx =
+	// player index, r8d = event) find the player's 0x50-byte record: rec = [S+0x60] + (index - [[S+0x28]+0x24]) * 0x50:
+	// mov rax,[rcx+0x28]; mov r9d,edx; mov esi,edx; sub r9d,[rax+0x24]; mov rbp,rcx; lea rdi,[r9+r9*4]; shl rdi,4; add rdi,[rcx+0x60]
+	inline constexpr Site kLadderRecord{ 0x1411EB3D4,
+		{ 0x48, 0x8b, 0x41, 0x28, 0x44, 0x8b, 0xca, 0x8b, 0xf2, 0x44, 0x2b, 0x48, 0x24, 0x48, 0x8b, 0xe9, 0x4b, 0x8d, 0x3c, 0x89, 0x48, 0xc1, 0xe7, 0x04,
+			0x48, 0x03, 0x79, 0x60 } };
+	// rec+0x44 u16 = the rung pair he is on (the anchor his climbing animation plays from: (rung - 5) * 0.5 m above the ladder's
+	// foot, 0x1411EB420: movzx ebx,word [rdi+0x44]; xor r8d,r8d; mov rcx,[rax+0x78]; sub ebx,5 ... mulss xmm3,[0.5]); the bottom
+	// mount puts him on 5. Poked live: 14 -> 8 moved him 3 m down his ladder, still climbing.
+	inline constexpr Site kLadderRungAnchor{ 0x1411EB420, { 0x0f, 0xb7, 0x5f, 0x44, 0x45, 0x33, 0xc0, 0x48, 0x8b, 0x48, 0x78, 0x83, 0xeb, 0x05 } };
+	// rec+0x46 u16 = the rung pair he climbs to (the stick's choice): movzx ecx,byte [rax+0x20]; mov word [rbx+0x46],cx
+	inline constexpr Site kLadderTargetStore{ 0x1411ED3C0, { 0x0f, 0xb6, 0x48, 0x20, 0x66, 0x89, 0x4b, 0x46 } };
+	// rec+0x20 = the TppLadder's data: +0x10 its foot (xyz), +0x1C yaw, u16 +0x30 its top rung pair (16 on the airport's 8 m
+	// ladders: past it he climbs over the top): mov rdx,[rdi+0x20]; movzx eax,word [rdx+0x30]; cmp ecx,eax; jbe
+	inline constexpr Site kLadderTopRung{ 0x1411EB70C, { 0x48, 0x8b, 0x57, 0x20, 0x0f, 0xb7, 0x42, 0x30, 0x3b, 0xc8, 0x76, 0x44 } };
+	// The attach transform's writer 0x1411F0410 reads the ladder's foot through the same pointer: mov rax,[r8+0x20]; and its yaw
+	// movss xmm0,[rax+0x1C]
+	inline constexpr Site kLadderFootRead{ 0x1411F0454, { 0x49, 0x8b, 0x40, 0x20 } };
+	inline constexpr Site kLadderYawRead{ 0x1411F049E, { 0xf3, 0x0f, 0x10, 0x40, 0x1c } };
+	// S's vtable, slot 0 (0x1411E8AA0), and its second sub-object's (0x1411EADE0)
+	inline constexpr Site kLadderSystemVtable{ 0x1423C6050, { 0xa0, 0x8a, 0x1e, 0x41, 0x01, 0x00, 0x00, 0x00 } };
+	inline constexpr Site kLadderSystemVtable2{ 0x1423C6080, { 0xe0, 0xad, 0x1e, 0x41, 0x01, 0x00, 0x00, 0x00 } };
+	inline constexpr std::uintptr_t kLadderVtable = 0x1423C6050, kLadderVtable2 = 0x1423C6080, kLadderVtable3 = 0x1423C60C0,
+	                                kLadderVtable4 = 0x1423C60E8;
+	inline constexpr std::uintptr_t kLadderSysFirst = 0x28, kLadderSysContext = 0x40, kLadderSysRecords = 0x60;
+	inline constexpr std::uintptr_t kLadderRecBytes = 0x50, kLadderRecLadder = 0x20, kLadderRecRung = 0x44, kLadderRecTarget = 0x46;
+	inline constexpr std::uintptr_t kLadderFoot = 0x10, kLadderTop = 0x30;
+	inline constexpr std::uintptr_t kImplContext = 0x58;      // Player2SystemImpl+0x58 == [S+0x40]
+	inline constexpr std::uintptr_t kImplPlayerIndex = 0x214;  // the local player's index (kAmmoComponentLookup reads it)
 
 	// ---- menus (docs/GUEST.md 18.6) ------------------------------------------------------------------------------
 	// TppGameSequence.GetPauseMenu (0x14053A320) returns [[0x142BD3B80]+8], the TppPauseMenu (vtable 0x14218F648);

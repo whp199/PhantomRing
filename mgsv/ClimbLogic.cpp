@@ -22,6 +22,26 @@ namespace phantom::guest::climb::plan
 		// off it.
 		constexpr float kOnLine = 0.2f;
 
+		// The way home (kReturn), once its placement went out at a_placedAt: is he back on the sandbox?
+		enum class Home
+		{
+			kWait,   // not yet (the placement lands over a frame or two)
+			kHome,
+			kAgain,  // not there kHomeWaitMs after it: another try
+			kWarp,   // kReturnTries placements and still not there: MGSV's Warp
+		};
+		Home CheckHome(const Facts& a_f, const Vec3& a_home, std::uint64_t a_placedAt, int a_tries)
+		{
+			if ((a_f.root - a_home).LengthXZ() < kHomeRadius) {
+				return Home::kHome;
+			}
+			if (a_f.nowMs - a_placedAt < kHomeWaitMs) {
+				return Home::kWait;
+			}
+			return a_tries < kReturnTries ? Home::kAgain : Home::kWarp;
+		}
+
+		bool AtHome(const Facts& a_f, const Vec3& a_home) { return (a_f.root - a_home).LengthXZ() < kHomeRadius; }
 	}
 
 	Vec3 Facing(const LadderSite& a_site)
@@ -79,6 +99,22 @@ namespace phantom::guest::climb::plan
 		return true;
 	}
 
+	int RecycleShift(bool a_down, int a_rung, int a_target, int a_top)
+	{
+		// The record must look like one of MGSV's ladders long enough to move along: the span fits between the two thresholds.
+		const int high = a_top - 2;
+		if (a_rung < 0 || a_target < 0 || a_top < 0 || a_top > 256 || high - kRecycleSpan <= kRecycleLow) {
+			return 0;
+		}
+		if (!a_down && std::max(a_rung, a_target) >= high && std::min(a_rung, a_target) - kRecycleSpan >= kRecycleLow) {
+			return -kRecycleSpan;
+		}
+		if (a_down && std::min(a_rung, a_target) <= kRecycleLow && std::max(a_rung, a_target) + kRecycleSpan <= high) {
+			return kRecycleSpan;
+		}
+		return 0;
+	}
+
 	// ---- Pacer ------------------------------------------------------------------------------------
 	void Pacer::Start(float a_speed)
 	{
@@ -90,7 +126,11 @@ namespace phantom::guest::climb::plan
 
 	bool Pacer::Push(double a_dt, float a_climbed)
 	{
-		if (!std::isfinite(speed_) || speed_ <= 0.0f) {
+		if (std::isfinite(speed_) && speed_ == 0.0f) {
+			owed_ = 0.0f;
+			return false;  // Elden Ring's climber stopped on the rungs: so does MGSV's
+		}
+		if (!std::isfinite(speed_) || speed_ < 0.0f) {
 			owed_ = 0.0f;
 			return true;  // unknown: MGSV's own pace
 		}
@@ -133,6 +173,8 @@ namespace phantom::guest::climb::plan
 		lastY_.reset();
 		climbed_ = 0.0f;
 		loops_ = 0;
+		recycles_ = 0;
+		noRecycle_ = false;
 		mounts_ = 0;
 		droppedOff_ = false;
 		leaveTried_ = false;
@@ -141,6 +183,8 @@ namespace phantom::guest::climb::plan
 		mountedMs_ = 0;
 		standSince_ = 0;
 		faceRetries_ = 0;
+		returnTries_ = 0;
+		placeFails_ = 0;
 		pacer_.Start(a_speed);
 		phase_ = Phase::kPlace;
 		since_ = a_nowMs;
@@ -161,10 +205,14 @@ namespace phantom::guest::climb::plan
 		}
 	}
 
-	void Ladder::PlacementFailed()
+	void Ladder::PlacementFailed(std::uint64_t a_nowMs)
 	{
-		// Nowhere to go but where he is: the move ends (Climb.cpp logs why; the flag goes down with it).
-		phase_ = Phase::kIdle;
+		++placeFails_;
+		if (phase_ == Phase::kReturn) {
+			placed_ = false;  // home again next frame (kReturnTries in all, then MGSV's Warp)
+		} else if (phase_ != Phase::kIdle) {
+			Enter(Phase::kReturn, a_nowMs);  // at MGSV's ladder (or at its first stand placement, still home): home from where he is
+		}
 	}
 
 	Step Ladder::Enter(Phase a_phase, std::uint64_t a_nowMs)
@@ -264,6 +312,14 @@ namespace phantom::guest::climb::plan
 					}
 				}
 				lastY_ = a_f.root.y;
+				// Seamless: still on the ladder, near one of its ends -- moved along it (Climb.cpp: ladder_rung::Shift), his root jumps
+				// kRecycleSpan * 0.5 m next frame (more than kPlacementJump: not counted as climbed).
+				if (!noRecycle_ && !a_f.normalAction) {
+					if (const int shift = RecycleShift(down_, a_f.rung, a_f.rungTarget, a_f.rungTop)) {
+						s.rungShift = shift;
+						++recycles_;
+					}
+				}
 				// The loop: MGSV's 8 m ladder ends (he climbs over the top / steps off the foot, as any climber does) and he is mounted
 				// again from where he climbs from. MGSV moves him along its ladder by no placement (live: a native one never, its Warp
 				// only in a state not found again), so the loop is MGSV's own end and mount.
@@ -314,8 +370,22 @@ namespace phantom::guest::climb::plan
 				return Enter(Phase::kLeave, now);
 			}
 			if (!placed_) {
+				if (placeFails_ > 0 && AtHome(a_f, home_)) {
+					phase_ = Phase::kIdle;  // a placement was refused, but he is home anyway (it was the first one, at the ladder)
+					s.active = false;
+					s.note = "back on the sandbox";
+					return s;
+				}
+				if (placeFails_ >= kReturnTries) {
+					phase_ = Phase::kIdle;
+					s.active = false;
+					s.warpHome = true;
+					s.note = "the placement home was refused every time: MGSV's Warp home";
+					return s;
+				}
 				placed_ = true;
 				since_ = now;
+				++returnTries_;
 				s.place = home_;
 				s.placeYaw = homeYaw_;
 				s.face = true;
@@ -326,6 +396,24 @@ namespace phantom::guest::climb::plan
 				// again, right after the placement, cancels it: he stands (live 2026-10-31).
 				droppedOff_ = false;
 				s.knockOff = true;
+			}
+			switch (CheckHome(a_f, home_, since_, returnTries_)) {
+			case Home::kWait:
+				return s;
+			case Home::kAgain:
+				// Not on the sandbox: still on MGSV's ladder (kLeave's way off it didn't take: no placement reaches him there) --
+				// off it again first -- or the placement didn't land: home again.
+				s = Enter(!a_f.normalAction && LineDistance(site_, geo_, a_f.root) < 0.3f ? Phase::kLeave : Phase::kReturn, now);
+				s.note = "not back on the sandbox: home again";
+				return s;
+			case Home::kWarp:
+				phase_ = Phase::kIdle;
+				s.active = false;
+				s.warpHome = true;
+				s.note = "never got back on the sandbox: MGSV's Warp home";
+				return s;
+			case Home::kHome:
+				break;
 			}
 			if ((a_f.normalAction && now - since_ >= 100) || now - since_ >= timing.returnMs) {
 				phase_ = Phase::kIdle;
@@ -341,10 +429,14 @@ namespace phantom::guest::climb::plan
 
 	// ---- Mantle -----------------------------------------------------------------------------------
 	MantleSite PickMantle(int a_heightCm, bool a_vault, const MantleSite& a_vaultSite, const MantleSite& a_low, const MantleSite& a_high,
-		int a_lowMaxCm)
+		int a_lowMaxCm, const MantleSite& a_step, int a_stepMaxCm)
 	{
 		if (a_vault) {
 			return a_vaultSite;
+		}
+		// A low ledge: the sacks (75 cm), where MGSV's climb-up is a knee onto the top and he is up 0.2 s into it (the crate's: 0.4-0.5 s)
+		if (a_step.valid && a_heightCm <= a_stepMaxCm) {
+			return a_step;
 		}
 		if (a_low.valid && (a_heightCm <= a_lowMaxCm || !a_high.valid)) {
 			return a_low;
@@ -374,9 +466,19 @@ namespace phantom::guest::climb::plan
 		started_ = false;
 		rose_ = 0.0f;
 		moveMs_ = 0;
+		returnTries_ = 0;
+		placeFails_ = 0;
 	}
 
-	void Mantle::PlacementFailed() { phase_ = Phase::kIdle; }
+	void Mantle::PlacementFailed(std::uint64_t a_nowMs)
+	{
+		++placeFails_;
+		if (phase_ == Phase::kReturn) {
+			placed_ = false;  // home again next frame (kReturnTries in all, then MGSV's Warp)
+		} else if (phase_ != Phase::kIdle) {
+			Enter(Phase::kReturn, a_nowMs);
+		}
+	}
 
 	Step Mantle::Enter(Phase a_phase, std::uint64_t a_nowMs)
 	{
@@ -468,8 +570,22 @@ namespace phantom::guest::climb::plan
 			return s;
 		case Phase::kReturn:
 			if (!placed_) {
+				if (placeFails_ > 0 && AtHome(a_f, home_)) {
+					phase_ = Phase::kIdle;  // a placement was refused, but he is home anyway (it was the first one, at the obstacle)
+					s.active = false;
+					s.note = "back on the sandbox";
+					return s;
+				}
+				if (placeFails_ >= kReturnTries) {
+					phase_ = Phase::kIdle;
+					s.active = false;
+					s.warpHome = true;
+					s.note = "the placement home was refused every time: MGSV's Warp home";
+					return s;
+				}
 				placed_ = true;
 				since_ = now;
+				++returnTries_;
 				s.place = home_;
 				s.placeYaw = homeYaw_;
 				s.face = true;
@@ -478,6 +594,24 @@ namespace phantom::guest::climb::plan
 			if (cut_) {
 				cut_ = false;
 				s.knockOff = true;
+			}
+			switch (CheckHome(a_f, home_, since_, returnTries_)) {
+			case Home::kWait:
+				return s;
+			case Home::kAgain:
+				// Not on the sandbox (MGSV's move still held him where it plays): whatever it plays ended, and home again.
+				s = Enter(Phase::kReturn, now);
+				s.knockOff = !a_f.normalAction;
+				s.note = "not back on the sandbox: home again";
+				return s;
+			case Home::kWarp:
+				phase_ = Phase::kIdle;
+				s.active = false;
+				s.warpHome = true;
+				s.note = "never got back on the sandbox: MGSV's Warp home";
+				return s;
+			case Home::kHome:
+				break;
 			}
 			if ((a_f.normalAction && now - since_ >= 100) || now - since_ >= timing.returnMs) {
 				phase_ = Phase::kIdle;

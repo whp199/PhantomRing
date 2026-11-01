@@ -59,6 +59,12 @@ namespace phantom::er
 		// Ring's HUD (a_hudToo), else a boss bar coming back as the map closed would hold a menu "open" for the whole fight.
 		std::vector<int> SubmenuGroup(const std::vector<int>& a_cameUp, const std::vector<int>& a_hudToo, const std::vector<int>& a_windowHud);
 		bool FullScreenMenu(bool a_was, bool a_menuOpenBefore, bool a_hudVisibleBefore, bool a_hudVisibleNow, bool a_cutscene);
+		// Elden Ring's dialog box ([Input] dialog_ui_states, 0x2b on 1.17.2: a yes/no question -- Memory of Grace's "Lose all runes to
+		// return to the last site of grace visited?", the map's "Traveling to ... Is that okay?"): a menu for as long as one is
+		// visible, whatever brought it up. Live 2026-10-31 (0.6.0 testing, then reproduced): Memory of Grace used from the inventory
+		// while Snake played closed the inventory and put the question up with no press and no menu open -- taken for Elden Ring's
+		// HUD, so Snake kept the pad under it (B reloaded in MGSV) and nothing could answer it. Never learned or un-learned.
+		bool DialogOpen(const std::vector<int>& a_dialogStates, const std::vector<std::uint8_t>& a_states);
 		// "Open before" means open within this long: Start -> Inventory closed the main menu's group (0x1c hid) a frame or more
 		// before the HUD hid (live).
 		constexpr std::uint64_t kSubmenuGapMs = 500;

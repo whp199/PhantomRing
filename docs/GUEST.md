@@ -95,8 +95,10 @@ An unprotected error would hit `lua_atpanic` and end the game.
 ## 4. What the guest publishes and consumes
 
 - **Header:** `guestNonce` (set last on attach, after the producer sides are reset), `guestUnixPid`
-  (from `PHANTOMRING_GUEST_UNIX_PID` or `getpid` through the high syscall stub, `common/Mapping.h
-  UnixPid`, shared with the host), `guestHeartbeatQpc`
+  (under Wine from `/proc`, as the host does: the wineserver's pid from `Z:\proc\self\stat`, the first of MGSV's own threads
+  above it in `Z:\proc\self\task\<n>`, then -- a long-lived wineserver far below -- down from `/proc/loadavg`'s newest pid while a
+  fresh thread waits; looked up on the link's worker thread since 0.6.0, never in DllMain; written to
+  `PHANTOMRING_GUEST_UNIX_PID`; never the raw getpid syscall stub, which Proton's Wine 11 turned into a crash), `guestHeartbeatQpc`
   (while booting, or while the game ticked in the last 10 s), `guestStatus`/`guestStatusText`
   (§5 texts).
 - **On (re)attach** (new `sessionNonce`): the guest drains stale host events, publishes an empty
@@ -716,7 +718,40 @@ to write). `[Capture] Enabled = true` (ini).
   lists, contexts, layouts, shaders).
 - `!capture probe [N]`: describes the next N frames into `PhantomRingCapture.txt` next to the DLL.
 
-### 15.5 Projectile draws (protocol v13 `kOwnerProjectile`, roadmap 5.4; live pass A 2026-10-14: doesn't work yet)
+### 15.5 Projectile draws (protocol v13 `kOwnerProjectile`, roadmap 5.4; **works since 2026-10-31**, `[Capture] ProjectileMeshes = true`)
+
+**Why it learned nothing (2026-10-31, `!capture probe` right after a release):** MGSV draws its thrown grenade and its rocket
+as *skinned* G-buffer draws with one weight (`m_useWeightCount` 1, bone 0 the identity), not rigid ones -- the sleep grenade
+`vs 0x4bd72652708ef87d`, 618 indices, its `m_world` on the throw's parabola within 0.04 m frame after frame; the FB MR rocket
+`vs 0xc5a2b913756f1ec3` in three LOD pairs (306/204, 222/108, 138/102 indices) -- and the rocket flies 250-375 m/s (41.7 m
+down the line 10 frames after the shot, then 4.2-6.3 m a frame), past the 120 m/s cap. Now a one-bone skinned draw is tested
+where its bone puts it (`m_world * bone 0`, as it is published), the round cap is 420 m/s (`test_guest_logic`: the measured
+rocket, every frame of the window), and two-triangle cards (<= 6 indices: the rocket's flame quads) are never tagged.
+Live: a frag grenade `projectile: first thrown draw tagged ... (8 frames after the release)`; `recordings/throw_grenade.prrec`
+(two frag throws): 46 lists with a projectile draw (mesh `b1332cea2c489926`, 642 indices, 1 matrix) from 0.15 s after the
+release on, nothing else tagged (Snake 33653, D-Walker 6739 draws); `recordings/fire_rocket.prrec`: 16 lists, 32 draws, the
+rocket's three LOD pairs only. fake_er counts them (`projectile draws N in M lists`, `drawsByOwner` in its summary).
+
+**Re-recorded in the open (2026-10-31 night, MGSV + `pr record --trace F --trace-draws` on the apron; the support item made active
+with `Player.ChangeEquip{..., toActive = true}`, the launcher through the D-pad-up wheel):** fake_er's `--trace-draws` writes each
+list's projectile draws (mesh and place) next to the `# event` lines, so every tag can be checked against its release.
+- `recordings/throw_grenade.prrec` (frag twice, the sleep grenade, the shock decoy): each grenade tagged in 23 lists (frames +8..+30
+  of its release), one mesh each (frag `b1332cea2c489926`, 642 indices; sleep `2142aaa5a2f2dabc`, 618), at most 0.01 m off its arc;
+  those meshes are Snake's (`Player`) only while in his hand before the throw. The decoy (`throw: equip 406 (not an explosive we
+  send)`, then `placed #4 ... (decoy)`): nothing tagged. 0 tags outside a release's window.
+- C4 (391) and the sleep mine (418), aimed and not (both were set at his feet: `placed #5`, `placed #6`): no release noted, 0 of
+  1968 lists with a tag.
+- `recordings/fire_rocket.prrec` (FB MR R-LAUNCHER, three rockets flying 129, 52 and 99 m before they hit): 12-17 lists each,
+  frames +1..+17, 4.2 to 70.9 m down the line (4.17 m a frame, 250 m/s), only the rocket's three LOD pairs (306/204, 222/108,
+  138/102 indices; the 306 one is also Snake's while it sits loaded in the tube). Nothing else, nowhere.
+- **D-Walker beside him** (led 2.8 m off since this round): its one-bone parts -- the kind of draw a grenade is -- lie within 1.23 m
+  of its feet, 0.48-1.76 m up (10439 of them in the grenade recording), so a throw his way passes through them. A draw inside the
+  buddy's body (1.6 m around its feet, 0.5 m below to 2.5 m above) is never tagged now (`ProjectileLogic.h InBuddy`). Live, a frag
+  thrown through the walker (0.94 m from its feet at 1.3 m up): frames +1..+14 tagged nothing (the walker's 13-14 draws stayed its
+  own), the grenade tagged from +15 on, 1.7 m past it. `test_guest_logic` `TestProjectileTagLive` replays these releases and draws
+  (arc, line, Snake's gear and the tube never, the walker's parts never, decoy / C4 / mine not noted at all).
+
+*Before (live pass A, 2026-10-14):*
 
 **Live pass A** (docs/FEATURES-1.md): 3 frag grenades thrown -> no draw tagged (`!capture`: `3 throws, 2 explosive rounds
 noted, 26 draws tagged`, all from the rockets): MGSV's grenade is not a rigid G-buffer draw within the arc's slack, or not
@@ -745,8 +780,7 @@ the same meshes flying away along the release, then checks the meshes' real size
 flashes"). **Off by default** because a mis-tag takes that draw away from Snake or the buddy in Elden Ring's frame (a host
 with `[Render] projectile_meshes` off gives tagged draws within 2.5 m of Snake back to him, but a buddy part is lost), and
 tagged draws further out have their meshes and textures sent over the render ring. Turn it on together with the host switch.
-Unknown until a live run: whether MGSV's grenade and rocket are rigid draws in the G-buffer pass at all (if skinned, nothing
-is tagged: the host keeps its ball).
+(2026-10-31: they are skinned with one weight -- see the top of this section; such draws are tagged now.)
 
 ## 16. HUD layer (phase 5): MGSV's own HUD for Elden Ring
 
@@ -895,7 +929,21 @@ MGSV's Wwise is driven through its own Lua (`GuestScript.cpp PR.Audio / AudioKee
   MGSV idle -71..-74 (silence with blips), Snake running -37, shooting -39 (peaks -12), **D-Walker walking -21 (peaks
   -0.7)**: its footsteps are ~15 dB above everything else and no per-sound or bus volume was found in MGSV's Lua
   (`TppSoundDaemon` has mutes only). A burning flamethrower fire left on the apron: -22 for a few seconds.
-- **D-Walker's volume (`[Audio] WalkerVolume`, `Sound.cpp`): NOT solved, experimental, off by default (= 1).**
+- **D-Walker's volume, 2026-10-31: `[Audio] WalkerDistance = 8` (default).** D-Walker's Wwise game objects (the same
+  tagging as below: first positioned within 2.8 m of the walker and 1.5 m nearer to it than to Snake) are positioned 8 times
+  as far from MGSV's listener (its camera) along the same line, in the `SetPosition` detour: Wwise's own distance attenuation
+  turns them down and their direction stays. The walker gate is 1.8 m from Snake now (was 3 m: the loudest steps, beside him
+  as he starts and stops, stayed in). Measured with **`[Audio] Meter`** (`AudioMeter.cpp`, diagnostics, off by default):
+  recording MGSV's stream from outside gives no samples on this machine's PipeWire (`parecord --monitor-stream` writes only a
+  header, for every stream), so the guest meters MGSV's own output -- `CoCreateInstance(CLSID_XAudio2)` watched, the engine's
+  `CreateSourceVoice` and the voices' `SubmitSourceBuffer` vtable slots swapped, RMS per 0.5 s of what Wwise hands XAudio2
+  (one voice, 2 ch 48 kHz float: the mix the player hears from MGSV); `!sound meter [mark | since | n]`. Snake running 11 s
+  with the walker following: factor 1 median -30.7 / -29.4 dBFS (loudest 0.5 s -19 / -20), 4: -36.0 / -35.7, 8: -39.7 (the
+  steady run -37..-41, Snake's own running ~-37; Elden Ring's sounds -35..-42) -- but the loudest windows (-20) stayed, when
+  Snake started and stopped with the walker beside him: hence the 1.8 m gate. With it (final build): factor 1 median -29.2,
+  loudest -19.8, peak -4.7 dBFS; **factor 8 median -39.9, loudest -33.2, peak -15.6**. `!sound distance <k>` live.
+  `!sound event <id> <gain> 8` drops an event's posts (diagnostics).
+- **Before (2026-10-12): `[Audio] WalkerVolume` NOT solved, experimental, off by default (= 1).**
   What was found (2026-10-12, MGSV + fake_er, parecord RMS on MGSV's stream, 5 s windows):
   - Wwise (AK::SoundEngine, statically linked) located through Fox's wrappers and the queued message types (`AkQueuedMsg`
     numbering here: 2/3 RTPC, 7 State, 11 RegisterGameObj, 12 Unregister, 13 GameObjPosition, 14 ActiveListeners,
@@ -960,6 +1008,58 @@ MGSV's Wwise is driven through its own Lua (`GuestScript.cpp PR.Audio / AudioKee
   "far from its spot" is measured from the spot. `!follow spot <ahead> <side>` tunes it live.
   Live: settles 0.4 m from its spot; 7 s stick forward: up to 14 m behind (it starts ~3 s late, then barely gains
   on 4.7 m/s), beside Snake again ~2 s after he stops. A Snake shot no longer hits the walker.
+- **Lag, 2026-10-31 (`FollowLeadMin`, `FollowSettleMs`, both off by default; `!follow lead <s> [side] [catch-up] [min m]
+  [settle ms]`):** fake_er trace + the walker record's state polled at 20 Hz (`+0x56`, `+0x5C`) over 12 s runs: an order given
+  as Snake starts (`Snake started moving`, 0.4 s after the stick) was taken and *not* walked (its spot only 3.8 m away: the
+  speed is still low, so the lead is short); the "standing still" re-order 1 s later and a catch-up warp 1.8 s in each
+  restarted the walker's ~1-2 s reaction: it walked 2.4 s after Snake started, then kept up (8 m -> 3 m over 7 s of walking).
+  A minimum lead (5-6 m) and no re-order / warp for 2.5 s after an order were tried live: running medians 5.2-6.1 m (baseline
+  5.0, 4.2-4.7 with other spots); the walker stops near a moving player and starts late whatever the spot. Solved by the lead
+  below.
+- **Led alongside (2026-10-31 night, `Walker.cpp`, `WalkerLogic.h`; `[Buddy] WalkerLead = true`, `WalkerTreadmill = true`;
+  `!walker`):** D-Walker owns a location object of the class Snake's belongs to (a scan of MGSV's memory: of 30 such objects one
+  stood exactly on `GetPosition`), and MGSV's own `SetPosition` for the walker (the handler `0x141706190`, case `0xb3d854925648` ->
+  `0x14170D410`) is that object's setter (vf 0x68, `kLocationSet`) plus a request slot. So the walker is moved the way D-Horse is
+  (8.1a): found by the scan (`walker: location object ... confirmed (31 checks on D-Walker)` ~0.5 s after it is out), tracked
+  against `GetPosition`, moved through the setter (byte-checked as for the horse; a differing exe leaves everything as before):
+  - **The treadmill** moves it by Snake's jump through its object -- one frame *after* Snake's own placement (his root and draws show
+    a placement the frame after it, the walker's in the same frame: the list in between drew it the radius away), its destination
+    record with it in that frame (a destination left behind it made its AI stop). Was: Lua `owarp` a frame or two late, a 6 m
+    flash in Elden Ring at every jump.
+  - **The lead**: while Snake moves on foot (> 1.5 m/s; < 0.6 m/s for 0.5 s ends it) a point tracks the spot `WalkerLeadSide`
+    (-2.8 m: the screen's left) / `WalkerLeadAhead` (0) beside him as the camera sees him -- his velocity fed forward, the gap closed
+    with `WalkerLeadTau` (0.35 s), never faster than `WalkerLeadMaxSpeed` (9 m/s: 0.15 m a frame) -- and the walker is put there
+    every frame, turned toward where it goes at `WalkerLeadTurnRate` (6 rad/s). Only where auto-follow acts (`follow::LeadAllowed`:
+    Normal Mode or a `FollowModes` one, following on, no player hold, not ridden, nothing busy), only within `WalkerLeadAcquire`
+    (6 m) of the spot (farther: MGSV walks it over as before), never during a climb, Tarnished mode or the Fulton anchor. A walker
+    found 2 m from where it was put (a whistle's placement, a warp) is MGSV's again; three such in 20 s, or a placement that doesn't
+    take, turn it off for the session. Follow.cpp meanwhile only keeps the AI walking (its legs): an order to the lead's lane ahead
+    of him when he starts, whenever its state byte (`+0x56`, `kWalkerRecordState`) says it stood 0.8 s, and beside him when he
+    stops; no catch-up warp, no whistle.
+  - **Live (MGSV + fake_er, the same 63 s pad script each time: 12 s run, stop, 8 s walk, stop, 10 s run with two turns, stop, a
+    walk at an angle, 8 s run, stop; distance from the GuestState, the walker "as drawn" = the odometer + each buddy draw's place
+    relative to its list's anchor, mesh by mesh -- what Elden Ring draws):**
+
+    | | running median / p90 / max | walking median | standing median / p90 | as drawn: largest step per frame, steps > 0.5 m |
+    |---|---|---|---|---|
+    | before (0.6.0 build) | 4.97 / 8.36 / 11.77 m | 4.06 m | 3.46 / 10.27 m | 6.02 m, 58 (the parts' mean: culled parts count too) |
+    | before (this build, `!walker lead off`, `treadmill off`) | 5.11 / 6.88 / 10.88 m | 3.73 m | 2.70 / 4.90 m | 6.04 m, 3 |
+    | led | **2.80 / 2.82 / 2.93 m** | 2.80 m | 2.98 / 3.09 m | **0.16 m, 0** |
+
+    `walker: ... treadmill on (29 moved, 0 failed); lead on ...: 5 leads, 2961 frames, 5 stopped, 0 lost, largest step 0.135 m`.
+    Its AI walked (state 0A) 57% of the running time (1096 of 1919 polls at 20 Hz; 64% before) and started 0.2-3.3 s after Snake
+    did; the rest it glides beside him (MGSV's frames: beside him on the left at every shot, legs walking once its order is
+    taken). **The player's orders:** the call menu's Search Mode (`the player's buddy command 25 -> auto-follow paused`, `mode
+    normal -> search`) -> an 8 s run: 0 lead frames, the walker 18-42 m away searching; Whistle (20) -> `auto-follow resumed`, led
+    again (median 2.80 m). **Riding it:** Y beside it -> `OnVehicle`, 5 s ridden 36 m: 0 lead frames; Y off and a run: led again,
+    no warning in the log. Offline: `TestWalkerLead` (`tests/test_guest_horse.cpp`: a minute of runs, walks, turns and stops with the
+    treadmill and an AI of its own: median 2.80 m, no frame > 0.12 m as Elden Ring sees it, no lead lost).
+  - **With both real games** (2026-11-01, Gatefront at night, `pr status` at ~8 Hz): 127 samples of a 22 s run (MGSV's Snake at
+    4.7 m/s) -- D-Walker **median 2.81 m, p90 2.81, max 2.82** from him; standing after it 2.4-2.6 m; a short run out of the Church of
+    Elleh's grace (the walker starting 5.6 m away): median 2.79, p90 3.43, max 4.28 while it closed in. Frames of a 27 m run west on
+    Gatefront's path: the walker beside Snake on his left in every one, its legs walking. `walker: ... treadmill on (140 moved, 0
+    failed); lead on ...: 30 leads, 21977 frames, 30 stopped, 0 lost, largest step 0.265 m`. Seen once: led to Snake's left, the
+    walker stood between him and a rail fence he was walking at (he stopped against it).
 - **Keeping up (2026-10-12, `Follow.cpp`):** what MGSV's walker AI does, from its record (polled through
   /proc/<pid>/mem at 10 Hz during runs): `+0x56` is its state (05 idle, 06 settling, 09 turning, 0A walking, 0C
   stopping); a whistle's `+0x5C` flag is taken ~1-2 s after the command and it walks ~1 s later (a direct write of
@@ -1283,6 +1383,10 @@ the host now flies its own copy through Elden Ring's world and Elden Ring's enem
   (kHEvDetonate; docs/HOST.md "Thrown and placed explosives"). Explosives already in the vars when the sandbox first
   became ready (an old save's) are MGSV's world: never announced (`-- already in the save when the sandbox loaded`). Live:
   `placed #1: announced again (the host's puppet restarted)` -> the host `mine 1 announced again -- kept where it lies`.
+  From a death (HostState kHostPlayerDead) until the puppet runs again with nobody dying every new one is dropped
+  (`logic::AfterDeath`): since the review of 0.6.0 also when the puppet ran on without a new start -- a kill Elden Ring refused
+  (no dead bit: the host gives up after three tries and sends the respawn) used to leave the guest "after the death" for good,
+  dropping every later mine, C4 and decoy (`placed: the death is over and the puppet ran on`; tested in `test_guest_logic`).
 - **Decoys** (protocol v13, `[Combat] Decoys`; live pass B 2026-10-15: MGSV throws them -- LT, RT -- and mirrors each into
   `placedWeapons` as it lands, HOST.md "Decoys"): `logic::ExplosiveOf` calls the decoys (397-399, active
   401-403, shock 405-407 / 380-381) `ExplosiveUse::kDecoy` (blast kind kIgnore: no blast is ever matched to one). Found in
@@ -1391,6 +1495,22 @@ chain, read from the exe on disk (capstone; every site below byte-checked in Add
 - A refused set-off (`placed::SetOffC4`: the system pointer, the live bit not set yet) skips that C4 for that press only.
 - `!placed` ends with the detonator's state: `c4: in hand E, presses N (answered A, fallbacks F[ -- backup off: U only
   logged], holds H), MGSV's detonator D / other set-offs O, refused requests R (last: ...), set off by the guest G`.
+
+### 18.8b Placed explosives when the Tarnished dies (`Placed.cpp`, `[Combat] PlacedClearOnDeath = true`; live 2026-10-31, MGSV + fake_er)
+
+README Known issues: C4 placed in the frame Snake dies reappeared at the grace after the respawn. MGSV put it down (its vars
+entry appeared) after the host had stopped puppeting, so it wasn't announced then; the next puppet start announced it for the
+first time and the host mapped MGSV's point through its new anchor -- next to the grace. Now, from HostState
+`kHostPlayerDead` until the puppet starts again after it, every one of Snake's placed explosives is **dropped**: kGEvPlacedGone
+if it was announced (the host forgets its copies at the death anyway: its world reloads), never announced again, never set off
+for the player (C4's detonator and kHEvDetonate skip it, a blast matched to it is MGSV's world: not sent), and removed from
+MGSV's own list through MGSV's removal (the Placed System interface's slot 5, 0x140FC7A20, its offline path -> Remove(system,
+index, 1, 0): live bit, the order record and `placedWeapons[i]` cleared, its view released; byte-checked, `Addresses.h`
+kPlacedRemove*). One put down while he is dead is dropped the same way (`put down as the Tarnished died: never sent`).
+Live (`pr er die` / `respawn`): a sleep mine placed, then `die`: `placed #2: equip 418 dropped (the Tarnished died) ->
+kGEvPlacedGone; in MGSV removed`, `vars.placedWeapons[0]` 418 -> 0; a mine placed with `die` 0.1 s after RT: `placed #3 ...
+dropped (put down as the Tarnished died: never sent to Elden Ring) (never announced); in MGSV removed`; after `respawn`
+(`the puppet started again after the death`) no kGEvPlaced for it (fake_er trace: one Placed and one PlacedGone, both #2).
 
 ### 18.9 Cardboard box and its poster (`[Loadout] BoxPoster`, `Box`; protocol v8 flags; VERIFIED live 2026-10-12)
 
@@ -1988,6 +2108,16 @@ Player wish (session 6): "FULTON extraction of sleeping Elden Ring enemies". Sin
 
 ## 21. CQC holds and throws (`[Cqc]`, `Cqc.cpp` / `CqcLogic.h`, `!cqc`; ROADMAP 2.2 tier 1; protocol v13 kGEvCqc; live pass B 2026-10-15)
 
+**The punch's second ~25 HP (README Known issues; checked 2026-10-31, MGSV + fake_er, `!debug on`):** the guest sends one
+kGEvMelee per MGSV strike. Its CQC record's +0x114 is the game frame the strike began (a held RT's punch 45506, the next press
+26 s later 48671: ~120 a second), rewritten only by a new strike; the attack id +0x118 stays 80 after it. Per press, the trace's
+kGEvMelee count: a 150 ms tap 0 (a crouched Snake), RT held 3.5 s 1 (+ kGEvCqc grab 0.35 s and choke 2.85 s later, release),
+held + LB 1 (+ grab, interrogate, release), two presses 0.55 s apart 2, a combo continued 2 (kick 83, then 80) -- never two for
+one strike. In live pass B the host logged one `Snake CQC kind` per punch and the second ~25 HP came "with no hit of ours
+logged", on a held (immobilized) or guarding soldier, never on a free one (knocked out of reach): the host's punch bullet
+landing twice on a target that stays inside it is the likely cause (host side, er/Combat.cpp's hit bullet; see the report of
+2026-10-31). Nothing to fix in the guest; its one-event-per-strike rule is now `logic::StrikeEdge` (Combat.cpp), pinned by `test_guest_logic` (a 10 s hold with its grab, choke and interrogation: 0 more events; the next press, a combo: one each).
+
 Live pass B (2026-10-15, Gatefront soldiers): RT held -> `kGEvCqc grab (RT held; MGSV attack 0)` 0.36 s after the press, held
 on -> `choke` at 2.86 s, LB while holding -> `interrogate`, let go -> `release`, RT with the stick pushed -> `throw`; MGSV logged
 `CQC status 0 action callback 1` throughout (never a status 1: `MgsvHold` stays false). Host side in COMBAT.md 7a.
@@ -2065,21 +2195,65 @@ makes MGSV play Snake's own matching move for as long as it lasts.
   facing and camera are kept, he is *staged*: the native placement to the ladder's stand point (the foot for up, the roof for
   down), MGSV's Warp to the same spot to face it, a `stance 1` request if he was crouched or prone; once he has stood 150 ms
   (STAND, NORMAL_ACTION) the guest pulses Y. On the ladder (NORMAL_ACTION gone, his root on the climbing line) the left stick
-  climbs, paced: pushed while MGSV has climbed less than Elden Ring's speed x time (0 / unknown speed = MGSV's own pace).
-- **Loops.** MGSV's ladder is 8 m: going up he climbs over its top (~1 s, a climber's move) and is placed, faced and mounted
-  again at its foot (~0.5 s); going down he steps off its foot and is mounted again from the roof (the top mount, ~1.4 s). So
-  an Elden Ring climb of any length is one MGSV climb with a short MGSV dismount + mount every ~5.5 m (`!climb` counts them).
-- **a = 1 again** while climbing changes the direction / speed (no new mount). **a = 0**: `dmoff` (the direct-motion request
+  climbs, paced: pushed while MGSV has climbed less than Elden Ring's speed x time. Speed exactly 0 = Elden Ring's climber is still
+  on the rungs: no stick, he hangs still (before 0.6.0 0 meant "unknown" and he climbed on and looped while the Tarnished hung
+  still); below 0 or not finite = unknown: MGSV's own pace (the stick always held).
+- **Seamless (`[Climb] Seamless = true`, 2026-10-31, `LadderRung.*`).** MGSV keeps Snake's place on a ladder as a rung pair
+  (u16, 0.5 m) in the player's 0x50-byte ladder record: `rec = [S+0x60] + (index - [[S+0x28]+0x24]) * 0x50` of the ladder
+  system S (vtable 0x1423C6050; `[S+0x40]` == Player2SystemImpl+0x58); `+0x44` the pair he is on (his climbing animation
+  plays from an anchor `(pair - 5) * 0.5 m` above the foot -- `!watch` on that attach transform found its writer 0x1411F0410
+  and its five callers, the ladder states), `+0x46` the pair he climbs to, `+0x20` the TppLadder data (`+0x10` foot, `+0x30`
+  top pair: 16). Live RE: a native placement or a write to the attach transform is undone the next frame; poking `+0x44/+0x46`
+  14 -> 8 moved him 3 m down his ladder mid-climb, still climbing. So near either end (up: on or to pair top - 2; down: pair
+  7) the guest moves both by 6 (3 m) in one compare-and-swap (`climb::plan::RecycleShift`, `test_guest_climb`): his pose goes
+  on unchanged, only his root jumps (more than `kPlacementJump`: not counted as climbed), and MGSV's climb-over / step-off
+  never come. S is found once by its vtables (a worker-thread scan of the private heap when the sandbox first plays: 1 match,
+  969-1615 MB in 102-139 ms) and re-checked every use; the record's ladder must be the staged one (foot within 1.5 m).
+  Live (guest-driven `!climb up|down 1.2`, 18 s each): `21.4 m climbed in MGSV, 6 moved along MGSV's ladder (seamless), 0
+  loops`; down `20.8 m ..., 6 moved ..., 0 loops`; every gamescope frame of the up climb (29, 0.6 s apart) shows him on the
+  rungs (going down MGSV's own camera stays behind the wall: see the recording instead). `recordings/climb_up.prrec` /
+  `climb_down.prrec` (22 s, `climb 1` [down] at t~1, `climb 0` at 19.5): root on the ladder's line every frame from 1.8 s to
+  20.1 s (0 frames off it; the 0.5.0 recordings: 27 / 34 during the climb-over / step-off), 22.6 / 22.8 m climbed in ~18 s,
+  7 / 6 shifts, root 0-4.5 m (up) / 2.0-8.0 m (down) above the foot, 52-60 draw lists a second throughout. A refused shift (the
+  record moved) ends seamless climbing for that climb: it loops as before.
+- **Loops (without Seamless, or a refused shift).** MGSV's ladder is 8 m: going up he climbs over its top (~1 s, a climber's
+  move) and is placed, faced and mounted again at its foot (~0.5 s); going down he steps off its foot and is mounted again from
+  the roof (the top mount, ~1.4 s). So an Elden Ring climb of any length is one MGSV climb with a short MGSV dismount + mount
+  every ~5.5 m (`!climb` counts them).
+- **a = 1 again** while climbing changes the direction / speed (no new mount) -- unless that climb is already on its way out
+  (`Ladder::Ending()`: its a = 0 came, he is leaving MGSV's ladder or going home): then it is a new climb, kept and started 80 ms
+  after the last one is over (before 0.6.0 it only changed the dying climb, and the new Elden Ring climb got no MGSV climb). **a =
+  0**: `dmoff` (the direct-motion request
   above) makes him let go, and the moment he is off the ladder (NORMAL_ACTION back, his root 0.15 m down or off its line) the
   native placement puts him back on his sandbox spot, MGSV's Warp there turns him the way he faced, and MGSV's camera is turned
   back (`camrot`); right after that placement `dmoff` once more cancels the landing MGSV would play for the drop (~1 s
   crouched; live: with it he stood at once); kGuestClimbing drops when he stands there (or 1.5 s).
+- **Home, really** (0.6.0, review 2026-10-31). The way home (kReturn, ladder and mantle alike) ends only with his root within 2 m
+  (`plan::kHomeRadius`) of his sandbox spot: a placement that didn't take him there 250 ms on (still on MGSV's ladder -- no
+  placement reaches him there -- or it landed nowhere) is tried again, off the ladder first (`dmoff`) when he is still on its
+  line, 3 tries in all (`kReturnTries`); then MGSV's own Warp home (Lua, a warning in the log) and the move ends. A refused native
+  placement on the way home is retried (it used to end the move where he was: at the airport ladder); anywhere else it sends him
+  home. For 5 s after a move, rigid draws near him while he is more than 10 m from that spot are not learned as his
+  (`climb::AwayFromHome`: the staging site's props).
+- **Elden Ring gone** (0.6.0, review 2026-10-31). Only Elden Ring's a = 0 ended a climb, and an Elden Ring crash or restart sends
+  none: Snake stayed staged at MGSV's ladder, the pad owned, the odometer still, until a later ladder. Now a climb ends by itself
+  (as a = 0 would) when the host's heartbeat is gone 1 s, a new host session attaches, or after 5 minutes. Live: `!climb up 1.0`,
+  then `pr stop --er` -> `climb: ended here -- Elden Ring is gone (no heartbeat)` and `back on the sandbox` 0.18 s later.
 - **While a move plays** (`state::Staged()`): the odometer is still (`Odometer::Still` instead of `Update`: Elden Ring sees none
   of it), velocity 0; GuestState's camera is the one he had when it began, at the same place relative to his root (MGSV's
   swings round the wall); the buddy's position is published as `buddyPos + (root - home)` (where it stands relative to Snake's
   sandbox spot); no treadmill, jump, dive, buddy whistles, Fulton anchor or proxies; the guest owns the pad
   (`pad::SetOwned`: neutral, its own stick, the Y pulses -- the player's pad is Elden Ring's ladder's); MGSV's HUD layer keeps its
   last frame (its "Y" prompt and ladder icon never reach Elden Ring) until 300 ms after it ends.
+- **After it** (review of 0.6.0, `plan::OdoThaw`, `TestOdoThaw`): the odometer stays still for the settle after the placement
+  home (MGSV's root drifts 0.5-0.9 m forward there), until the player's own left stick is pushed past the dead zone or 300 ms --
+  before, the whole 300 ms whatever the player did, on top of the way home: the stick did nothing for 0.2-0.5 s after every
+  ladder. A stick held through Elden Ring's end never counts (the host keeps it neutral until let go). `climb::OdometerStill()`
+  for Frame.cpp; `state::Staged()` (no treadmill, jump or dive, MGSV's HUD frozen) still lasts the 300 ms. Logged `climb: the
+  player's stick N ms after the move -- Snake's motion counts again`; `!climb` counts them. Live with both games 2026-11-01
+  (Stormveil's 14.5 m ladder): the stick pushed 35-53 ms after Elden Ring's end, the guest home 195-205 ms after it, the stick
+  counted 110-122 ms after that (when the host's puppet starts and its pad reaches MGSV, 301-317 ms after the end), Snake walking in
+  MGSV 440-522 ms after the end (MGSV's own first step).
 - Console: `!climb up|down [m/s]`, `!climb off`, `!climb` (state, counts, the last climb's summary); fake_er / `pr record`:
   `pr er "climb 1|0 [down] [speed]"`.
 
@@ -2098,10 +2272,25 @@ makes MGSV play Snake's own matching move for as long as it lasts.
   2.2 s. So a climb-up shows ~0.6-1.0 s of MGSV's move (the cut came 1.03 s after Y), a vault ~1.5 s. Elden Ring's v0[0] isn't
   used to stretch it (MGSV plays at its own speed); kGuestMantling covers the whole staging (~2-2.5 s in all, the staging and
   the stand-up before Y included).
-- **Sites.** Only one obstacle is measured: the terminal's jersey barrier, stand (826.39, -11.95, 1218.62) facing 90 ("Y +
-  step" shows; MGSV turns him to 60, the barrier's normal, as he climbs). No ledge with room on top (MGSV's climb-up that ends
-  standing on it, or its higher hang-and-pull) was found near the apron in the time there was: `Low` / `High` are empty, so
-  every climb-up, 50 or 180 cm, plays the barrier's first half.
+- **Sites.** The vault: the terminal's jersey barrier, stand (826.39, -11.95, 1218.62) facing 90 ("Y + step" shows; MGSV
+  turns him to 60, the barrier's normal, as he climbs). **Climb-ups that end on top (2026-10-31)**, found by walk probes
+  (Snake warped, walking forward pulsing Y, his root tracked) in the storage yard under the shed ~70 m north-east of the apron:
+  `Low` = a wooden crate, stand (843.05, -11.77, 1244.75) facing -90, 103 cm; `High` = an oil drum, stand (854.15, -12.0,
+  1243.76) facing -90, 119 cm (frames: hands on the drum, a knee up, standing on it). MGSV plays its climb-up for both (on top
+  0.5 / 0.4 s after the climb starts, Y to on his feet on top ~2.0 s: `MGSV's move took 1986 / 2011 ms ... rose 1.12 / 1.20 m`);
+  a stand 0.2-0.5 m further from either gets `MGSV offered no move there`. `LowMaxCm` 110: up to 110 cm the crate, above it
+  the drum. MGSV's climb-up looks the same at both heights (no lower step-up or higher hang-and-pull found near the apron);
+  the barrier's first half (cutAtTop) is the fallback with neither site. **`Step` (2026-10-31 night)**: a wider walk-probe search
+  of the same yard (warped, walking with Y pulsed, the root tracked; `!treadmill off`) found the stacked sacks beside the crates:
+  stand (843.93, -11.78, 1241.65) facing -90, 75 cm. MGSV's move there is a knee onto the sacks, no hands on top, up in 0.2 s (root
+  +0.75 m between 0.38 and 0.58 s after Y), then the same stand-up on top: `mantle #1: 70 cm climb-up ... Snake staged at MGSV's 75
+  cm obstacle` -> `MGSV's move took 2002 ms (Y to back on his feet), his root rose 0.77 m`; frames: the knee up, standing on the
+  sacks. A climb-up up to `StepMaxCm` (89) takes it, the crate up to 110, the drum above. No separate "step over" action exists
+  near the apron as far as the probes reached: from the same point, walking into the crates (yaw 0) ended 1.87 m up on their stack,
+  south (yaw 180) he went over a ~1 m one (+0.99 m, then down 1.5 s after it began). `!mantle site step|low|high|vault <x> <y> <z> <yaw> <cm> | none` sets one live. `recordings/mantle_low.prrec` / `mantle_high.prrec` (`mantle 80 0.8` / `mantle 160 1.2`):
+  kGuestMantling 2.48 / 2.30 s, his root on top (+1.21 / +1.14 m) from 1.0 / 0.8 s to the end (MGSV's stand-up on top), then
+  home. The host now paces its climb-up to it (0.6.0: `[Mantle] climb_base_s` 1.8 + `climb_per_m` 0.2: 1.71 m -> 2.14 s; live
+  `climb up done` 8 ms from MGSV's `move over`).
 - Console: `!mantle <cm> [vault] [secs]`, `!mantle`; `pr er "mantle <cm> [vault] [secs]"`.
 
 ### 22.3a Live with the real Elden Ring host (2026-10-31, docs/STATUS.md "0.5.0-alpha")
@@ -2117,6 +2306,20 @@ makes MGSV play Snake's own matching move for as long as it lasts.
   `staging-site props dropped` (335 in one vault); none showed in the frames after the fix.
 - The player's Y at a ledge no longer reaches MGSV (HOST.md "Climb up and vault": `InputBridge::SetLedge`): it had mounted
   D-Walker following ~2.5 m away before `kHEvMantle` arrived; the guest's own Y at the staging site is what plays the move.
+
+### 22.3b Live with both games, 0.6.0 (2026-10-31 evening, docs/STATUS.md "0.6.0-alpha")
+
+- **Ladders, seamless**: Stormveil's 14.5 m ladder (AEG219_067_4000) up `+14.6 m` in 18.9 s with a 5 s stop on the rungs half
+  way (`climb: now up at still (on the rungs)`, frames: the same pose throughout the stop), `15.0 m climbed in MGSV, 4 moved along
+  MGSV's ladder (seamless), 0 loops`; down `-14.5 m` in 14.0 s, `15.7 m ..., 4 moved ..., 0 loops`; `back on the sandbox` 0.19-0.20 s
+  after a = 0.
+- **A new climb while one ends** (`!climb off` then `!climb up` 70 ms later): `a new climb (up) while the last one ends` -> `climb
+  #4` 84 ms after `back on the sandbox`, on the ladder 0.3 s later.
+- **Climb-ups**: Church of Elleh rubble, by Y: 1.71 m -> the drum (`MGSV's move took 1988 ms ... rose 1.20 m`), 0.57 m -> the crate
+  (`2002 ms ... 1.12 m`); a 1.15 m one from the console -> the drum (1971 ms). Y went through the host's ledge latch (`2 Y presses
+  kept from MGSV`).
+- **Placed explosives at a death**: a sleep mine set, then the Tarnished killed (`call kill yes`): `placed #1: equip 418 dropped (the
+  Tarnished died) -> kGEvPlacedGone; in MGSV removed`, the host's `mine 1 gone (MGSV)`, nothing announced after the respawn.
 
 ### 22.4 Quick throws (`[Input] RtTapMs`, README Known issues)
 

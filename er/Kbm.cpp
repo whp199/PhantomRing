@@ -70,6 +70,14 @@ namespace phantom::er::Kbm
 		// Diagnostics (`input kbm`).
 		std::atomic<std::uint64_t> g_kbStateReads{ 0 }, g_mouseStateReads{ 0 }, g_kbDataReads{ 0 }, g_mouseDataReads{ 0 }, g_applied{ 0 };
 		std::atomic<std::uint32_t> g_stateSizeSeen{ 0 };
+		// A game controller read through DirectInput (any device but the keyboard and the mouse: Elden Ring imports dinput8, and
+		// under Proton a DualSense is also a DirectInput device). With the exclusive test virtual pad (er/VirtualPad.h) its reads
+		// are made neutral too: buffered events dropped, a state read centred (axes in the middle of their range, POVs centred,
+		// buttons up).
+		std::atomic<std::uint64_t> g_joyStateReads{ 0 }, g_joyDataReads{ 0 }, g_joyNeutralised{ 0 };
+		std::atomic<std::uint32_t> g_joySizeSeen{ 0 };
+		std::atomic<bool>          g_joyLogged{ false };
+		constexpr std::size_t      kSlotGetProperty = 5;
 		std::uint64_t              g_switches{ 0 }, g_taps{ 0 }, g_virtualPadOns{ 0 };
 
 		// Game thread only.
@@ -152,6 +160,54 @@ namespace phantom::er::Kbm
 			}
 		}
 
+		void NoteJoystick(const char* a_how, DWORD a_size)
+		{
+			g_joySizeSeen.store(a_size, std::memory_order_relaxed);
+			if (!g_joyLogged.exchange(true)) {
+				Log::Info("input: Elden Ring reads a game controller through DirectInput too ({}, {} bytes){}", a_how, a_size,
+					InputBridge::VirtualPadExclusive() ? " -- the exclusive virtual pad makes those reads neutral" : "");
+			}
+		}
+
+		// The middle of an axis's range (DIPROP_RANGE by offset), or the DirectInput default's (0..65535).
+		LONG AxisCentre(void* a_self, DWORD a_offset)
+		{
+			using PropFn = HRESULT(STDMETHODCALLTYPE*)(void*, REFGUID, LPDIPROPHEADER);
+			DIPROPRANGE r{};
+			r.diph.dwSize = sizeof(r);
+			r.diph.dwHeaderSize = sizeof(r.diph);
+			r.diph.dwObj = a_offset;
+			r.diph.dwHow = DIPH_BYOFFSET;
+			auto** vtbl = *static_cast<void***>(a_self);
+			if (SUCCEEDED(reinterpret_cast<PropFn>(vtbl[kSlotGetProperty])(a_self, DIPROP_RANGE, &r.diph)) && r.lMax > r.lMin) {
+				return r.lMin + (r.lMax - r.lMin) / 2;
+			}
+			return 32767;
+		}
+
+		// The exclusive virtual pad: a joystick state read as if nothing were touched (DIJOYSTATE / DIJOYSTATE2 layouts only).
+		void NeutralJoystick(void* a_self, DWORD a_size, void* a_data)
+		{
+			if (a_size != sizeof(DIJOYSTATE) && a_size != sizeof(DIJOYSTATE2)) {
+				return;
+			}
+			auto* j = static_cast<DIJOYSTATE*>(a_data);
+			LONG* axes[] = { &j->lX, &j->lY, &j->lZ, &j->lRx, &j->lRy, &j->lRz, &j->rglSlider[0], &j->rglSlider[1] };
+			for (std::size_t i = 0; i < std::size(axes); ++i) {
+				*axes[i] = AxisCentre(a_self, static_cast<DWORD>(i * sizeof(LONG)));
+			}
+			for (auto& pov : j->rgdwPOV) {
+				pov = 0xFFFFFFFF;
+			}
+			std::memset(j->rgbButtons, 0, sizeof(j->rgbButtons));
+			if (a_size == sizeof(DIJOYSTATE2)) {
+				auto* j2 = static_cast<DIJOYSTATE2*>(a_data);
+				std::memset(j2->rgbButtons + sizeof(j->rgbButtons), 0, sizeof(j2->rgbButtons) - sizeof(j->rgbButtons));
+				std::memset(&j2->lVX, 0, a_size - offsetof(DIJOYSTATE2, lVX));
+			}
+			g_joyNeutralised.fetch_add(1, std::memory_order_relaxed);
+		}
+
 		template <int N>
 		HRESULT STDMETHODCALLTYPE StateDetour(void* a_self, DWORD a_size, LPVOID a_data)
 		{
@@ -162,6 +218,12 @@ namespace phantom::er::Kbm
 					OnKeyboardState(static_cast<std::uint8_t*>(a_data));
 				} else if (a_size == sizeof(DIMOUSESTATE) || a_size == sizeof(DIMOUSESTATE2)) {
 					OnMouseState(a_size, a_data);
+				} else {
+					g_joyStateReads.fetch_add(1, std::memory_order_relaxed);
+					NoteJoystick("state", a_size);
+					if (InputBridge::VirtualPadExclusive()) {
+						NeutralJoystick(a_self, a_size, a_data);
+					}
 				}
 			}
 			return hr;
@@ -327,7 +389,16 @@ namespace phantom::er::Kbm
 				case DI8DEVTYPE_MOUSE:
 					OnMouseData(a_stride, reinterpret_cast<std::uint8_t*>(a_items), *a_inOut, capacity, peek);
 					break;
+				case 0:
+					break;  // its kind unknown (GetCapabilities failed): left alone
 				default:
+					// A game controller (DI8DEVTYPE_GAMEPAD, _JOYSTICK, ...): its events never happened while the exclusive virtual pad is on.
+					g_joyDataReads.fetch_add(1, std::memory_order_relaxed);
+					NoteJoystick("buffered", a_stride);
+					if (InputBridge::VirtualPadExclusive() && *a_inOut) {
+						*a_inOut = 0;
+						g_joyNeutralised.fetch_add(1, std::memory_order_relaxed);
+					}
 					break;
 				}
 			}
@@ -426,9 +497,28 @@ namespace phantom::er::Kbm
 			if (FAILED(create(::GetModuleHandleW(nullptr), DIRECTINPUT_VERSION, *iid, reinterpret_cast<void**>(&dinput), nullptr)) || !dinput) {
 				continue;
 			}
-			for (const GUID* kind : { &kGuidSysKeyboard, &kGuidSysMouse }) {
+			// The keyboard, the mouse and the first game controller attached (if its code isn't theirs: the exclusive test virtual pad
+			// makes its reads neutral, er/VirtualPad.h).
+			GUID pad{};
+			bool hasPad = false;
+			struct Found
+			{
+				GUID* guid;
+				bool* has;
+			} found{ &pad, &hasPad };
+			dinput->EnumDevices(
+				DI8DEVCLASS_GAMECTRL,
+				[](LPCDIDEVICEINSTANCEW a_inst, LPVOID a_ctx) -> BOOL {
+					auto* f = static_cast<Found*>(a_ctx);
+					*f->guid = a_inst->guidInstance;
+					*f->has = true;
+					return DIENUM_STOP;
+				},
+				&found, DIEDFL_ATTACHEDONLY);
+			const GUID* kinds[] = { &kGuidSysKeyboard, &kGuidSysMouse, hasPad ? &pad : nullptr };
+			for (const GUID* kind : kinds) {
 				IDirectInputDevice8W* device = nullptr;
-				if (SUCCEEDED(dinput->CreateDevice(*kind, &device, nullptr)) && device) {
+				if (kind && SUCCEEDED(dinput->CreateDevice(*kind, &device, nullptr)) && device) {
 					auto** vtbl = *reinterpret_cast<void***>(device);
 					HookSlot(vtbl[kSlotGetDeviceState], g_stateTargets, g_stateOrig, kStateDetours, "GetDeviceState");
 					HookSlot(vtbl[kSlotGetDeviceData], g_dataTargets, g_dataOrig, kDataDetours, "GetDeviceData");
@@ -662,13 +752,15 @@ namespace phantom::er::Kbm
 		const auto  b = g_padB.load(std::memory_order_relaxed);
 		return std::format(
 			"keyboard: {} ({}), scope {}, device {}, pad buttons {:#06x} lt {} rt {} L ({}, {}) R ({}, {}); mouse {:.0f} counts/s (sens {} accel {} antidz {} "
-			"smooth {} ms); DirectInput reads: keyboard {} state / {} buffered, mouse {} state / {} buffered (last size {}); pads written {}; "
+			"smooth {} ms); DirectInput reads: keyboard {} state / {} buffered, mouse {} state / {} buffered (last size {}), game controller {} state / {} "
+			"buffered (size {}, {} made neutral); pads written {}; "
 			"device switches {}, chord-key taps {}, virtual pad {} (turned on {}x), Elden Ring polled XInput {} ms ago, cursor {}",
 			p.enabled ? "ON" : "off", g_installed ? "hooked" : "not hooked", ScopeName(CurrentMode().scope), g_arbiter.Current() == Device::kKeyboard ? "keyboard" : "pad",
 			a & 0xFFFF, (a >> 16) & 0xFF, (a >> 24) & 0xFF, static_cast<std::int16_t>((a >> 32) & 0xFFFF), static_cast<std::int16_t>((a >> 48) & 0xFFFF),
 			static_cast<std::int16_t>(b & 0xFFFF), static_cast<std::int16_t>(b >> 16), g_lastSpeed, p.mouse.sensitivity, p.mouse.acceleration, p.mouse.antiDeadzone,
-			p.mouse.smoothingMs, g_kbStateReads.load(), g_kbDataReads.load(), g_mouseStateReads.load(), g_mouseDataReads.load(), g_stateSizeSeen.load(), g_applied.load(),
-			g_switches, g_taps, InputBridge::VirtualPadOn() ? "on" : "off", g_virtualPadOns, ::GetTickCount64() - InputBridge::LastErPollMs(),
+			p.mouse.smoothingMs, g_kbStateReads.load(), g_kbDataReads.load(), g_mouseStateReads.load(), g_mouseDataReads.load(), g_stateSizeSeen.load(),
+			g_joyStateReads.load(), g_joyDataReads.load(), g_joySizeSeen.load(), g_joyNeutralised.load(), g_applied.load(), g_switches, g_taps,
+			InputBridge::VirtualPadExclusive() ? "exclusive" : InputBridge::VirtualPadOn() ? "on" : "off", g_virtualPadOns, ::GetTickCount64() - InputBridge::LastErPollMs(),
 			g_clipped ? "captured" : "free");
 	}
 }

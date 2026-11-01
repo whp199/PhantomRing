@@ -24,6 +24,7 @@ namespace phantom::er::Pacing
 		struct DrawSnapshot
 		{
 			std::uint64_t                  frame{ 0 };
+			float                          yaw{ 0 };  // DrawList::anchorYaw
 			std::vector<proto::DrawRecord> records;
 			std::vector<float>             matrices;
 		};
@@ -95,6 +96,7 @@ namespace phantom::er::Pacing
 			}
 			DrawSnapshot d;
 			d.frame = list->frame;
+			d.yaw = list->anchorYaw;
 			const auto* recs = reinterpret_cast<const proto::DrawRecord*>(base + sizeof(proto::DrawList));
 			const auto* mats = reinterpret_cast<const float*>(base + sizeof(proto::DrawList) + list->drawCount * sizeof(proto::DrawRecord));
 			d.records.assign(recs, recs + list->drawCount);
@@ -277,7 +279,7 @@ namespace phantom::er::Pacing
 
 	const Motion& Current() { return g_motion; }
 
-	bool Draws(const Frame& a_f, std::vector<proto::DrawRecord>& a_records, std::vector<float>& a_matrices, std::uint64_t& a_frameOut)
+	bool Draws(const Frame& a_f, std::vector<proto::DrawRecord>& a_records, std::vector<float>& a_matrices, std::uint64_t& a_frameOut, float* a_yawOut)
 	{
 		if (!Cfg().render.smoothDraws || !Cfg().smooth || !g_wasReady || g_stepFrame != a_f.index) {
 			return false;
@@ -310,6 +312,9 @@ namespace phantom::er::Pacing
 			BlendLists(*a, *b, t, a_records, a_matrices);
 		}
 		a_frameOut = (t < 0.5f ? a : b)->frame;
+		if (a_yawOut) {
+			*a_yawOut = (t < 0.5f ? a : b)->yaw;
+		}
 		++g_drawModes[mode];
 		g_costMs = g_costMs * 0.98 + Link::QpcToMs(Link::Qpc() - t0) * 0.02;
 		PacingProbe::OnPacedDraws(a_f.index, g_drawStep, t, static_cast<std::uint32_t>(mode));

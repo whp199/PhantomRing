@@ -29,6 +29,7 @@
 #include "Pacing.h"
 #include "PacingProbe.h"
 #include "Puppet.h"
+#include "QuickItem.h"
 #include "GeomProbe.h"
 #include "Progression.h"
 #include "Stealth.h"
@@ -648,12 +649,14 @@ namespace phantom::er::Console
 			"timeskip [status | <minutes> | clear]   MGSV's Phantom Cigar on Elden Ring's clock, as kGEvTimeSkip (er/TimeSkip.h)\n"
 			"geom [learn [use] | near|all [radius] | ladders [radius] | dump <ins>]   map assets around the player (er/GeomProbe.h)\n"
 			"progression [off|level|weapon|both]   the Tarnished's level and right-hand armament, Snake's damage factor ([Progression]; switch live)\n"
+			"flask [use|next|slots|on|off]   Elden Ring's quick item for the hidden Tarnished while Snake plays (View + X / View + D-pad down; [Flask])\n"
 			"call setpos x y z | setyaw rad | ray x y z dx dy dz [filter] | rayall|raykeep (every hit + material | kept classes) | kill yes\n"
+			"die [snake|er]   a test death: Snake's as MGSV reports it (default), or Elden Ring killing the Tarnished\n"
 			"flag [name [on|off]]         render nodead nodamage nohit noattack nomove nogravity\n"
 			"puppet auto|off | motion kinematic|root_motion | hop on|off | set <key> <value>   menu auto|open|closed   debug on|off\n"
 			"tarnished [on|off|toggle]    Tarnished mode (what View + Start held 1 s toggles): the Tarnished plays, Snake parks\n"
 			"jump [r3|a|l3]               the button that jumps ([Jump] button; swapped with R3 in MGSV's pad)\n"
-			"mantle [plan [yaw_deg] | go [yaw_deg] | on|off | run off|low|all | hints reset]   Snake's climb up / vault ([Mantle], v15 kHEvMantle)\n"
+			"mantle [plan [yaw_deg] | go [yaw_deg] | on|off | run off|low|all | set <key> <m> | hints reset]   Snake's climb up / vault ([Mantle], v15 kHEvMantle)\n"
 			"ladder [snake on|auto|off | offset <toward> <up> [right] | speed <m/s> | top_stand <m>]   Snake on Elden Ring's ladders ([Ladder], v15)\n"
 			"render [status | keys | set <key> <value> | probe]   phase 2 renderer\n"
 			"hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value>]   overlay (MGSV HUD layer, reticle, corner text)\n"
@@ -909,6 +912,28 @@ namespace phantom::er::Console
 		if (cmd == "tarnished") {
 			return Host::TarnishedCommand(w.size() > 1 ? std::string_view(w[1]) : std::string_view());
 		}
+		if (cmd == "die") {
+			// die [snake|er]: test a death. snake (default): as when MGSV reports Snake's death (kGEvDied: the Tarnished is killed for
+			// it); er: Elden Ring kills the Tarnished (ChrIns::Kill, as an enemy would) -- either way the death visuals and the respawn run.
+			const bool er = w.size() > 1 && w[1] == "er";
+			if ((w.size() > 1 && !er && w[1] != "snake") || !a_f.player || !a_f.inGame) {
+				return c.Fail("usage: die [snake|er]   (in the world)");
+			}
+			Log::Info("console: die {}", er ? "er" : "snake");
+			if (er) {
+				game::Kill(a_f.player);
+				return "Elden Ring killed the Tarnished (ChrIns::Kill)";
+			}
+			Puppet::OnGuestDied(a_f);
+			return std::format("Snake's death as MGSV reports it (kGEvDied){}", Puppet::Active() ? "" : " -- the puppet is off: the Tarnished dies once it is back");
+		}
+		if (cmd == "flask") {
+			// flask [use|next|slots|on|off]: Elden Ring's quick item for the hidden Tarnished ([Flask], er/QuickItem.h)
+			if (w.size() > 1 && (w[1] == "on" || w[1] == "off")) {
+				Cfg().flask = w[1] == "on";
+			}
+			return QuickItem::Command(a_f, w.size() > 1 && w[1] != "on" && w[1] != "off" ? std::string_view(w[1]) : std::string_view());
+		}
 		if (cmd == "mantle") {
 			return Puppet::MantleCommand(w, a_f);
 		}
@@ -949,12 +974,16 @@ namespace phantom::er::Console
 				cfg.ladderTopStand = static_cast<float>(std::clamp(ParseNumber(w[2]).value_or(cfg.ladderTopStand), 0.0, 2.0));
 			} else if (w.size() > 2 && w[1] == "speed") {
 				cfg.ladderClimbSpeed = static_cast<float>(std::clamp(ParseNumber(w[2]).value_or(cfg.ladderClimbSpeed), 0.1, 10.0));
+			} else if (w.size() > 2 && w[1] == "early" && (w[2] == "on" || w[2] == "off")) {
+				cfg.ladderEndEarly = w[2] == "on";
 			} else if (w.size() > 1) {
-				return c.Fail("usage: ladder [snake on|auto|off | offset <toward> <up> [right] | speed <m/s> | top_stand <m>]");
+				return c.Fail("usage: ladder [snake on|auto|off | offset <toward> <up> [right] | speed <m/s> | top_stand <m> | early on|off]");
 			}
-			return std::format("[Ladder] snake = {}, offset {:.2f} toward / {:.2f} up / {:.2f} right, climb_speed {:.2f} m/s, guest_wait_ms {}, top_stand {:.2f} m\n{}",
+			return std::format("[Ladder] snake = {}, offset {:.2f} toward / {:.2f} up / {:.2f} right, climb_speed {:.2f} m/s, guest_wait_ms {}, top_stand {:.2f} m, "
+			                   "MGSV told the climb is over {}\n{}",
 				cfg.ladderSnake, cfg.ladderOffset[0], cfg.ladderOffset[1], cfg.ladderOffset[2], cfg.ladderClimbSpeed, cfg.ladderGuestWaitMs,
-				cfg.ladderTopStand, Host::LadderLine());
+				cfg.ladderTopStand, cfg.ladderEndEarly ? "at Elden Ring's EndTop/EndBottom -> none (early on)" : "after the settle (early off: before 0.6.0)",
+				Host::LadderLine());
 		}
 		if (cmd == "menu" && w.size() > 1) {
 			MenuWatch::SetForce(w[1] == "open" ? MenuWatch::Force::kOpen : (w[1] == "closed" ? MenuWatch::Force::kClosed : MenuWatch::Force::kAuto));

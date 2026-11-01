@@ -43,8 +43,7 @@ namespace phantom::guest::combat
 		CqcProbe g_probe;
 
 		// CQC poll state (game thread only)
-		std::uint16_t g_lastSerial{ 0 };
-		bool          g_serialPrimed{ false };
+		logic::StrikeEdge g_strike;  // one kGEvMelee per MGSV strike (Logic.h)
 		bool          g_cqcWarned{ false };
 		std::uint32_t g_staleShapes{ 0 };          // strikes whose attack shape still sat at the last strike's place
 		constexpr float kShapeReach = 2.5f;         // m (horizontal) from Snake's root a strike's centre may be
@@ -275,16 +274,9 @@ namespace phantom::guest::combat
 			return;
 		}
 		g_probe = { .valid = true, .attack = *attack, .action = Get<std::uintptr_t>(s + 0x10).value_or(0) != 0 };
-		if (!g_serialPrimed) {
-			g_serialPrimed = true;
-			g_lastSerial = *serial;
+		if (!g_strike.Update(*serial, *attack)) {
 			return;
 		}
-		if (*serial == g_lastSerial || *attack == 0) {
-			g_lastSerial = *serial;
-			return;
-		}
-		g_lastSerial = *serial;
 
 		// Strike volume: the attack shape if it validates, otherwise 1 m in front of Snake at chest height.
 		float      centre[3] = { a_root[0] + std::sin(a_yaw), a_root[1] + 1.0f, a_root[2] + std::cos(a_yaw) };

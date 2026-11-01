@@ -55,6 +55,7 @@ namespace phantom::er::MenuWatch
 		std::uint64_t             g_openSeenAt{ 0 };  // a menu was open (or latched) then: the main menu's group closes a frame or
 		                                              // two before the HUD hides as the inventory opens (live)
 		bool                      g_pressInWindow{ false };  // the latest latch began inside that window
+		bool                      g_dialog{ false };         // Elden Ring's dialog box is up ([Input] dialog_ui_states)
 
 		void AddHud(int a_index)
 		{
@@ -174,7 +175,8 @@ namespace phantom::er::MenuWatch
 			for (std::size_t i = 0; i < states.size(); ++i) {
 				const int index = static_cast<int>(i);
 				if (index != hudIndex && Visible(states, index) && !Visible(g_beforePress, index) &&
-					std::ranges::find(g_candidates, index) == g_candidates.end()) {
+					std::ranges::find(g_candidates, index) == g_candidates.end() &&
+					std::ranges::find(Cfg().dialogUiStates, index) == Cfg().dialogUiStates.end()) {
 					g_candidates.push_back(index);
 				}
 			}
@@ -286,7 +288,14 @@ namespace phantom::er::MenuWatch
 			                                         "Elden Ring's HUD is back -- its full-screen menu closed");
 		}
 		g_fullScreen = fullScreen;
-		bool open = latched || !g_groups.empty() || g_fullScreen;
+		// Elden Ring's dialog box: a menu while it is up, however it came up (no press, its menu closing under it).
+		const bool dialog = DialogOpen(Cfg().dialogUiStates, states);
+		if (dialog != g_dialog) {
+			Log::Info("menu watch: {}", dialog ? "Elden Ring's dialog box is up (a question) -- Elden Ring has the pad until it closes" :
+			                                     "Elden Ring's dialog box closed");
+			g_dialog = dialog;
+		}
+		bool open = latched || !g_groups.empty() || g_fullScreen || dialog;
 		if (g_force != Force::kAuto) {
 			open = g_force == Force::kOpen;
 		}
@@ -295,6 +304,11 @@ namespace phantom::er::MenuWatch
 		}
 		g_open = open;
 		g_last = std::move(states);
+	}
+
+	bool DialogOpen(const std::vector<int>& a_dialogStates, const std::vector<std::uint8_t>& a_states)
+	{
+		return std::ranges::any_of(a_dialogStates, [&](int a_index) { return Visible(a_states, a_index); });
 	}
 
 	bool FullScreenMenu(bool a_was, bool a_menuOpenBefore, bool a_hudVisibleBefore, bool a_hudVisibleNow, bool a_cutscene)
@@ -367,9 +381,9 @@ namespace phantom::er::MenuWatch
 		for (const int i : g_hudToo) {
 			hud += std::format("{}{:#04x}", hud.empty() ? "" : ",", i);
 		}
-		return std::format("menu {} (force {}, states [{}], open [{}], HUD too [{}], latch {} ms left, menu keys pressed {})", g_open ? "OPEN" : "closed",
+		return std::format("menu {} (force {}, states [{}], open [{}], HUD too [{}], latch {} ms left, menu keys pressed {}{})", g_open ? "OPEN" : "closed",
 			g_force == Force::kAuto ? "auto" : (g_force == Force::kOpen ? "open" : "closed"), list, armed, hud,
-			g_latchUntil > ::GetTickCount64() ? g_latchUntil - ::GetTickCount64() : 0, g_keyPresses);
+			g_latchUntil > ::GetTickCount64() ? g_latchUntil - ::GetTickCount64() : 0, g_keyPresses, g_dialog ? ", DIALOG BOX up" : "");
 	}
 
 	std::string DumpUi()

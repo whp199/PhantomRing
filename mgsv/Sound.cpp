@@ -1,6 +1,7 @@
 #include "Sound.h"
 
 #include "Addresses.h"
+#include "AudioMeter.h"
 #include "Config.h"
 #include "Hook.h"
 #include "Log.h"
@@ -46,7 +47,7 @@ namespace phantom::guest::sound
 		{
 			std::atomic<std::uint32_t> event{ 0 };
 			std::atomic<float>         gain{ 1.0f };
-			std::atomic<int>           mode{ 0 };  // bit0 dry volume, bit1 attenuation scaling, bit2 clear aux sends
+			std::atomic<int>           mode{ 0 };  // bit0 dry volume, bit1 attenuation scaling, bit2 clear aux sends, bit3 drop the post
 		};
 		using ScaleFn = int (*)(std::uint64_t, float);
 		using AuxFn = int (*)(std::uint64_t, const void*, std::uint32_t);
@@ -78,6 +79,9 @@ namespace phantom::guest::sound
 						g_setAux(a_object, nullptr, 0);
 					}
 					g_eventHits.fetch_add(1, std::memory_order_relaxed);
+					if (mode & 8) {
+						return 0;  // AK_INVALID_PLAYING_ID: not posted at all (diagnostics: which event is what you hear)
+					}
 					break;
 				}
 			}
@@ -103,6 +107,11 @@ namespace phantom::guest::sound
 		// What the detour compares against, refreshed from MGSV's Lua thread every Tick (~30 Hz).
 		std::atomic<bool>  g_armed{ false };  // walker deployed, not ridden, apart from Snake
 		std::atomic<float> g_wx{ 0 }, g_wy{ 0 }, g_wz{ 0 }, g_sx{ 0 }, g_sz{ 0 }, g_gain{ 1.0f };
+		// [Audio] WalkerDistance: D-Walker's sound objects are positioned this many times further from MGSV's listener (its
+		// camera) along the same line, so Wwise's distance attenuation turns them down and they keep their direction.
+		std::atomic<float> g_lx{ 0 }, g_ly{ 0 }, g_lz{ 0 }, g_distance{ 1.0f };
+		std::atomic<bool>  g_listener{ false };
+		std::atomic<std::uint64_t> g_pushed{ 0 };
 
 		std::size_t Hash(std::uint64_t a_id) { return static_cast<std::size_t>((a_id * 0x9E3779B97F4A7C15ull) >> 53) & (kSlots - 1); }
 
@@ -150,19 +159,39 @@ namespace phantom::guest::sound
 
 		int SetPositionDetour(std::uint64_t a_object, const float* a_position, std::uint32_t a_listener)
 		{
-			const int r = g_setPosition(a_object, a_position, a_listener);
-			if (a_object && a_position) {
-				const float x = a_position[0], y = a_position[1], z = -a_position[2];
-				auto*       s = Remember(a_object, x, y, z);
-				// Queued right behind its position: Wwise applies it to the object's voices whether the sound was posted
-				// before or after.
-				if (s && g_armed.load(std::memory_order_relaxed) && !s->walker.load(std::memory_order_relaxed) && NearWalker(x, y, z)) {
-					s->walker.store(true, std::memory_order_relaxed);
-					if (g_setVolume(a_object, g_gain.load(std::memory_order_relaxed)) == 1) {  // AK_Success
-						g_tagged.fetch_add(1, std::memory_order_relaxed);
-					} else {
-						g_failed.fetch_add(1, std::memory_order_relaxed);
-					}
+			if (!a_object || !a_position) {
+				return g_setPosition(a_object, a_position, a_listener);
+			}
+			const float x = a_position[0], y = a_position[1], z = -a_position[2];
+			auto*       s = Remember(a_object, x, y, z);
+			const bool  armed = g_armed.load(std::memory_order_relaxed);
+			bool        walker = s && s->walker.load(std::memory_order_relaxed);
+			bool        fresh = false;
+			if (s && armed && !walker && NearWalker(x, y, z)) {
+				s->walker.store(true, std::memory_order_relaxed);
+				walker = fresh = true;
+			}
+			int         r = 0;
+			const float k = g_distance.load(std::memory_order_relaxed);
+			if (walker && armed && k > 1.001f && g_listener.load(std::memory_order_relaxed)) {
+				// AkSoundPosition {Position xyz, Orientation xyz}: the position moved out along the listener's line of sight to it.
+				float      moved[6];
+				const float lx = g_lx.load(std::memory_order_relaxed), ly = g_ly.load(std::memory_order_relaxed), lz = -g_lz.load(std::memory_order_relaxed);
+				std::copy_n(a_position, 6, moved);
+				moved[0] = lx + (a_position[0] - lx) * k;
+				moved[1] = ly + (a_position[1] - ly) * k;
+				moved[2] = lz + (a_position[2] - lz) * k;
+				r = g_setPosition(a_object, moved, a_listener);
+				g_pushed.fetch_add(1, std::memory_order_relaxed);
+			} else {
+				r = g_setPosition(a_object, a_position, a_listener);
+			}
+			// Queued right behind its position: Wwise applies it to the object's voices whether the sound was posted before or after.
+			if (fresh && std::fabs(g_gain.load(std::memory_order_relaxed) - 1.0f) > 0.001f) {
+				if (g_setVolume(a_object, g_gain.load(std::memory_order_relaxed)) == 1) {  // AK_Success
+					g_tagged.fetch_add(1, std::memory_order_relaxed);
+				} else {
+					g_failed.fetch_add(1, std::memory_order_relaxed);
 				}
 			}
 			return r;
@@ -171,8 +200,8 @@ namespace phantom::guest::sound
 
 	bool Install()
 	{
-		if (std::fabs(Cfg().walkerVolume - 1.0f) < 0.001f) {
-			Log::Info("sound: [Audio] WalkerVolume = 1 -- D-Walker keeps MGSV's volume");
+		if (std::fabs(Cfg().walkerVolume - 1.0f) < 0.001f && std::fabs(Cfg().walkerDistance - 1.0f) < 0.001f) {
+			Log::Info("sound: [Audio] WalkerVolume = 1, WalkerDistance = 1 -- D-Walker keeps MGSV's volume");
 			return false;
 		}
 		if (!Matches(addr::kAkSetPosition, "AK::SoundEngine::SetPosition") || !Matches(addr::kAkSetOutputBusVolume, "AK::SoundEngine::SetGameObjectOutputBusVolume")) {
@@ -193,7 +222,8 @@ namespace phantom::guest::sound
 			Hooks::Create("AK PostEvent", reinterpret_cast<void*>(addr::kAkPostEvent.va), &PostEventDetour, &g_postEvent);
 		}
 		g_installed = true;
-		Log::Info("sound: D-Walker's Wwise objects -> output bus volume {:.2f} ({:.1f} dB)", Cfg().walkerVolume, 20.0f * std::log10(std::max(1e-4f, Cfg().walkerVolume)));
+		Log::Info("sound: D-Walker's Wwise objects -> {:.1f} times as far from MGSV's listener, output bus volume {:.2f} ({:.1f} dB)", Cfg().walkerDistance,
+			Cfg().walkerVolume, 20.0f * std::log10(std::max(1e-4f, Cfg().walkerVolume)));
 		return true;
 	}
 
@@ -206,7 +236,9 @@ namespace phantom::guest::sound
 		const auto fr = state::Frame();
 		const bool deployed = a_ready && lua.InGame() && fr.valid && lua.buddyId != 0xFFFF && lua.buddyPosValid;
 		const bool riding = lua.ridden != 0xFFFF || (lua.flags & state::kLVehicle);
-		if (!deployed || riding || (lua.buddyPos - fr.root).LengthXZ() < 3.0f) {
+		// Closer than this the walker's sounds and Snake's can't be told apart by NearWalker (it wants them 1.5 m nearer to the
+		// walker than to him). Was 3 m: the walker's loudest steps -- at Snake's start and stop, beside him -- stayed in (live).
+		if (!deployed || riding || (lua.buddyPos - fr.root).LengthXZ() < 1.8f) {
 			g_armed.store(false, std::memory_order_relaxed);
 			return;
 		}
@@ -216,6 +248,12 @@ namespace phantom::guest::sound
 		g_sx.store(fr.root.x, std::memory_order_relaxed);
 		g_sz.store(fr.root.z, std::memory_order_relaxed);
 		g_gain.store(std::clamp(Cfg().walkerVolume, 0.0f, 4.0f), std::memory_order_relaxed);
+		g_distance.store(std::clamp(Cfg().walkerDistance, 1.0f, 50.0f), std::memory_order_relaxed);
+		// MGSV's listener is its camera (Fox's sound listener follows the player camera).
+		g_lx.store(fr.camPos.x, std::memory_order_relaxed);
+		g_ly.store(fr.camPos.y, std::memory_order_relaxed);
+		g_lz.store(fr.camPos.z, std::memory_order_relaxed);
+		g_listener.store(fr.camPos.Finite(), std::memory_order_relaxed);
 		g_armed.store(true, std::memory_order_release);
 	}
 
@@ -224,6 +262,20 @@ namespace phantom::guest::sound
 		std::istringstream in(a_args);
 		std::string        verb;
 		in >> verb;
+		if (verb == "meter") {
+			std::string rest;
+			std::getline(in, rest);
+			return audio_meter::Command(rest);
+		}
+		if (verb == "distance") {
+			float v = -1.0f;
+			if (!(in >> v) || v < 1.0f || v > 50.0f) {
+				return "usage: !sound distance <factor 1..50>";
+			}
+			MutableCfg().walkerDistance = v;
+			return std::format("sound: D-Walker's sounds {:.1f} times as far from the listener (next positions){}", v,
+				g_installed ? "" : " -- not installed this session ([Audio] WalkerDistance/WalkerVolume = 1 at start)");
+		}
 		if (verb == "volume") {
 			float v = -1.0f;
 			if (!(in >> v) || v < 0.0f || v > 4.0f) {
@@ -336,9 +388,9 @@ namespace phantom::guest::sound
 		}
 		const auto lua = state::Lua();
 		const auto fr = state::Frame();
-		std::string out = std::format("sound: {} positions ({} dropped), D-Walker volume {:.2f} ({}), {} of its objects turned down ({} failed), {} event posts turned down",
-			g_positions.load(), g_dropped.load(), Cfg().walkerVolume, g_armed.load() ? "armed" : "not armed: no walker, ridden or next to Snake", g_tagged.load(),
-			g_failed.load(), g_eventHits.load());
+		std::string out = std::format("sound: {} positions ({} dropped), D-Walker distance x{:.1f} ({} positions moved), volume {:.2f} ({}), {} of its objects turned down ({} failed), {} event posts turned down",
+			g_positions.load(), g_dropped.load(), Cfg().walkerDistance, g_pushed.load(), Cfg().walkerVolume,
+			g_armed.load() ? "armed" : "not armed: no walker, ridden or next to Snake", g_tagged.load(), g_failed.load(), g_eventHits.load());
 		if (lua.buddyPosValid && fr.valid) {
 			out += "\nobjects within 5 m of the walker, positioned in the last 2 s:";
 			int n = 0;

@@ -3,6 +3,7 @@
 #include "ActorProxy.h"
 
 #include "Ammo.h"
+#include "AudioMeter.h"
 #include "Blast.h"
 #include "Camera.h"
 #include "Capture.h"
@@ -22,6 +23,7 @@
 #include "Hold.h"
 #include "Horse.h"
 #include "Ini.h"
+#include "LadderRung.h"
 #include "Link.h"
 #include "Log.h"
 #include "Lua.h"
@@ -40,6 +42,7 @@
 #include "Version.h"
 #include "Vars.h"
 #include "Verify.h"
+#include "Walker.h"
 
 #include <xinput.h>
 
@@ -103,8 +106,8 @@ namespace phantom::guest
 			const auto cmd = a_line.substr(1);
 			if (cmd == "status" || cmd.empty()) {
 				const auto centre = state::Centre();
-				return std::format("status: {}\nboot: {}\npump: {}\nframe: {}\ndeath: {}\nfollow: {}\n{}\n{}\n{}\n{}\n{}\n{}  tarnished mode: {}\nsteam saves guarded: {}  host alive: {}  centre: {}\n", link::CurrentStatusText(),
-					state::BootName(state::CurrentBoot()), pump::Describe(), frame::Describe(), death::Describe(), follow::Describe(), skeleton::DescribeBuddy(), menu::Describe(), blast::Describe(), throwing::Describe(), placed::Describe(),
+				return std::format("status: {}\nboot: {}\npump: {}\nframe: {}\ndeath: {}\nfollow: {}\n{}\n{}\n{}\n{}\n{}\n{}\n{}  tarnished mode: {}\nsteam saves guarded: {}  host alive: {}  centre: {}\n", link::CurrentStatusText(),
+					state::BootName(state::CurrentBoot()), pump::Describe(), frame::Describe(), death::Describe(), follow::Describe(), walker::Describe(), skeleton::DescribeBuddy(), menu::Describe(), blast::Describe(), throwing::Describe(), placed::Describe(),
 					ammo::Describe(), state::Parked() ? "on (Snake parked)" : "off", saves::SteamGuarded(), link::HostAlive(), centre ? std::format("{:.2f},{:.2f},{:.2f}", centre->x, centre->y, centre->z) : std::string("none"));
 			}
 			if (cmd == "cigar") {
@@ -264,6 +267,10 @@ namespace phantom::guest
 				// !loc <GameObject id>: the player location manager's object for another id (EXPERIMENT, D-Horse)
 				return hold::DescribeLocation(static_cast<std::uint16_t>(std::strtoul(std::string(cmd.substr(4)).c_str(), nullptr, 0)));
 			}
+			// D-Walker's location object: the treadmill's native move and the lead alongside Snake (Walker.h)
+			if (cmd == "walker" || cmd.starts_with("walker ")) {
+				return walker::Command(std::string(cmd.substr(std::min<std::size_t>(cmd.size(), 7)))) + "\n";
+			}
 			if (cmd == "horse" || cmd.starts_with("horse ")) {
 				// !horse [on|off|scan|shift <dx> <dz>]: the D-Horse treadmill ([Buddy] HorseTreadmill, Horse.cpp, GUEST.md 8.1a)
 				if (cmd == "horse on" || cmd == "horse off") {
@@ -343,6 +350,24 @@ namespace phantom::guest
 				MutableCfg().buddyFollowAhead = ahead;
 				MutableCfg().buddyFollowSide = side;
 				return std::format("follow: spot {} m ahead, {} m right (next whistle)", ahead, side);
+			}
+			if (cmd.starts_with("follow lead ")) {
+				// !follow lead <seconds> [side running m] [catch-up m] [min lead m] [settle ms]: [Buddy] FollowLeadSec /
+				// FollowSideRunning / FollowCatchUp / FollowLeadMin / FollowSettleMs, live
+				std::istringstream in{ std::string(cmd.substr(12)) };
+				float              lead = 0, side = Cfg().buddyFollowSideRunning, catchUp = Cfg().buddyFollowCatchUp, leadMin = Cfg().buddyFollowLeadMin;
+				int                settle = Cfg().buddyFollowSettleMs;
+				if (!(in >> lead) || lead < 0 || lead > 5) {
+					return "usage: !follow lead <seconds 0..5> [side while running m] [catch-up m] [min lead m] [settle ms]";
+				}
+				in >> side >> catchUp >> leadMin >> settle;
+				MutableCfg().buddyFollowLeadSec = lead;
+				MutableCfg().buddyFollowSideRunning = std::clamp(side, -20.0f, 20.0f);
+				MutableCfg().buddyFollowCatchUp = std::clamp(catchUp, 0.0f, 50.0f);
+				MutableCfg().buddyFollowLeadMin = std::clamp(leadMin, 0.0f, 8.0f);
+				MutableCfg().buddyFollowSettleMs = std::clamp(settle, 0, 10000);
+				return std::format("follow: lead {} s (at least {} m), side while running {} m, catch-up {} m, orders settle {} ms", lead, Cfg().buddyFollowLeadMin,
+					Cfg().buddyFollowSideRunning, Cfg().buddyFollowCatchUp, Cfg().buddyFollowSettleMs);
 			}
 			if (cmd.starts_with("follow ")) {
 				// !follow <distance m> <every ms>: tune live (the ini sets them at start)
@@ -514,8 +539,12 @@ namespace phantom::guest
 		blast::Install();
 		throwing::Install();
 		placed::Init();
+		if (Cfg().climb && Cfg().climbSeamless) {
+			ladder_rung::Init();  // byte checks only; the search for MGSV's ladder system starts once the sandbox plays (Climb.cpp)
+		}
 		ammo::Init();
 		sound::Install();
+		audio_meter::Install();  // [Audio] Meter: CoCreateInstance watched for MGSV's XAudio2 engine (before MGSV creates it)
 		menu::Install();
 		if (Cfg().capture) {
 			capture::InstallEarly();  // D3D11CreateDevice: the game creates its device right after DllMain

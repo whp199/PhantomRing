@@ -106,6 +106,7 @@ class FakeHost:
 		self.link = link
 		self.pad_file = PadFile(pad_file) if pad_file else None
 		self.trace = None  # --trace: one CSV line per new guest frame (treadmill / riding tests)
+		self.trace_draws = False  # --trace-draws: also a '# draws' line per draw list (D-Walker follow, projectile tags)
 		self.quiet = quiet
 		self.hurt_every = hurt_every
 		self.t0 = time.monotonic()
@@ -143,7 +144,8 @@ class FakeHost:
 		self.guest_last = None
 		self.stats = {
 			"frames": 0, "guestAttaches": 0, "guestStates": 0, "guestFlagsSeen": 0, "odoDistance": 0.0,
-			"events": {}, "drawFrames": 0, "lastDrawCount": 0, "lastMatrixCount": 0, "drawOwnersSeen": [],
+			"events": {}, "drawFrames": 0, "lastDrawCount": 0, "lastMatrixCount": 0, "drawOwnersSeen": [], "drawsByOwner": {},
+			"listsWithProjectiles": 0, "projectileMeshes": [],
 			"drawMissingMesh": 0, "renderClearAll": 0, "renderMeshes": 0, "renderTextures": 0, "renderForget": 0,
 			"meshIndexOk": True, "hudFrames": 0, "hudLastSize": [0, 0], "poseBones": 0, "consoleServed": 0,
 			"hurtSent": 0, "buddyTypes": [], "vehicleIdsSeen": [], "lifeLast": 0, "buddyFlagsSeen": 0, "buddyPosValid": 0,
@@ -306,12 +308,24 @@ class FakeHost:
 			st["drawFrames"] += 1
 			st["lastDrawCount"] = len(draws)
 			st["lastMatrixCount"] = len(mats)
+			projectiles = 0
 			for d in draws:
 				owner = proto.enum_name(d.owner, proto.DrawOwner)
 				if owner not in st["drawOwnersSeen"]:
 					st["drawOwnersSeen"].append(owner)
+				st["drawsByOwner"][owner] = st["drawsByOwner"].get(owner, 0) + 1
+				if d.owner == proto.DrawOwner.Projectile:
+					projectiles += 1
+					key = f"{d.mesh:016x}"
+					if key not in st["projectileMeshes"]:
+						st["projectileMeshes"].append(key)
+						self.log(f"draws: projectile mesh {key} ({d.indexCount} indices, {d.matrixCount} matrices) in list frame {hdr.frame}")
 				if d.mesh not in self.meshes:
 					st["drawMissingMesh"] += 1
+			if projectiles:
+				st["listsWithProjectiles"] += 1
+			if self.trace and self.trace_draws:
+				self.trace.write(self.draw_trace_line(dl, draws, mats))
 			self.on_draw_slot(self.draw.front, hdr)
 
 		if self.hud.acquire():
@@ -319,6 +333,29 @@ class FakeHost:
 			st["hudFrames"] += 1
 			st["hudLastSize"] = [hdr.width, hdr.height]
 			self.on_hud_slot(hdr, pixels)
+
+	def draw_trace_line(self, dl, draws, mats) -> str:
+		"""--trace-draws: one '# draws' line per draw list -- where each owner's draws are, relative to the list's anchor (Snake's
+		root): the mean of their first matrices' translations (the host draws them at its puppet + this, so a jump here between
+		lists is a jump the player sees), their count, and every projectile and buddy draw's own place (mesh@x,y,z: a part
+		culled in one list moves no mean)."""
+		sums: dict[int, list[float]] = {}
+		proj, buddy = [], []
+		for d in draws:
+			if d.firstMatrix >= len(mats):
+				continue
+			m = mats[d.firstMatrix]
+			acc = sums.setdefault(d.owner, [0.0, 0.0, 0.0, 0])
+			acc[0] += m[3]; acc[1] += m[7]; acc[2] += m[11]; acc[3] += 1
+			if d.owner == proto.DrawOwner.Projectile:
+				proj.append(f"{d.mesh:016x}@{m[3]:.2f},{m[7]:.2f},{m[11]:.2f}")
+			elif d.owner == proto.DrawOwner.Buddy:
+				buddy.append(f"{d.mesh & 0xFFFFFFFF:08x}@{m[3]:.3f},{m[7]:.3f},{m[11]:.3f}")
+		parts = []
+		for owner, (x, y, z, n) in sorted(sums.items()):
+			parts.append(f"{proto.enum_name(owner, proto.DrawOwner)}={n}@{x / n:.3f},{y / n:.3f},{z / n:.3f}")
+		return (f"# draws frame={dl.frame} anchor={dl.anchorPos[0]:.3f},{dl.anchorPos[1]:.3f},{dl.anchorPos[2]:.3f} " + " ".join(parts)
+			+ (" proj=" + ";".join(proj) if proj else "") + (" buddy=" + ";".join(buddy) if buddy else "") + f" t={time.monotonic() - self.t0:.4f}\n")
 
 	# Hooks for subclasses that keep what the guest sends (recorder.py, capture_view.py); the slot data is
 	# only valid until the next acquire.
@@ -522,6 +559,9 @@ def main(argv=None) -> int:
 	ap.add_argument("--trace", help="append one CSV line per new guest frame (t,frame,flags,epoch,odo xyz,root xyz,yaw,vel xz,"
 		"buddyFlags,buddyPos xyz,vehicleId,buddyAmmo,throwAim,aimThrowPos xyz,aimThrowVel xyz,aimThrowKind,life,lifeMax,weaponId,"
 		"ammoInClip,ammoStock,camYawDeg,nvg) and one '# event' line per guest event (and '# host' per host event sent)")
+	ap.add_argument("--trace-draws", action="store_true", help="with --trace: also one '# draws frame=F anchor=x,y,z Owner=n@x,y,z ... "
+		"proj=mesh@x,y,z;... buddy=mesh@x,y,z;...' line per draw list (each owner's mean place relative to the anchor; projectile and buddy "
+		"draws one by one)")
 	ap.add_argument("--pad-file", help="drive the pad from this file instead of the 10 s loop (see parse_pad_line); "
 		"an absent file means a neutral pad")
 	ap.add_argument("--actors", choices=["fixed", "near"], default="fixed",
@@ -544,6 +584,9 @@ def main(argv=None) -> int:
 	host.actors_mode = args.actors
 	if args.trace:
 		host.trace = open(args.trace, "a", buffering=1)
+		host.trace_draws = args.trace_draws
+		# the trace's t is time.monotonic() - t0: other probes (e.g. a /proc/<pid>/mem poller) line up with it through this
+		host.trace.write(f"# t0 monotonic={host.t0:.4f}\n")
 	host.attach()
 	stop = False
 
@@ -567,7 +610,8 @@ def main(argv=None) -> int:
 				flags = proto.flag_names(gs.flags, proto.GuestFlags) if gs else "-"
 				host.log(f"guest {guest['statusName']} flags {flags} odo->puppet ({host.puppet[0]:.2f}, {host.puppet[2]:.2f}) "
 					f"pose {st['poseBones']} bones, events {st['events']}, draw frames {st['drawFrames']} "
-					f"({st['lastDrawCount']} draws), hud {st['hudFrames']}, life {st['lifeLast']}")
+					f"({st['lastDrawCount']} draws), hud {st['hudFrames']}, life {st['lifeLast']}"
+					+ (f", projectile draws {st['drawsByOwner'].get('Projectile', 0)} in {st['listsWithProjectiles']} lists" if st['listsWithProjectiles'] else ""))
 			else:
 				host.log(f"waiting for the guest ({guest['statusName']} {guest['text']!r})")
 		next_t += dt

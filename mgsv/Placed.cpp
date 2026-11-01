@@ -39,6 +39,12 @@ namespace phantom::guest::placed
 			bool                 setOff{ false };
 			bool                 popped{ false };       // a decoy Elden Ring popped (kHEvDetonate): gone for the host, never announced again
 			bool                 preexisting{ false };  // in the vars when the sandbox became ready: MGSV's world (an old save's), never announced
+			// Elden Ring's world forgot it (the Tarnished died; or it was placed after he died, as the death came): kGEvPlacedGone
+			// went out (if it was announced), never announced again, never set off for the player, its MGSV blast kept out; removed
+			// from MGSV's own list (removeTried).
+			bool                 dropped{ false };
+			bool                 goneSent{ false };
+			bool                 removeTried{ false };
 		};
 		struct Gone
 		{
@@ -47,6 +53,7 @@ namespace phantom::guest::placed
 			Vec3             pos;
 			std::uint64_t    ms{ 0 };
 			bool             setOff{ false };  // by us (kHEvDetonate)
+			bool             dropped{ false };
 		};
 		std::mutex                g_lock;
 		std::array<Slot, kSlots>  g_slots{};
@@ -61,6 +68,14 @@ namespace phantom::guest::placed
 		// a guest heartbeat timeout) and ignores kGEvPlaced while it isn't puppeting; it never asks for them again. So every
 		// start of its puppet (HostState kHostPuppeting going up) gets every live one again, mapped through its new anchor.
 		logic::RisingEdges         g_puppetStarts;
+		// The Tarnished died (HostState kHostPlayerDead): Elden Ring reloads its world and the host forgets Snake's placed
+		// explosives (er/Mines.cpp discards them at the next puppet start). Until the puppet starts again after it, every one of
+		// his -- also one MGSV puts down only now (placed in the frame he died: it used to be announced first at the respawn and
+		// lie at the grace) -- is dropped: kGEvPlacedGone, removed from MGSV's own list. Also over when the puppet runs on with nobody
+		// dying (Elden Ring refused the kill: logic::AfterDeath).
+		logic::AfterDeath          g_afterDeath;
+		std::uint64_t              g_deaths{ 0 }, g_droppedCount{ 0 }, g_removed{ 0 }, g_removeRefused{ 0 };
+		bool                       g_removeOk{ false };  // MGSV's own removal (kPlacedRemove*) verified
 
 		// MGSV's own SetOff (Addresses.h kPlacedSetOff), refused for Snake's mines: MGSV's sensors answer MGSV's characters
 		// (live: D-Walker, whose follow spot is ahead-left of Snake, set off 3 of 3 claymores 0-1.7 s after they were placed).
@@ -99,11 +114,12 @@ namespace phantom::guest::placed
 					const auto slot = a_object - first;
 					if (slot < kSlots && g_slots[slot].id && g_slots[slot].equip == *equip) {
 						auto& s = g_slots[slot];
-						preexisting = s.preexisting;
+						preexisting = s.preexisting || s.dropped;
 						other = s.id;
 						// Only one that reached Elden Ring and wasn't on its way yet: an old save's C4 (DetonateOwn takes the
-						// oldest, and that one is older than any the player placed) is MGSV's world -- not an answer to the press.
-						if (!s.preexisting && !s.setOff) {
+						// oldest, and that one is older than any the player placed) is MGSV's world -- not an answer to the press;
+						// so is one Elden Ring forgot at a death (dropped, normally removed from MGSV's list already).
+						if (!s.preexisting && !s.dropped && !s.setOff) {
 							s.setOff = true;
 							id = s.id;
 						}
@@ -114,7 +130,7 @@ namespace phantom::guest::placed
 					// for ours. PlayerDetonate's detour now sees nothing of ours went off and sets the oldest of them off.
 					Log::Info("placed #{}: C4 (object {}, equip {}) set off by MGSV{} -- {}: MGSV's world, not the player's answer", other, a_object, *equip,
 						detonator ? "'s detonator (DetonateOwn)" : " (not its detonator)",
-						preexisting ? "an old save's" : other ? "already on its way" : "never sent to Elden Ring");
+						preexisting ? "an old save's or one dropped at a death" : other ? "already on its way" : "never sent to Elden Ring");
 					return done;
 				}
 				g_mgsvC4SetOffs.fetch_add(1, std::memory_order_acq_rel);
@@ -179,12 +195,13 @@ namespace phantom::guest::placed
 			if (!a_s.id) {
 				return;
 			}
-			if (a_s.announcedGen != ~0u && !a_s.popped) {  // a popped decoy's kGEvPlacedGone went out when it popped
+			const bool gone = a_s.announcedGen != ~0u && !a_s.popped && !a_s.goneSent;  // a popped decoy's / dropped one's went out already
+			if (gone) {
 				Push(proto::kGEvPlacedGone, a_s, a_s.id);
 				++g_goneEvents;
 			}
-			g_gone[g_goneNext++ % g_gone.size()] = { a_s.id, a_s.ex.kind, a_s.pos, ::GetTickCount64(), a_s.setOff };
-			Log::Info("placed #{}: equip {} gone ({}){}", a_s.id, a_s.equip, a_why, a_s.announcedGen != ~0u ? " -> kGEvPlacedGone" : "");
+			g_gone[g_goneNext++ % g_gone.size()] = { a_s.id, a_s.ex.kind, a_s.pos, ::GetTickCount64(), a_s.setOff, a_s.dropped };
+			Log::Info("placed #{}: equip {} gone ({}){}", a_s.id, a_s.equip, a_why, gone ? " -> kGEvPlacedGone" : "");
 			a_s = {};
 		}
 
@@ -216,6 +233,68 @@ namespace phantom::guest::placed
 			return true;
 		}
 
+		// MGSV's own removal of our object a_slot (vars index): the Placed System's interface slot 5, its offline path (Addresses.h
+		// kPlacedRemove*). Game thread. False = refused (logged by the caller).
+		bool RemoveInMgsv(const Slot& a_s, std::uint32_t a_slot, std::string& a_why)
+		{
+			const auto sys = g_removeOk ? System() : 0;
+			if (!sys) {
+				a_why = g_removeOk ? "the Placed System isn't there (vtables)" : "removal sites differ";
+				return false;
+			}
+			const auto first = Get<std::uint32_t>(sys + 0x88).value_or(~0u);
+			const auto count = Get<std::uint32_t>(sys + 0x80).value_or(0);
+			const std::uint32_t index = first + a_slot;
+			if (first == ~0u || index >= count || index > 0xFF) {
+				a_why = std::format("object index {}+{} past {} (or over 255)", first, a_slot, count);
+				return false;
+			}
+			const auto equips = Get<std::uintptr_t>(sys + 0x38).value_or(0);
+			const auto flags = Get<std::uintptr_t>(sys + 0xB0).value_or(0);
+			const auto equip = equips ? Get<std::uint16_t>(equips + std::uintptr_t(index) * 4) : std::nullopt;
+			const auto live = flags ? Get<std::uint8_t>(flags + std::uintptr_t(index) * 3) : std::nullopt;
+			const auto online = Get<std::uint8_t>(sys + 0x20 + 0x1E0);
+			if (!equip || *equip != a_s.equip || !live || !(*live & 1) || !online || (*online & 1)) {
+				a_why = std::format("object {} is equip {} flags {:#x} (online byte {:#x}), not our live {}", index, equip.value_or(0), live.value_or(0),
+					online.value_or(0xFF), a_s.equip);
+				return false;
+			}
+			const auto iface = sys + 0x20;
+			const auto vtable = Get<std::uintptr_t>(iface).value_or(0);
+			const auto fn = vtable ? Get<std::uintptr_t>(vtable + addr::kPlacedRemoveVf * 8).value_or(0) : 0;
+			if (vtable != addr::kPlacedVtable2 || fn != addr::kPlacedRemoveEntry.va) {
+				a_why = std::format("interface vtable {:#x} slot 5 {:#x}", vtable, fn);
+				return false;
+			}
+			using RemoveFn = void (*)(void* a_iface, std::uint8_t a_index, std::uint32_t a_arg);
+			reinterpret_cast<RemoveFn>(fn)(reinterpret_cast<void*>(iface), static_cast<std::uint8_t>(index), 0);
+			return true;
+		}
+
+		// The Tarnished died: Elden Ring forgot a_s (game thread, g_lock held).
+		void Drop(Slot& a_s, std::uint32_t a_slot, const char* a_why)
+		{
+			if (a_s.dropped) {
+				return;
+			}
+			a_s.dropped = true;
+			++g_droppedCount;
+			if (a_s.announcedGen != ~0u && !a_s.popped && !a_s.goneSent) {
+				Push(proto::kGEvPlacedGone, a_s, a_s.id);
+				++g_goneEvents;
+				a_s.goneSent = true;
+			}
+			std::string why;
+			bool        removed = false;
+			if (!a_s.removeTried && Cfg().placedClearOnDeath) {
+				a_s.removeTried = true;
+				removed = RemoveInMgsv(a_s, a_slot, why);
+				(removed ? g_removed : g_removeRefused) += 1;
+			}
+			Log::Info("placed #{}: equip {} dropped ({}){}; in MGSV {}", a_s.id, a_s.equip, a_why, a_s.goneSent ? " -> kGEvPlacedGone" : " (never announced)",
+				removed ? "removed" : Cfg().placedClearOnDeath ? "left (" + why + ")" : std::string("left ([Combat] PlacedClearOnDeath = false)"));
+		}
+
 		// kHEvDetonate for a decoy: an Elden Ring enemy walked into it (er/Decoys.h) and it popped there, or the host dropped it (set
 		// before a load, unknown to this host). The guest is the one that remembers: kGEvPlacedGone now, never announced again (a
 		// restarted puppet would otherwise get it back). In MGSV it
@@ -245,6 +324,8 @@ namespace phantom::guest::placed
 		g_varsOk = Matches(addr::kVarPlacedWeapons) && Matches(addr::kVarPlacedPos) && Matches(addr::kVarPlacedRot);
 		g_systemOk = g_varsOk && Matches(addr::kPlacedRegister, "placed register") && Matches(addr::kPlacedRegisterStore, "placed register store") &&
 		             Matches(addr::kPlacedTriggerTest, "placed set-off test") && Matches(addr::kPlacedRemoveFlags, "placed flags");
+		g_removeOk = g_systemOk && Matches(addr::kPlacedRemoveSlot, "placed remove slot") && Matches(addr::kPlacedRemoveEntry, "placed remove") &&
+		             Matches(addr::kPlacedRemoveOffline, "placed remove (offline)");
 		// Snake's mines are Elden Ring's to set off: MGSV's own sensors (D-Walker in a claymore's cone) are refused.
 		if (g_systemOk && Matches(addr::kPlacedSetOff, "placed set-off") && Matches(addr::kPlacedSensorCall, "placed sensor call") &&
 			Hooks::Create("placed set-off", reinterpret_cast<void*>(addr::kPlacedSetOff.va), &SetOffDetour, &g_setOff)) {
@@ -280,8 +361,24 @@ namespace phantom::guest::placed
 		}
 		const auto       gen = link::AttachGeneration();
 		proto::HostState hs{};
-		const bool       puppeting = link::ReadHostState(hs) && (hs.flags & proto::kHostPuppeting);
+		const bool       known = link::ReadHostState(hs);
+		const bool       puppeting = known && (hs.flags & proto::kHostPuppeting);
+		const bool       hostDead = known && (hs.flags & proto::kHostPlayerDead);
 		const auto       start = g_puppetStarts.Update(puppeting);
+		switch (g_afterDeath.Update(hostDead, puppeting, start)) {
+		case logic::AfterDeath::Change::kDied:
+			++g_deaths;
+			Log::Info("placed: the Tarnished died -- Elden Ring forgets Snake's placed explosives: dropped until the puppet runs again");
+			break;
+		case logic::AfterDeath::Change::kRestarted:
+			Log::Info("placed: the puppet started again after the death -- placed explosives go to Elden Ring again");
+			break;
+		case logic::AfterDeath::Change::kRanOn:
+			Log::Info("placed: the death is over and the puppet ran on (Elden Ring refused the kill?) -- placed explosives go to Elden Ring again");
+			break;
+		default:
+			break;
+		}
 		std::scoped_lock lock(g_lock);
 		for (std::uint32_t i = 0; i < kSlots; ++i) {
 			auto&       s = g_slots[i];
@@ -308,7 +405,10 @@ namespace phantom::guest::placed
 					p.x, p.y, p.z, s.rot[0], s.rot[1], s.rot[2], s.rot[3], i,
 					s.preexisting ? " -- already in the save when the sandbox loaded: MGSV's world, never sent to Elden Ring" : "");
 			}
-			if (s.preexisting || s.popped) {
+			if (g_afterDeath.On() && !s.preexisting) {
+				Drop(s, i, s.announcedGen == ~0u ? "put down as the Tarnished died: never sent to Elden Ring" : "the Tarnished died");
+			}
+			if (s.preexisting || s.popped || s.dropped) {
 				continue;
 			}
 			// New, a new host session that never heard of it, or a new start of the host's puppet (it forgot it). Only while
@@ -335,8 +435,8 @@ namespace phantom::guest::placed
 			if (s.id != a_id) {
 				continue;
 			}
-			if (s.setOff || s.popped) {
-				return;  // already on its way (the host repeats while an enemy stands in the radius)
+			if (s.setOff || s.popped || s.dropped) {
+				return;  // already on its way (the host repeats while an enemy stands in the radius), or forgotten at a death
 			}
 			if (s.ex.use == logic::ExplosiveUse::kDecoy) {
 				PopDecoy(s, i);
@@ -385,7 +485,7 @@ namespace phantom::guest::placed
 			for (std::uint32_t i = 0; i < kSlots; ++i) {
 				const auto& s = g_slots[i];
 				// MGSV's world (an old save's) never reached Elden Ring: it isn't the player's to set off there.
-				all[i] = { s.preexisting ? 0u : s.id, s.equip, s.setOff || tried[i] };
+				all[i] = { s.preexisting || s.dropped ? 0u : s.id, s.equip, s.setOff || tried[i] };
 			}
 			const int i = c4::PickOldest(all, a_inHand);
 			if (i < 0) {
@@ -414,7 +514,7 @@ namespace phantom::guest::placed
 	{
 		std::scoped_lock lock(g_lock);
 		for (const auto& s : g_slots) {
-			if (s.id && !s.preexisting && !s.setOff && c4::IsC4(s.equip)) {
+			if (s.id && !s.preexisting && !s.dropped && !s.setOff && c4::IsC4(s.equip)) {
 				return true;
 			}
 		}
@@ -423,17 +523,18 @@ namespace phantom::guest::placed
 
 	std::uint64_t MgsvC4SetOffs() { return g_mgsvC4SetOffs.load(std::memory_order_acquire); }
 
-	std::uint32_t MatchBlast(const Vec3& a_centre, logic::BlastKind a_kind, bool* a_setOff)
+	std::uint32_t MatchBlast(const Vec3& a_centre, logic::BlastKind a_kind, bool* a_setOff, bool* a_dropped)
 	{
 		std::scoped_lock lock(g_lock);
 		std::uint32_t best = 0;
-		bool          bestSetOff = false;
+		bool          bestSetOff = false, bestDropped = false;
 		float         bestD = kMatchRadius;
 		for (const auto& s : g_slots) {
 			if (s.id && s.ex.use != logic::ExplosiveUse::kDecoy && s.ex.kind == a_kind && (s.pos - a_centre).Length() <= bestD) {
 				bestD = (s.pos - a_centre).Length();
 				best = s.id;
 				bestSetOff = s.setOff;
+				bestDropped = s.dropped;
 			}
 		}
 		// A live one first: a new claymore where the last one stood is that one, not the old one (live: the second
@@ -444,11 +545,15 @@ namespace phantom::guest::placed
 				bestD = (g.pos - a_centre).Length();
 				best = g.id;
 				bestSetOff = g.setOff;
+				bestDropped = g.dropped;
 			}
 		}
 		g_matched += best != 0;
 		if (a_setOff) {
 			*a_setOff = bestSetOff;
+		}
+		if (a_dropped) {
+			*a_dropped = bestDropped;
 		}
 		return best;
 	}
@@ -463,12 +568,14 @@ namespace phantom::guest::placed
 		for (std::uint32_t i = 0; i < kSlots; ++i) {
 			const auto& s = g_slots[i];
 			if (s.id) {
-				live += std::format(" #{}={}@{:.1f},{:.1f},{:.1f}{}", s.id, s.equip, s.pos.x, s.pos.y, s.pos.z, s.setOff ? "(set off)" : s.popped ? "(popped)" : "");
+				live += std::format(" #{}={}@{:.1f},{:.1f},{:.1f}{}", s.id, s.equip, s.pos.x, s.pos.y, s.pos.z,
+					s.setOff ? "(set off)" : s.popped ? "(popped)" : s.dropped ? "(dropped)" : "");
 			}
 		}
 		return std::format("placed: {} placed / {} gone events, detonations {} ({} refused{}), decoys popped {}, own explosions {}, blasts matched {}, MGSV set-offs refused {}, "
-		                   "system {}; live:{}",
+		                   "system {}; deaths {} ({}), dropped {} (removed in MGSV {}, refused {}); live:{}",
 			g_placedEvents, g_goneEvents, g_detonations, g_refused, g_lastRefusal.empty() ? "" : ": " + g_lastRefusal, g_pops, g_ownExplosions, g_matched, g_refusedSetOffs.load(),
-			g_systemOk ? (System() ? "ok" : "not found") : "off", live.empty() ? " none" : live) + "\n" + c4::Describe();
+			g_systemOk ? (System() ? "ok" : "not found") : "off", g_deaths, g_afterDeath.On() ? "dropping now" : "puppet back", g_droppedCount, g_removed,
+			g_removeRefused, live.empty() ? " none" : live) + "\n" + c4::Describe();
 	}
 }

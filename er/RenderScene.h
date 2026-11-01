@@ -37,6 +37,7 @@ namespace phantom::er
 	{
 		std::uint64_t                  erFrame{ 0 };
 		std::uint64_t                  guestFrame{ 0 };
+		float                          guestYaw{ NAN };  // the draw list's anchorYaw (Snake's root yaw in MGSV), NAN: none
 		RenderCamera                   camera;
 		float                          anchor[12]{};  // anchor-relative MGSV world -> ER world, 3x4 rows (world = A * p)
 		bool                           mirrored{ false };
@@ -76,5 +77,7 @@ namespace phantom::er
 		bool                                  HasMarkers();
 		bool                                  HasNvg();  // ... and night vision (the same split of the composite batch)
 		std::string                           Describe();
+		// While Snake dies: whether the last capture drew him (and how many draws), or why not (Puppet's death trace).
+		std::string                           DyingDraw();
 	}
 }

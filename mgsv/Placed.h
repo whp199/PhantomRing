@@ -11,6 +11,10 @@
 // explosion event is the guest's own. C4 is the player's: MGSV's detonator (or the guest's, C4.h) sets the same bit.
 // Decoys (inflatable / active / shock, [Combat] Decoys) go out the same way with a = kAmmoDecoy (roadmap 2.8): Elden Ring's
 // enemies stare at them (er/Decoys.h); a kHEvDetonate for one means it popped there: kGEvPlacedGone, never announced again.
+// When the Tarnished dies Elden Ring forgets them all (its world reloads, the host discards its copies): from the death until the
+// puppet starts again each of Snake's is dropped -- kGEvPlacedGone, never announced again, removed from MGSV's own list
+// ([Combat] PlacedClearOnDeath) -- also one MGSV puts down only as he dies (it used to reach Elden Ring first at the respawn and
+// lie at the grace; docs/GUEST.md 18.8b).
 
 #include "Logic.h"
 
@@ -33,7 +37,8 @@ namespace phantom::guest::placed
 
 	// Blast.cpp: the placed explosive a blast at a_centre came from -- its id, 0 = none of ours; a_setOff = whether
 	// kHEvDetonate set it off (else MGSV's own world did: D-Walker walking into a claymore, a grenade next to a mine).
-	std::uint32_t MatchBlast(const logic::Vec3& a_centre, logic::BlastKind a_kind, bool* a_setOff = nullptr);
+	// a_dropped: it is one Elden Ring forgot at the Tarnished's death (its blast is MGSV's world: never sent).
+	std::uint32_t MatchBlast(const logic::Vec3& a_centre, logic::BlastKind a_kind, bool* a_setOff = nullptr, bool* a_dropped = nullptr);
 
 	// C4's detonator (C4.cpp, docs/GUEST.md 18.8a). Sets off Snake's oldest live C4 (of a_inHand's kind first, c4::PickOldest)
 	// through the same bit as kHEvDetonate -- every live one with a_all; how many went. Any thread.

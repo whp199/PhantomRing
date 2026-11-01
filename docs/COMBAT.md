@@ -290,7 +290,7 @@ mode switched live between shots): off 35, level 31, weapon 35, both 31 (`progre
 | `round_flight`, `round_speed_rocket`, `round_speed_grenade` | true, 16, 80 | explosive rounds fly (m/s) from Snake's muzzle (§9) |
 | `round_speed_rocket_boost`, `round_rocket_boost_after` | 60, 1 | a rocket's motor: from 16 to 60 m/s over 0.3 s after 1 s (docs/HOST.md "Rocket motor") |
 | `flame_fx`, `flame_per_second`, `flame_speed` | true, 6, 14 | D-Walker's flamethrower drawn with Elden Ring flames |
-| `muzzle_flash`, `muzzle_per_second`, `muzzle_life`, `muzzle_ahead`, `muzzle_tranq` | false, 10, 0.06, 0.1, false | (roadmap 5.4, UNVERIFIED live) a muzzle flash at each shot: `explosion_muzzle` (the Fire Pot's fireball) cut after `muzzle_life` s, carrier 10302005 (docs/HOST.md "Projectile meshes and muzzle flashes") |
+| `muzzle_flash`, `muzzle_per_second`, `muzzle_life`, `muzzle_ahead`, `muzzle_tranq` | true, 10, 0.1, 0.1, false | (roadmap 5.4; on since 2026-10-31, fake MGSV's rifle shots; seen 2026-11-01 with the real MGSV's SVG-76: orange sparks in front of the rifle) a muzzle flash at each shot: `explosion_muzzle` (`10030001 300522`: the Fire Pot's bullet with the Spark Aromatic's ~0.4 m burst of sparks instead of its 1-3 m fireball) cut after `muzzle_life` s, carrier 10302005 (docs/HOST.md "Projectile meshes and muzzle flashes") |
 | `[Puppet] motion`, `catch_up`, `unstick`, `unstick_seconds` | kinematic, 0.6, true, 0.5 | docs/HOST.md "Motion" |
 | `[Stealth] box_hide`, `speffect`, `still_speed`, `slow_speed`, `slow_grace`, `reveal_distance` | true, 20004999, 0.4, 1.8, 1.5, 2 | the cardboard box (docs/HOST.md) |
 | `[Stealth] poster`, `poster_range`, `poster_stare`, `poster_cooldown` | true, 15, 4, 12 | enemies stop and stare at a poster box |
@@ -517,6 +517,15 @@ he went down; held + LB: `interrogation` (the corner's line); a second grab 2 s 
 (`CQC kind 0`, wanted 27) dealt 25-44, and twice a held or guarding soldier lost another ~25 HP within 0.3-1.7 s after a punch
 landed, with no hit of ours logged (82 -> 57, 29 -> 4); the console's `combat strike` on a free soldier took one step (219 -> 175)
 and nothing after. Not chased further: README Known issues. On by default since; bosses were not tried (never fight one for a test).
+
+**The second ~25 HP, chased (0.6.0, 2026-10-31 evening, both games).** The guest sends one `kGEvMelee` per MGSV strike (MGSV agent:
+tap, 3.5 s hold, hold + LB, two quick presses, a combo -- never a duplicate; a unit test pins it). The host's hit bullet (Bullet
+10170000: life 0.85 s, `isPenetrateChr` 0, not `isEndlessHit`, `dmgHitRecordLifeTime` 0 -- one hit, then gone) can't hit twice.
+Live, each soldier's HP read at ~14 Hz for 2-4 s after every hit: the console's `combat strike` on a Stormveil soldier, three free
+(317 -> 274 -> 234 -> 194, `wanted -40` each, nothing after) and two held in place with the hold's own bits (ChrIns+0x538 |= 0x30, as
+`Cqc` sets them: 194 -> 154 -> 114, nothing after); the real MGSV's punches on a Gatefront Godrick soldier (219 -> 192 -> 165, `wanted
+-27`: ER 5 + 22 topped up, then ER 26 + 1, nothing after). Not reproduced; the extra drop of pass B (guarding or held soldiers only)
+stays unexplained, and nothing of ours was seen to cause it.
 
 | Player (MGSV's controls) | Guest (`mgsv/Cqc.cpp`, `CqcLogic.h`) | Host (`er/Cqc.cpp`, `CqcLogic.h`) |
 |---|---|---|

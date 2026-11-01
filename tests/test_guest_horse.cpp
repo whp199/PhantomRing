@@ -2,8 +2,10 @@
 // object near its skin, confirming and losing it, the setter's arguments for a jump, the treadmill's choice, and a ridden gallop
 // through the treadmill with the frame glue copied in (the odometer -- what Elden Ring sees -- stays continuous, the tracker
 // confirmed, the horse on the ground under Snake), under the assumption that the saddle carries him, and the fallback when it doesn't.
+// Also D-Walker's lead alongside a moving Snake (mgsv/WalkerLogic.h, GUEST.md 18.3 "Led alongside"): the same location objects.
 #include "HorseLogic.h"
 #include "Logic.h"
+#include "WalkerLogic.h"
 
 #include <algorithm>
 #include <cmath>
@@ -368,8 +370,123 @@ static void TestRiddenGallop()
 	CHECK(std::fabs(b.ridden - want) < want * 0.01);  // Snake never jumped: the odometer is his ride
 }
 
+
+// D-Walker led alongside a running Snake (mgsv/WalkerLogic.h): a minute of runs, turns, walks and stops at 60 fps with the treadmill
+// moving both every time he passes its radius, the walker's own AI taking a step of its own each frame (toward an order ahead of
+// him, as Follow.cpp's), and Elden Ring's view of it -- the odometer plus where the walker stands relative to Snake.
+static void TestWalkerLead()
+{
+	namespace wp = walker::plan;
+	const wp::LeadSettings s;
+	const float            dt = 1.0f / 60.0f;
+	// Not allowed / no motion / too far: nothing placed.
+	{
+		wp::Lead       lead;
+		wp::LeadInput  in;
+		in.allowed = true, in.dt = dt, in.nowMs = 1000, in.snake = { 0, 0, 0 }, in.velocity = { 0, 0, 5.0f }, in.viewYaw = 0.0f;
+		in.walker = { 2.8f, 0, 0 };  // BesideOf: facing +z, -x is his right, so side -2.8 (left) is +x
+		CHECK(Near(wp::LeadSpot(in, s), { 2.8f, 0, 0 }));
+		in.allowed = false;
+		CHECK(!lead.Update(in, s).place && !lead.Active());
+		in.allowed = true, in.velocity = { 0, 0, 1.0f };
+		CHECK(!lead.Update(in, s).place);  // walking slowly: MGSV's own
+		in.velocity = { 0, 0, 5.0f }, in.walker = { 10.0f, 0, 0 };
+		CHECK(!lead.Update(in, s).place);  // 7.2 m from its spot: MGSV brings it (acquire 6 m)
+		in.walker = { 2.8f, 0, 0 }, in.dt = 0.0f;
+		CHECK(!lead.Update(in, s).place);  // no frame time
+		in.dt = dt;
+		auto o = lead.Update(in, s);
+		CHECK(o.place && o.started && lead.Active());
+		CHECK(std::fabs(o.to.z - 5.0f * dt) < 0.02f && std::fabs(o.to.x - 2.8f) < 0.01f);  // carried along with him, on its spot
+		// Someone else moved it 4 m (a whistle's placement, a Lua warp): lost, MGSV's again.
+		in.walker = { 2.8f, 0, 4.0f };
+		o = lead.Update(in, s);
+		CHECK(!o.place && o.lost && o.stopped && !lead.Active());
+		// Allowed no more (the player chose Search Mode, Snake mounted it): stopped.
+		in.walker = { 2.8f, 0, 0 };
+		CHECK(lead.Update(in, s).started);
+		in.allowed = false;
+		o = lead.Update(in, s);
+		CHECK(!o.place && o.stopped && !o.lost);
+	}
+	// The minute. Snake: 12 s run, 3 s stop, 8 s walk (2 m/s: MGSV's), 3 s stop, 10 s run with two 90 degree turns, 4 s stop, 8 s run.
+	struct Leg
+	{
+		float secs, speed, turnDeg;
+	};
+	const Leg plan[] = { { 12, 5.5f, 0 }, { 3, 0, 0 }, { 8, 2.0f, 0 }, { 3, 0, 0 }, { 4, 5.5f, 0 }, { 3, 5.5f, 90 }, { 3, 5.5f, -90 }, { 4, 0, 0 },
+		{ 8, 5.5f, 0 }, { 3, 0, 0 } };
+	wp::Lead      lead;
+	const Vec3    centre{ 0, 0, 0 };
+	const float   radius = 6.0f;
+	Vec3          snake = centre, walker{ 2.8f, 0, -0.5f }, vel{ 0, 0, 0 };
+	Vec3          odo{ 0, 0, 0 };  // Elden Ring's puppet
+	float         yaw = 0.0f, walkerYaw = 0.0f, worstStep = 0.0f, worstSeen = 0.0f;
+	std::uint64_t now = 1000;
+	std::vector<float> running, standing;
+	int           frames = 0, placed = 0, jumps = 0, lost = 0, leads = 0;
+	Vec3          seenLast = odo + (walker - snake);
+	for (const auto& leg : plan) {
+		const int n = static_cast<int>(leg.secs * 60.0f);
+		for (int i = 0; i < n; ++i, ++frames, now += 16) {
+			yaw += (leg.turnDeg * 3.14159265f / 180.0f) / (leg.secs * 60.0f);
+			const Vec3 want{ std::sin(yaw) * leg.speed, 0, std::cos(yaw) * leg.speed };
+			vel = vel + (want - vel) * 0.2f;  // the odometer's smoothing (VelocitySmoothing 0.2)
+			snake = snake + vel * dt;
+			odo = odo + vel * dt;
+			// MGSV's walker AI: a step toward its order ~4 m ahead of Snake on the lead's lane, stopping within 3 m of him (live).
+			const Vec3 order = logic::BesideOf(snake + vel * 0.8f, yaw, 0.0f, s.side);
+			const Vec3 toOrder = order - walker;
+			if ((walker - snake).LengthXZ() > 3.0f && toOrder.LengthXZ() > 0.5f) {
+				walker = walker + toOrder * (6.5f * dt / toOrder.LengthXZ());
+			}
+			// Camera ~5 m behind him (the view's yaw = his heading).
+			wp::LeadInput in;
+			in.allowed = true, in.dt = dt, in.nowMs = now, in.snake = snake, in.velocity = vel, in.viewYaw = yaw, in.walker = walker, in.walkerYaw = walkerYaw;
+			const auto o = lead.Update(in, s);
+			leads += o.started;
+			lost += o.lost;
+			if (o.place) {
+				worstStep = std::max(worstStep, (o.to - walker).LengthXZ());
+				walker = { o.to.x, walker.y, o.to.z };
+				walkerYaw = o.yaw;
+				++placed;
+			}
+			// The treadmill: past the radius, Snake and the walker back by the same shift (the walker's own object, same frame).
+			if ((snake - centre).LengthXZ() > radius) {
+				const Vec3 shift = centre - snake;
+				snake = snake + shift;
+				walker = walker + shift;
+				lead.Shift(shift);
+				++jumps;
+			}
+			const float d = (walker - snake).LengthXZ();
+			(vel.LengthXZ() > 3.0f ? running : standing).push_back(d);
+			// What Elden Ring draws: the puppet (odometer) + the walker relative to Snake -- never a jump.
+			const Vec3 seen = odo + (walker - snake);
+			worstSeen = std::max(worstSeen, (seen - seenLast).LengthXZ());
+			seenLast = seen;
+		}
+	}
+	std::sort(running.begin(), running.end());
+	const float median = running[running.size() / 2], p90 = running[running.size() * 9 / 10];
+	std::printf("walker lead: %d frames, %d placed, %d leads, %d lost, %d treadmill jumps; running: median %.2f m, p90 %.2f m, max %.2f m; "
+	            "largest step %.3f m, largest jump as Elden Ring sees it %.3f m\n",
+		frames, placed, leads, lost, jumps, median, p90, running.back(), worstStep, worstSeen);
+	CHECK(jumps >= 20);                       // the treadmill ran
+	CHECK(lost == 0);                         // its own jumps never count as someone else's
+	CHECK(median < 3.5f && p90 < 3.5f);       // beside him while he runs
+	CHECK(running.back() < 4.5f);             // even through the turns
+	CHECK(worstStep <= s.maxSpeed * dt + 1e-3f);
+	CHECK(worstSeen < 0.5f);                  // no frame shows it jump
+	CHECK(leads >= 4 && leads <= 6);          // one per run (and the walk, faster than 1.5 m/s), none re-started mid-run
+	CHECK(!lead.Active());                    // let go once he stood
+	CHECK((walker - snake).LengthXZ() < 3.5f);
+}
+
 int main()
 {
+	TestWalkerLead();
 	TestPick();
 	TestTracker();
 	TestShifted();

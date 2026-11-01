@@ -42,11 +42,17 @@ namespace phantom::guest::climb
 
 	// Any thread: a move is under way (Snake may be away from the sandbox). Also state::Staged().
 	[[nodiscard]] bool Active();
+	// Frame.cpp's odometer: still while a move plays and after it until the player's stick or the settle's 300 ms (plan::OdoThaw);
+	// state::Staged() (no treadmill, jump or dive, MGSV's HUD frozen) lasts the full 300 ms.
+	[[nodiscard]] bool OdometerStill();
 	// Game thread, while a move plays: the camera to publish -- the one Snake had when it began, at the same place relative to his
 	// root (MGSV's own swings round the ladder or the wall), so a host that follows MGSV's camera keeps its view. False otherwise.
 	bool PublishedCamera(const logic::Vec3& a_root, float a_pos[3], float a_quat[4]);
 	// Where Snake stood on the sandbox when the move began (the buddy is published relative to it meanwhile).
 	logic::Vec3 Home();
+	// Any thread (Capture.cpp): a move is under way, or ended a few seconds ago, and a_root (MGSV world) is far from that home --
+	// Snake is still at the staging site (the way home failed): what stands near him there is not his.
+	[[nodiscard]] bool AwayFromHome(const float a_root[3]);
 
 	// `!climb up|down [speed] | off`, `!mantle <cm> [vault] [secs]` (queued for the game thread, as the host events are); `!climb` /
 	// `!mantle` alone: the state.

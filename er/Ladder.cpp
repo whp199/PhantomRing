@@ -137,7 +137,12 @@ namespace phantom::er
 			motion = motionSent_;  // a moment's idle between two pushes: still climbing as far as MGSV's climb goes
 		}
 		const bool  warm = movingSince_ && a_nowMs - movingSince_ >= kWarmupMs;
-		const float speed = motion == 0 ? 0.0f : warm && speed_ > 0.05f ? speed_ : (moveSent_ > 0.0f ? moveSent_ : std::max(a_defaultSpeed, 0.0f));
+		// 0 = still on the rungs; a moving climb with nothing measured or sent yet and no default is "unknown" (-1), never 0.
+		const float speed = motion == 0                ? 0.0f
+		                    : warm && speed_ > 0.05f   ? speed_
+		                    : moveSent_ > 0.0f         ? moveSent_
+		                    : a_defaultSpeed > 0.0f    ? a_defaultSpeed
+		                                               : -1.0f;
 		auto        fill = [&] {
 			out.send = true;
 			out.on = true;

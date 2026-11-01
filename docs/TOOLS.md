@@ -30,7 +30,7 @@ pr launch [--mgsv-only|--er-only] [-W 1280 -H 720] [--wait] [--proton-debug WINE
                                # presented ~1 frame/s on the desktop): Elden Ring in its own headless gamescope too;
                                # screenshots with GAMESCOPE_WAYLAND_DISPLAY=gamescope-N gamescopectl screenshot F.png
 pr er-continue                 # through Elden Ring's title: pad A and keyboard Enter every 4 s until it loads
-                               # (with no controller plugged in, first `pr er "input virtualpad on"`: docs/HOST.md)
+                               # (first `pr er "input virtualpad on"`: the test virtual pad, below)
 pr stop [--er|--mgsv] [--kill] # SIGTERM what pr launch started (games first), --kill SIGKILLs the rest after --timeout;
                                # both games, whichever recent launch started each (after `launch --mgsv-only` next to a
                                # running Elden Ring it used to stop MGSV only); --er / --mgsv: only that game. A recorded
@@ -57,6 +57,29 @@ pr record --out F.prrec --seconds N [--pad 'ly=32767']        # host stand-in ne
                                                               # .prrec files contain MGSV's assets (Konami): never commit or share them
 pr replay F.prrec [--loop]                                    # guest stand-in: replays a recording to a host (docs/GUEST.md 18.1)
 ```
+
+### The test virtual pad (`pr er "input virtualpad on"`)
+
+Scripted runs drive Elden Ring and MGSV with `pr er "press <buttons> <ms> [lx ly [rx ry]]"` through the host's own XInput pad:
+
+- `input virtualpad on` (= `exclusive`, since 0.6.0): user 0 is a connected neutral pad and **every real controller is ignored**
+  -- its sticks, triggers and buttons reach neither Elden Ring nor MGSV (XInput users 0-3; a game controller Elden Ring might read
+  through DirectInput is made neutral too), and MGSV's rumble no longer shakes it. Unit-tested (`TestVirtualPad`); live 2026-10-31
+  the DualSense had been unplugged just before the run, so the hiding of a real pad itself is UNVERIFIED live (none was there;
+  nor in the integration run of 2026-11-01: `real pad polls hidden 0` throughout). Found 2026-10-31: the player's DualSense, plugged in
+  with its left stick resting pushed, walked Snake around, opened Elden Ring's menus and talked to Renna in the middle of a scripted
+  run, because a `press` only adds its buttons (and a non-zero stick) to the real pad. `pr er status` ends with `virtual pad
+  exclusive (real pad polls hidden N)`; `input kbm` counts DirectInput game-controller reads.
+- `input virtualpad shared`: the old `on` -- the virtual pad only while no real one answers on user 0 (what `[Keyboard]
+  virtual_pad` turns on for a player with no controller: players are never affected by `exclusive`).
+- `input virtualpad off` at the end of every run. A real pad works again at once.
+- With no controller connected Elden Ring polls no pad at all; turning the virtual pad on now tells it a HID device arrived
+  (docs/HOST.md, `input virtualpad`), and it polls the virtual pad every frame from then on.
+- The keyboard still works meanwhile (`input key|keydown|keyup <vk>`; arrows and the other extended keys are sent as such since
+  0.6.0 -- before, the down arrow reached Elden Ring as Numpad 2 and its menus never moved).
+
+Other test commands of the host console (docs/HOST.md "Dev console"): `die [snake|er]` (a test death), `ladder early on|off`
+(the climb's end told to MGSV at Elden Ring's EndTop/EndBottom, or after the settle as before 0.6.0), `mantle set <key> <m>`.
 
 Exit codes: 0 ok, 1 error (Lua or command error, launch refused), 2 usage / no mapping,
 3 the side you asked is absent, 4 console timeout.
@@ -163,6 +186,8 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 - `!grab <grab|hold|throw|choke|interrogate|release>`: a v13 kGEvCqc from Snake's feet and facing (CQC holds and throws, COMBAT §7a).
 - Each frame, publishes a draw list with Snake (`kOwnerPlayer`) and D-Walker (`kOwnerBuddy`) on the triple buffer, plus a 64×8 life-bar HUD.
 - Sends one triangle mesh and a 4×4 texture per owner on the render ring.
+- `!climbhome <ms>`: after `kHEvClimb a = 0` Snake stays on MGSV's ladder that long (`kGuestClimbing`, no walking) before he is home,
+  as the real guest takes him back from its airport ladder (0.18-0.23 s live); default 0 (home at once).
 - `!binoculars on|off` (v13) sets `kGuestBinoculars` + `kGuestFirstPerson`: the real Elden Ring host then marks the characters
   near its camera's centre (docs/HOST.md "Marking"; `pr er 'mark binoculars on'` does the same without any guest flag).
 - Answers `pr lua` (and `!status`) through a tiny Lua subset: `return <exprs>` and `vars.x = <expr>`, with `vars.*`, `BuddyType.*`, `math.*`, `tostring`, `..`, `~=`, and/or/not.

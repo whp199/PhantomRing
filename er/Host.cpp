@@ -28,7 +28,9 @@
 #include "PacingProbe.h"
 #include "Progression.h"
 #include "Puppet.h"
+#include "QuickItem.h"
 #include "Renderer.h"
+#include "Revival.h"
 #include "Tasks.h"
 #include "WorldShift.h"
 
@@ -114,7 +116,12 @@ namespace phantom::er::Host
 		ClimbPace      g_climbPace;
 		bool           g_climbVisual{ false };     // this frame: Snake is drawn on the ladder, the Tarnished hidden
 		bool           g_guestClimbSeen{ false };  // kGuestClimbing since this climb's kHEvClimb a = 1
+		bool           g_guestClimbWasOff{ false };  // ... and it was down at some point since the hand-over started (the last climb's
+		                                             // flag, still up while MGSV takes Snake home, is not this climb's)
 		std::uint64_t  g_climbSentAt{ 0 };         // when this climb's first kHEvClimb went out
+		bool           g_climbEndedEarly{ false };  // kHEvClimb a = 0 went out at Elden Ring's EndTop / EndBottom -> none (the settle runs)
+		bool           g_stickLatchedAtEnd{ false };  // the left stick's latch was taken at EndTop / EndBottom (not again at the end)
+		std::uint64_t  g_climbEndedEarlyMs{ 0 };
 		bool           g_guestClimbLate{ false };  // ...and kGuestClimbing never came within ladder_guest_wait_ms (logged once a climb)
 		std::uint64_t  g_guestClimbs{ 0 };         // climbs MGSV played (kGuestClimbing seen)
 		std::uint64_t  g_snakeClimbs{ 0 };         // climbs Snake was drawn on
@@ -218,7 +225,12 @@ namespace phantom::er::Host
 				// Snake takes over on foot: on Torrent or a ladder the puppet would start under a rider or a climber (Elden
 				// Ring's own state for the Tarnished, never Snake's).
 				const auto on = g_tarnished ? game::PlayerMounted(a_f.player) : game::Mounted::kNone;
-				if (on == game::Mounted::kTorrent || on == game::Mounted::kLadder) {
+				if (ChordRefusedWhileDying(Puppet::Dying())) {
+					// er/Revival.h: on in a death's first frames it stopped the puppet with the Tarnished on screen; off, Snake would
+					// take over a dead Tarnished. After the respawn it works again.
+					Log::Info("input: View+Start during a death -- ignored (Tarnished mode {}; the chord works again after the respawn)",
+						g_tarnished ? "stays on" : "stays off");
+				} else if (on == game::Mounted::kTorrent || on == game::Mounted::kLadder) {
 					const char* what = on == game::Mounted::kTorrent ? "Torrent" : "the ladder";
 					Hud::Notify(std::format("Tarnished mode: get off {} first, then View+Start", what), Hud::Tone::kWarn);
 					Log::Info("input: View+Start in Tarnished mode while the Tarnished is on {} -- Snake waits until he is on foot", what);
@@ -297,10 +309,12 @@ namespace phantom::er::Host
 			const bool first = a_out.on && !g_climbSentAt;
 			if (first) {
 				g_climbSentAt = ::GetTickCount64();
+				Hud::HideLayerFor(Cfg().overlay.climbHideMs);  // MGSV's last prompt as it stages Snake at its ladder: not over Elden Ring's frame
 			}
 			if (a_out.on) {
-				Log::Info("ladder: kHEvClimb a=1 b={} ({} at {:.2f} m/s; ER ladder state {} {}){}", a_out.down ? 1 : 0,
-					a_out.motion > 0 ? "up" : a_out.motion < 0 ? "down" : "still on it", a_out.speed, a_state, LadderStateName(a_state),
+				Log::Info("ladder: kHEvClimb a=1 b={} ({} at {}; ER ladder state {} {}){}", a_out.down ? 1 : 0,
+					a_out.motion > 0 ? "up" : a_out.motion < 0 ? "down" : "still on it",
+					a_out.speed >= 0.0f ? std::format("{:.2f} m/s", a_out.speed) : std::string("MGSV's own pace"), a_state, LadderStateName(a_state),
 					first ? " -- MGSV plays Snake's climb" : "");
 			} else {
 				Log::Info("ladder: kHEvClimb a=0 (the climb is over; {} events)", g_climbPace.Sent());
@@ -423,9 +437,17 @@ namespace phantom::er::Host
 				Puppet::SetClimbVisual(false);
 				return;
 			}
+			const int prevState = g_ladderState;
 			if (*state != g_ladderState) {
 				Log::Info("ER ladder state {} -> {} ({})", g_ladderState, *state, LadderStateName(*state));
 				g_ladderState = *state;
+				// The stick that climbed must not run Snake on (off the landing, down the shaft): it is latched as Elden Ring's climb
+				// ends (EndTop / EndBottom) if it is still pushed then, until let go. Latched only at the hand-over's end (0.6.0), a
+				// stick let go at the top and pushed again during the settle was taken for the climbing one and did nothing.
+				if (Cfg().ladderEndEarly && g_ladder.Holding() && (*state == 6 || *state == 7) && !g_stickLatchedAtEnd) {
+					g_stickLatchedAtEnd = true;
+					InputBridge::HoldLeftStickUntilReleased();
+				}
 			}
 			if (Cfg().ladderPrompts.empty()) {
 				return;
@@ -446,11 +468,13 @@ namespace phantom::er::Host
 			}
 			switch (event) {
 			case LadderHandOver::Event::kStarted: {
+				g_stickLatchedAtEnd = false;
 				g_ladderHpFrac = HpFrac(a_f);
 				g_ladderSince = in.nowMs;
 				g_ladderFrom = game::Position(a_f.player);
 				g_climbPace.Reset();
 				g_guestClimbSeen = g_guestClimbLate = false;
+				g_guestClimbWasOff = !(a_f.guestReady && (a_f.guest.flags & proto::kGuestClimbing));
 				g_climbSentAt = 0;
 				if (press && g_ladderPrompt == Cfg().ladderDescendPrompt) {
 					AlignForDescent(a_f);  // before the puppet lets go of him: Elden Ring's own place for the descent
@@ -474,23 +498,32 @@ namespace phantom::er::Host
 				// In Tarnished mode (the chord on the ladder) its own toggle carries the HP over, counted from the ladder.
 				const std::string carried = g_tarnished ? std::string("Tarnished mode carries it") : CarryHp(a_f, g_ladderHpFrac);
 				Puppet::SetHold(Puppet::Hold::kLadder, false);
-				InputBridge::HoldLeftStickUntilReleased();  // the stick that climbed must not run Snake on (off the landing, down the shaft)
-				Log::Info("ladder: the Tarnished is off it after {:.1f} s, {:+.1f} m up, {:.1f} m away -> {}; {}; {} (climb #{})",
+				if (!g_stickLatchedAtEnd) {
+					InputBridge::HoldLeftStickUntilReleased();  // the stick that climbed must not run Snake on (off the landing, down the shaft)
+				}
+				g_stickLatchedAtEnd = false;
+				Log::Info("ladder: the Tarnished is off it after {:.1f} s, {:+.1f} m up, {:.1f} m away -> {}; {}; {}{} (climb #{})",
 					static_cast<double>(in.nowMs - g_ladderSince) / 1000.0, at.y - g_ladderFrom.y, LengthXZ(at - g_ladderFrom),
 					g_tarnished ? "Tarnished mode keeps him" : "Snake takes over where he stands", carried,
 					g_climbVisual ? std::format("Snake was drawn on it (MGSV {} the climb)", g_guestClimbSeen ? "played" : "never played")
 					              : std::string("the Tarnished showed"),
+					g_climbEndedEarly ? std::format("; MGSV told {} ms ago, {}", in.nowMs - g_climbEndedEarlyMs,
+											(a_f.guestReady && (a_f.guest.flags & proto::kGuestClimbing)) ? "Snake not home yet" : "Snake home")
+					                  : std::string(),
 					g_ladderClimbs);
+				g_climbEndedEarly = false;
 				SendClimb(a_f, g_climbPace.End(), -1);
 				break;
 			}
 			case LadderHandOver::Event::kNoClimb:
+				g_stickLatchedAtEnd = false;
 				++g_ladderNoClimbs;
 				Puppet::SetHold(Puppet::Hold::kLadder, false);
 				SendClimb(a_f, g_climbPace.End(), -1);
 				Log::Info("ladder: no climb {} ms after the press (Elden Ring refused it) -> Snake plays on", in.waitMs);
 				break;
 			case LadderHandOver::Event::kAborted:
+				g_stickLatchedAtEnd = false;
 				Puppet::SetHold(Puppet::Hold::kLadder, false);
 				SendClimb(a_f, g_climbPace.End(), -1);
 				Log::Info("ladder: {} on the way -> the hand-over ends", a_f.dead || a_f.dying ? "a death" : "a load");
@@ -498,12 +531,30 @@ namespace phantom::er::Host
 			case LadderHandOver::Event::kNone:
 				break;
 			}
+			// Elden Ring's climb is over for good (none right after EndTop / EndBottom, not a frame of none between two of its states):
+			// MGSV is told now, not after the settle, so that it takes Snake home from its own ladder (0.18-0.23 s live) while the
+			// settle runs -- the puppet then starts with Snake home and the stick moves him at once. Before (0.6.0), kHEvClimb a = 0
+			// went out with the puppet's start and the stick did nothing for 0.2-0.5 s while MGSV still had him on its ladder.
+			if (Cfg().ladderEndEarly && g_ladder.Current() == LadderHandOver::State::kSettling && LadderEndedForGood(prevState, *state) && !g_climbEndedEarly &&
+				g_climbPace.Started()) {
+				g_climbEndedEarly = true;
+				g_climbEndedEarlyMs = in.nowMs;
+				Log::Info("ladder: Elden Ring's climb is over ({} -> none) -> kHEvClimb a=0 now: MGSV takes Snake home during the {} ms settle",
+					LadderStateName(prevState), Cfg().ladderSettleMs);
+				SendClimb(a_f, g_climbPace.End(), -1);
+			}
+			if (g_ladder.Current() != LadderHandOver::State::kSettling) {
+				g_climbEndedEarly = false;  // back on it (or off it): the pace runs again
+			}
 			// On the ladder: the climb's pace for MGSV (kHEvClimb), and whether Snake is drawn on it.
-			if (g_ladder.Current() == LadderHandOver::State::kClimbing || g_ladder.Current() == LadderHandOver::State::kSettling) {
+			if ((g_ladder.Current() == LadderHandOver::State::kClimbing || g_ladder.Current() == LadderHandOver::State::kSettling) && !g_climbEndedEarly) {
 				SendClimb(a_f, g_climbPace.Update(in.nowMs, *state, game::Position(a_f.player).y, Cfg().ladderClimbSpeed), *state);
 			}
 			const bool guestClimbing = a_f.guestReady && (a_f.guest.flags & proto::kGuestClimbing);
-			if (g_ladder.Holding() && guestClimbing && !g_guestClimbSeen) {
+			g_guestClimbWasOff = g_guestClimbWasOff || !guestClimbing;
+			// MGSV plays *this* climb: its flag rose after the hand-over began (a = 1 right after the last climb's a = 0 came while MGSV
+			// still took Snake home with the flag up -- that was the last climb's, review 2026-10-31).
+			if (g_ladder.Holding() && guestClimbing && g_guestClimbWasOff && !g_guestClimbSeen) {
 				g_guestClimbSeen = true;
 				++g_guestClimbs;
 				Log::Info("ladder: MGSV plays Snake's climb (kGuestClimbing) {} ms after kHEvClimb", g_climbSentAt ? in.nowMs - g_climbSentAt : 0);
@@ -760,7 +811,10 @@ namespace phantom::er::Host
 			static std::uint32_t cancels{ 0 }, closes{ 0 };
 			if (const auto h = InputBridge::ViewHoldsToGuest(); h != holds) {
 				holds = h;
-				Log::Info("input: View held {} ms -> MGSV Start held {} ms (its iDroid; {} so far)", Cfg().viewHoldMs, Cfg().guestIdroidStartMs, h);
+				Log::Info("input: View held {} ms+ ({}) -> MGSV Start held {} ms (its iDroid; {} so far)", Cfg().viewHoldMs,
+					(InputBridge::LastButtons() & 0x0020 /* View */) ? std::format("still held after {} ms", std::max(Cfg().viewHoldMs, Cfg().idroidOpenMs))
+					                                                   : std::string("let go"),
+					Cfg().guestIdroidStartMs, h);
 			}
 			if (const auto c = InputBridge::IdroidCancels(); c != cancels) {
 				cancels = c;
@@ -822,6 +876,7 @@ namespace phantom::er::Host
 			UpdateTarnished(f);
 			Puppet::Decide(f);
 			Progression::Tick(f);
+			QuickItem::Tick(f);  // View + X: the hidden Tarnished's quick item (a flask) while Snake plays
 
 			// While puppeting ER only gets the allow-list; MGSV gets the pad unless an ER menu (or a load,
 			// or death) owns it. Not puppeting: ER plays as usual and MGSV stands still.
@@ -962,6 +1017,7 @@ namespace phantom::er::Host
 		// up, 8.7 m away" for a climb of +18.9 m.
 		g_ladderFrom += a_delta;
 		g_climbFrom.pe += a_delta;
+		g_climbPace.Shift(a_delta.y);  // its measured speed: one frame of a 32 m step (eased, but enough to change the pace sent)
 	}
 
 	std::string LadderLine()
@@ -996,7 +1052,7 @@ namespace phantom::er::Host
 			"{}{}; kHEvClimb {}, pace {:.2f} m/s)\n"
 			"guest: alive {} ready {} status {} \"{}\" hb {:.0f} ms attaches {} flags {:#x} life {}/{} buddy {}\n"
 			"{}\n{}\n{}\n{}\n"
-			"camera driving {} maxDist {:.2f} | input pad {} calls {} | events {} | tasks FB {} PP {} CAM {} POST {}",
+			"camera driving {} maxDist {:.2f} | input pad {} calls {} virtual pad {}{} | events {} | tasks FB {} PP {} CAM {} POST {}",
 			f.index, f.dt, static_cast<void*>(f.player.chr), f.inGame, f.dead, f.dying, f.menuOpen, f.modalMenu, f.cutscene, f.prompt, f.interacting,
 			g_tarnished ? "ON" : "off", g_tarnishedToggles, g_chordsSeen, InputBridge::ChordHolding() ? ", chord buttons held" : "",
 			MountedName(game::PlayerMounted(f.player)), g_rests, Name(g_ladder.Current()), g_ladderState, LadderStateName(g_ladderState), g_ladderClimbs,
@@ -1004,7 +1060,9 @@ namespace phantom::er::Host
 			f.guestReady,
 			static_cast<int>(link.GuestStatus()), link.GuestStatusText(), link.GuestHeartbeatAgeMs(), link.AttachCount(), f.guest.flags, f.guest.life,
 			f.guest.lifeMax, Buddy::TypeName(f.guest.buddyType), Puppet::Describe(), MenuWatch::Describe(), Calibration::Describe(), Buddy::Describe(),
-			CameraDriver::Driving(), CameraDriver::MaxDistance(), InputBridge::PadIndex(), InputBridge::Calls(), Events::Count(),
+			CameraDriver::Driving(), CameraDriver::MaxDistance(), InputBridge::PadIndex(), InputBridge::Calls(),
+			InputBridge::VirtualPadExclusive() ? "exclusive" : InputBridge::VirtualPadOn() ? "shared" : "off",
+			InputBridge::VirtualPadExclusive() ? std::format(" (real pad polls hidden {})", InputBridge::RealPadPollsHidden()) : std::string(), Events::Count(),
 			TaskRuns(TaskGroup::kFrameBegin), TaskRuns(TaskGroup::kChrInsPrePhysics), TaskRuns(static_cast<TaskGroup>(Cfg().cameraTaskGroup)),
 			TaskRuns(TaskGroup::kWorldChrManPostPhysics));
 	}

@@ -32,7 +32,10 @@ namespace phantom::er::Gbuffer
 		constexpr UINT kDsvWrite = 0, kDsvRead = 1;
 		// Peek readback: up to 16x16 texels of each of 5 MRTs, the depth and stencil planes and velocity.
 		constexpr int           kPeekMax = 16;
-		constexpr int           kPeekSlots = kTargets + 3;  // + depth, stencil, velocity
+		// + depth, stencil, velocity; + depth and stencil right after Snake's own draw (the injection, before Elden Ring's G-buffer
+		// draws): a texel of Snake's whose final depth is farther than his was drawn over by something behind him (roadmap 5.1).
+		constexpr int           kPeekSlots = kTargets + 5;
+		constexpr int           kPeekSnakeDepth = kTargets + 3, kPeekSnakeStencil = kTargets + 4;
 		constexpr std::uint64_t kPeekSlotBytes = 256ull * kPeekMax;
 
 		std::mutex                   g_lock;
@@ -49,6 +52,7 @@ namespace phantom::er::Gbuffer
 
 		// stats
 		std::atomic<std::uint64_t> g_frames{ 0 }, g_velFrames{ 0 }, g_draws{ 0 }, g_velDraws{ 0 }, g_missing{ 0 }, g_bad{ 0 }, g_skippedTranslucent{ 0 };
+		std::atomic<std::uint64_t> g_emissiveFrames{ 0 };  // [Render] min_ambient: frames Snake's RT4 pass ran
 		std::string                g_lastWhy;
 		bool                       g_frameUsesEr{ false };  // this frame's G-buffer pass projected with Elden Ring's view constants
 		std::uint64_t              g_erFrames{ 0 }, g_ownFrames{ 0 };
@@ -121,14 +125,17 @@ namespace phantom::er::Gbuffer
 		{
 			kGbuffer,
 			kVelocity,
+			kEmissive,  // [Render] min_ambient: RT4 alone, where Snake is still in front after Elden Ring's G-buffer draws
 		};
+
+		const char* KindName(Kind a_kind) { return a_kind == Kind::kGbuffer ? "G-buffer" : a_kind == Kind::kVelocity ? "velocity" : "minimum light (RT4)"; }
 
 		ID3D12PipelineState* Pso(const RenderAssets::Mesh& a_mesh, std::uint32_t a_drawFlags, bool a_mirrored, Kind a_kind)
 		{
 			const auto    cull = render::CullMode(a_drawFlags);
 			const bool    ccw = render::FrontCcw(a_mirrored, a_mesh.winding);
 			std::uint64_t key = a_mesh.layoutHash;
-			key ^= (std::uint64_t(cull) << 1 | std::uint64_t(ccw) << 3 | std::uint64_t(a_kind == Kind::kVelocity) << 4) * 0x9E3779B97F4A7C15ull;
+			key ^= (std::uint64_t(cull) << 1 | std::uint64_t(ccw) << 3 | std::uint64_t(a_kind) << 4) * 0x9E3779B97F4A7C15ull;
 			for (UINT i = 0; i < kRtvSlots; ++i) {
 				key ^= std::uint64_t(g_rtvFmt[i]) << (8 + i * 8);
 			}
@@ -139,7 +146,7 @@ namespace phantom::er::Gbuffer
 				return nullptr;
 			}
 			auto* vs = render::VertexShaderFor(a_mesh);
-			auto  ps = Shaders::PixelShader(a_kind == Kind::kGbuffer ? Shaders::Pixel::kGbuffer : Shaders::Pixel::kVelocity);
+			auto  ps = Shaders::PixelShader(a_kind == Kind::kVelocity ? Shaders::Pixel::kVelocity : Shaders::Pixel::kGbuffer);
 			if (!vs || !ps) {
 				g_badPsos.insert(key);
 				return nullptr;
@@ -170,7 +177,21 @@ namespace phantom::er::Gbuffer
 			pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 			pd.DSVFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
 			pd.SampleDesc.Count = 1;
-			if (a_kind == Kind::kGbuffer) {
+			if (a_kind == Kind::kEmissive) {
+				// The G-buffer's targets, RT4 alone written (Elden Ring's emissive materials fill it, its lighting adds it unlit), the
+				// depth read-only and tested as the velocity pass does: only where Snake is still the nearest surface after Elden
+				// Ring's own G-buffer draws. Written at the injection instead, it stayed under whatever Elden Ring drew in front of him
+				// (its pipelines leave RT4 alone) and glowed through the rock he stood behind (live 2026-10-31).
+				pd.NumRenderTargets = kTargets;
+				for (int i = 0; i < kTargets; ++i) {
+					pd.RTVFormats[i] = g_rtvFmt[i];
+					pd.BlendState.RenderTarget[i].RenderTargetWriteMask = i == kTargets - 1 ? D3D12_COLOR_WRITE_ENABLE_ALL : 0;
+					pd.BlendState.RenderTarget[i].LogicOp = D3D12_LOGIC_OP_NOOP;
+				}
+				pd.BlendState.IndependentBlendEnable = TRUE;
+				pd.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+				pd.RasterizerState.DepthBias = 2;
+			} else if (a_kind == Kind::kGbuffer) {
 				pd.NumRenderTargets = kTargets;
 				for (int i = 0; i < kTargets; ++i) {
 					pd.RTVFormats[i] = g_rtvFmt[i];
@@ -200,11 +221,11 @@ namespace phantom::er::Gbuffer
 			ComPtr<ID3D12PipelineState> pso;
 			const HRESULT               hr = g_device->CreateGraphicsPipelineState(&pd, __uuidof(ID3D12PipelineState), reinterpret_cast<void**>(pso.GetAddressOf()));
 			if (FAILED(hr)) {
-				Log::Error("render: stage C {} pipeline for layout {:#018x} failed: {}", a_kind == Kind::kGbuffer ? "G-buffer" : "velocity", a_mesh.layoutHash, d3d::Hr(hr));
+				Log::Error("render: stage C {} pipeline for layout {:#018x} failed: {}", KindName(a_kind), a_mesh.layoutHash, d3d::Hr(hr));
 				g_badPsos.insert(key);
 				return nullptr;
 			}
-			Log::Info("render: stage C {} pipeline {} for layout {:#018x} (cull {}, front {})", a_kind == Kind::kGbuffer ? "G-buffer" : "velocity", g_psos.size() + 1,
+			Log::Info("render: stage C {} pipeline {} for layout {:#018x} (cull {}, front {})", KindName(a_kind), g_psos.size() + 1,
 				a_mesh.layoutHash, static_cast<int>(cull), ccw ? "ccw" : "cw");
 			return (g_psos[key] = pso).Get();
 		}
@@ -370,6 +391,44 @@ namespace phantom::er::Gbuffer
 				for (const auto& [v, k] : hist) {
 					s += std::format(" {}x{}", v, k);
 				}
+			}
+			if (g_peek.have[kPeekSnakeDepth] && g_peek.have[kPeekSnakeStencil] && g_peek.have[5] && g_peek.have[6]) {
+				// Snake's texels (his stencil right after his draw) whose final depth is farther than his: drawn over from behind.
+				const int sb = g_peek.foot[kPeekSnakeStencil].Footprint.Format == DXGI_FORMAT_R8_TYPELESS ||
+				                       g_peek.foot[kPeekSnakeStencil].Footprint.Format == DXGI_FORMAT_R8_UINT ? 1 : 4;
+				const int fb = g_peek.foot[6].Footprint.Format == DXGI_FORMAT_R8_TYPELESS || g_peek.foot[6].Footprint.Format == DXGI_FORMAT_R8_UINT ? 1 : 4;
+				const auto snakeStencil = static_cast<std::uint8_t>(Cfg().render.gbufferStencil & 0xFF);
+				int        snake = 0, over = 0, behind = 0;
+				std::map<int, int> overBy;
+				float      worst = 0.0f;
+				for (int y = 0; y < n; ++y) {
+					for (int x = 0; x < n; ++x) {
+						if (*texel(kPeekSnakeStencil, x, y, sb) != snakeStencil) {
+							continue;
+						}
+						++snake;
+						float before, after;
+						std::memcpy(&before, texel(kPeekSnakeDepth, x, y, 4), 4);
+						std::memcpy(&after, texel(5, x, y, 4), 4);
+						const int st = *texel(6, x, y, fb);
+						if (st != snakeStencil) {
+							++over;
+							++overBy[st];
+						}
+						if (after < before * 0.999f) {  // reversed Z: smaller = farther
+							++behind;
+							worst = std::max(worst, 1.0f - after / before);
+						}
+					}
+				}
+				float d0;
+				std::memcpy(&d0, texel(kPeekSnakeDepth, c, c, 4), 4);
+				s += std::format("\n  right after Snake's draw: depth {:.6g} stencil {:#04x}; {} of {} texels Snake's then, {} of them drawn over later (", d0,
+					*texel(kPeekSnakeStencil, c, c, sb), snake, n * n, over);
+				for (const auto& [v, k] : overBy) {
+					s += std::format(" {:#04x}x{}", v, k);
+				}
+				s += std::format(" ), {} by something FARTHER than Snake (up to {:.1f}% farther)", behind, worst * 100.0f);
 			}
 			if (g_peek.have[7]) {
 				std::uint16_t h[2];
@@ -577,6 +636,7 @@ namespace phantom::er::Gbuffer
 			render::FrameConstants fc{};
 			render::FillFrame(fc, s, depth.width, depth.height, true);
 			fc.misc[3] = g_frameUsesEr ? 1.0f : 0.0f;
+			fc.ambientUp[3] = 0.0f;  // RT4 stays 0 at the injection: [Render] min_ambient is RecordEmissive's, after Elden Ring's G-buffer draws
 			fc.gbuf[0] = static_cast<float>(Cfg().render.gbufferLightSet >= 0 ? std::min(Cfg().render.gbufferLightSet, 255)
 			                                                                   : (g_learnedLightSet >= 0 ? g_learnedLightSet : kDefaultLightSet)) /
 			             255.0f;
@@ -640,6 +700,16 @@ namespace phantom::er::Gbuffer
 				}
 			}
 		}
+		if (!peek && drawing && g_peek.wanted && !g_peek.gbufRecorded && !g_peek.learning && g_readback) {
+			// The peek comes after Elden Ring's G-buffer draws (RecordPeek): the depth and stencil as Snake's draw left them, to
+			// compare with the final ones there.
+			std::vector<D3D12_RESOURCE_BARRIER> in, out;
+			Move(in, out, depth.resource, D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_COPY_SOURCE);
+			list->ResourceBarrier(static_cast<UINT>(in.size()), in.data());
+			CopyPeek(list, kPeekSnakeDepth, depth.resource, 0);
+			CopyPeek(list, kPeekSnakeStencil, depth.resource, 1);
+			list->ResourceBarrier(static_cast<UINT>(out.size()), out.data());
+		}
 		if (peek) {
 			// Everything to COPY_SOURCE (from where our draws left it), copy the box, back.
 			std::vector<D3D12_RESOURCE_BARRIER> in, out;
@@ -669,6 +739,92 @@ namespace phantom::er::Gbuffer
 			}
 		}
 		return true;
+	}
+
+	bool WantsEmissive(const RenderSnapshot* a_snap) { return Cfg().render.minAmbient > 0.0f && a_snap && a_snap->draw && a_snap->camera.valid; }
+
+	bool RecordEmissive(render::Recording& a_rec, const RenderSnapshot* a_snap)
+	{
+		std::scoped_lock    lock(g_lock);
+		RenderDepth::Target gb[kTargets];
+		RenderDepth::Target depth;
+		if (!WantsEmissive(a_snap) || !g_rtvHeap || !RenderDepth::Gbuffer(gb) || !RenderDepth::Current(depth)) {
+			return false;
+		}
+		for (int i = 0; i < kTargets; ++i) {
+			EnsureRtv(i, gb[i]);
+		}
+		EnsureDsv(kDsvRead, depth.resource);
+		D3D12_RESOURCE_STATES stencilState = depth.state;
+		RenderDepth::StencilPlane(stencilState);
+		auto readState = [](D3D12_RESOURCE_STATES a_s) {
+			if (a_s & D3D12_RESOURCE_STATE_DEPTH_WRITE) {
+				return D3D12_RESOURCE_STATE_DEPTH_READ;
+			}
+			return static_cast<D3D12_RESOURCE_STATES>(a_s | D3D12_RESOURCE_STATE_DEPTH_READ);
+		};
+		auto*                               list = a_rec.list;
+		std::vector<D3D12_RESOURCE_BARRIER> pre, post;
+		for (int i = 0; i < kTargets; ++i) {
+			Move(pre, post, gb[i].resource, gb[i].state, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		}
+		Move(pre, post, depth.resource, depth.state, readState(depth.state), 0);
+		Move(pre, post, depth.resource, stencilState, readState(stencilState), 1);
+		if (!pre.empty()) {
+			list->ResourceBarrier(static_cast<UINT>(pre.size()), pre.data());
+		}
+		const auto&            s = *a_snap;
+		render::FrameConstants fc{};
+		render::FillFrame(fc, s, depth.width, depth.height, true);
+		fc.misc[3] = g_frameUsesEr ? 1.0f : 0.0f;
+		std::uint32_t drawn = 0;
+		if (const auto fcVa = a_rec.Upload(&fc, sizeof(fc))) {
+			D3D12_CPU_DESCRIPTOR_HANDLE rtvs[kTargets];
+			for (int i = 0; i < kTargets; ++i) {
+				rtvs[i] = Rtv(i);
+			}
+			const auto dsv = Dsv(kDsvRead);
+			list->OMSetRenderTargets(kTargets, rtvs, FALSE, &dsv);
+			const D3D12_VIEWPORT vp{ 0, 0, static_cast<float>(depth.width), static_cast<float>(depth.height), 0, 1 };
+			const D3D12_RECT     sr{ 0, 0, static_cast<LONG>(depth.width), static_cast<LONG>(depth.height) };
+			list->RSSetViewports(1, &vp);
+			list->RSSetScissorRects(1, &sr);
+			list->SetGraphicsRootSignature(g_root);
+			ID3D12DescriptorHeap* heaps[] = { a_rec.heap };
+			list->SetDescriptorHeaps(1, heaps);
+			list->SetGraphicsRootConstantBufferView(render::kRootFrame, fcVa);
+			list->SetGraphicsRootConstantBufferView(render::kRootErView, g_frameUsesEr ? RenderView::Slot(0) : fcVa);
+			a_rec.device->CopyDescriptorsSimple(1, a_rec.Cpu(a_rec.descUsed), a_rec.nullSrv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+			list->SetGraphicsRootDescriptorTable(render::kRootDepth, a_rec.Gpu(a_rec.descUsed));
+			++a_rec.descUsed;
+			const auto fades = render::Fades(s);
+			for (std::size_t i = 0; i < s.draws.size(); ++i) {
+				const auto& d = s.draws[i];
+				if (d.flags & proto::kDrawTranslucent) {
+					continue;
+				}
+				render::BoundDraw b;
+				const auto        r = render::BindDraw(a_rec, s, i, fades[i], b);
+				if (r == BindResult::kFull) {
+					break;
+				}
+				if (r != BindResult::kOk) {
+					continue;
+				}
+				auto* pso = Pso(*b.mesh, d.flags, s.mirrored, Kind::kEmissive);
+				if (!pso) {
+					continue;
+				}
+				list->SetPipelineState(pso);
+				render::DrawMesh(list, d, *b.mesh);
+				++drawn;
+			}
+		}
+		if (!post.empty()) {
+			list->ResourceBarrier(static_cast<UINT>(post.size()), post.data());
+		}
+		g_emissiveFrames += drawn ? 1 : 0;
+		return drawn > 0;
 	}
 
 	bool RecordVelocity(render::Recording& a_rec, const RenderSnapshot* a_snap)

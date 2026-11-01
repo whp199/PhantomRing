@@ -76,6 +76,11 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.mantle == d.mantle && std::equal(d.mantleVault, d.mantleVault + 5, shipped.mantleVault) &&
 	      std::equal(d.mantleLow, d.mantleLow + 5, shipped.mantleLow) && std::equal(d.mantleHigh, d.mantleHigh + 5, shipped.mantleHigh) &&
 	      shipped.mantleLowMaxCm == d.mantleLowMaxCm && shipped.rtTapMs == d.rtTapMs);
+	CHECK(std::equal(d.mantleStep, d.mantleStep + 5, shipped.mantleStep) && shipped.mantleStepMaxCm == d.mantleStepMaxCm && d.mantleStepMaxCm == 89);
+	CHECK(shipped.buddyWalkerLead == d.buddyWalkerLead && d.buddyWalkerLead && shipped.buddyWalkerTreadmill == d.buddyWalkerTreadmill &&
+	      shipped.buddyWalkerLeadSide == d.buddyWalkerLeadSide && shipped.buddyWalkerLeadAhead == d.buddyWalkerLeadAhead &&
+	      shipped.buddyWalkerLeadTau == d.buddyWalkerLeadTau && shipped.buddyWalkerLeadMaxSpeed == d.buddyWalkerLeadMaxSpeed &&
+	      shipped.buddyWalkerLeadAcquire == d.buddyWalkerLeadAcquire && shipped.buddyWalkerLeadTurnRate == d.buddyWalkerLeadTurnRate);
 	CHECK(shipped.padDuringBoot == d.padDuringBoot && shipped.hideDirectInputControllers == d.hideDirectInputControllers && shipped.rumble == d.rumble &&
 	      shipped.guardWindow == d.guardWindow);
 	CHECK(shipped.filmHeightMm == d.filmHeightMm && shipped.fovOverrideDeg == d.fovOverrideDeg && shipped.nearPlane == d.nearPlane);

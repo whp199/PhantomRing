@@ -56,6 +56,15 @@ namespace phantom::er
 		void HoldLeftStickUntilReleased();
 		// Elden Ring alone sees the prompt button pressed for a_ms (the deferred press of SetPrompt; MGSV never does).
 		void PressForEr(unsigned a_ms);
+		// MGSV alone sees the prompt button pressed for a_ms (on top of whatever is held): a press SetLedge kept from MGSV for a climb
+		// that the host's own look, a frame later, found no longer fits (er/Puppet.cpp) is MGSV's after all.
+		void PressForMgsv(unsigned a_ms);
+		// While Snake plays (Elden Ring's pad masked): Elden Ring alone sees a_buttons pressed for a_ms on top of the mask -- the hidden
+		// Tarnished's own press of its quick item button (er/QuickItem.h). MGSV never sees it.
+		void PressErButtons(std::uint16_t a_buttons, unsigned a_ms);
+		// Running counts of the quick item's shift presses ([Flask], er/Chord.h): View + [Flask] button (use), View + cycle_button (next).
+		std::uint32_t ItemUses();
+		std::uint32_t ItemCycles();
 		// Elden Ring has the pad for an interaction that has not hidden its HUD yet (er/Interaction.h ButtonsOnly):
 		// it gets only kInteractionButtons, neutral sticks and triggers. Used with SetMode(false, true).
 		inline constexpr std::uint16_t kInteractionButtons = 0xF000 /* A B X Y */ | 0x000F /* D-pad */ | 0x0030 /* Start, View */;
@@ -89,9 +98,11 @@ namespace phantom::er
 		// FrameBegin: with no controller connected Elden Ring doesn't poll XInput at all; while an injection lasts the bridge
 		// then polls itself once a frame, so MGSV gets the injected pad exactly as from a real one (Elden Ring sees nothing).
 		void PollIfIdle();
-		// Test automation (console `input virtualpad on|off`): user 0 reports a connected neutral gamepad to Elden Ring's
-		// capability query and polls, and Elden Ring is told devices changed, so it enumerates and polls it.
-		std::string SetVirtualPad(bool a_on);
+		// Test automation (console `input virtualpad on|exclusive|shared|off`, er/VirtualPad.h): user 0 reports a connected neutral
+		// gamepad to Elden Ring's capability query and polls, and Elden Ring is told devices changed, so it enumerates and polls it.
+		// a_exclusive (the console's `on` / `exclusive`): every real XInput pad is ignored meanwhile (sticks and buttons, for Elden
+		// Ring and MGSV); else (`shared`, [Keyboard] virtual_pad) only while no real pad answers on user 0.
+		std::string SetVirtualPad(bool a_on, bool a_exclusive = false);
 
 		// Keyboard and mouse (er/Kbm.h) follow the same modes as the pad.
 		struct Modes
@@ -104,6 +115,8 @@ namespace phantom::er
 		Modes         CurrentModes();
 		std::uint64_t LastErPollMs();  // GetTickCount64 of Elden Ring's own last XInputGetState (none: it sees no controller)
 		bool          VirtualPadOn();
+		bool          VirtualPadExclusive();
+		std::uint64_t RealPadPollsHidden();  // polls of a connected real pad the exclusive virtual pad hid
 
 		// Forward an MGSV rumble to the real controller (kGEvRumble).
 		void Rumble(std::uint16_t a_low, std::uint16_t a_high);

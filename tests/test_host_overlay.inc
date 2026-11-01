@@ -99,6 +99,15 @@ static void TestOverlay()
 	in.hudFresh = true;
 	run(1.0);
 	CHECK(b.Out().hudOpacity == 1.0f);
+	// A climb starts (HideLayerFor): the layer is cut at once -- no fade of MGSV's last prompt -- and fades in again after.
+	in.hudHeld = true;
+	run(1.0 / 60.0);
+	CHECK(b.Out().hudOpacity == 0.0f);
+	in.hudHeld = false;
+	run(0.1);
+	CHECK(b.Out().hudOpacity > 0.0f && b.Out().hudOpacity < 1.0f);
+	run(1.0);
+	CHECK(b.Out().hudOpacity == 1.0f);
 	// The guest stops publishing (a frozen last frame): the layer fades out, and back in when frames return.
 	in.hudFresh = false;
 	run(1.0);

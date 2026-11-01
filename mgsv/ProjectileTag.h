@@ -15,8 +15,9 @@ namespace phantom::guest::projectile
 	void NoteThrow(std::uint64_t a_frame, const float a_p0[3], const float a_vel[3]);
 	void NoteRound(std::uint64_t a_frame, const float a_muzzle[3], const float a_dir[3]);
 
-	// Recording threads (Capture.cpp): is a rigid draw at a_at (MGSV world) in game frame a_frame a projectile in flight?
-	bool Tag(std::uint64_t a_frame, const float a_at[3]);
+	// Recording threads (Capture.cpp): is a rigid draw at a_at (MGSV world) in game frame a_frame a projectile in flight? a_buddy:
+	// the buddy's feet (nullptr: none out) -- nothing inside its body is ever one (ProjectileLogic.h InBuddy).
+	bool Tag(std::uint64_t a_frame, const float a_at[3], const float* a_buddy = nullptr);
 
 	std::string Describe();
 }

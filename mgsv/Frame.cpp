@@ -28,6 +28,7 @@
 #include "State.h"
 #include "Throw.h"
 #include "Vars.h"
+#include "Walker.h"
 
 #include <windows.h>
 
@@ -531,9 +532,12 @@ namespace phantom::guest::frame
 					g_warpAt = ::GetTickCount64();
 					++g_warps;
 					if (a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId && a_lua.buddyActive == state::kBuddyTypeWalker) {
-						const Vec3 b = a_lua.buddyPos + Vec3{ shift.x, 0.0f, shift.z };
-						state::QueueCommand(std::format("owarp {} {} {} {} {}", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw));
-						follow::OnShift({ shift.x, 0.0f, shift.z });
+						// D-Walker by its own location object at the next frame ([Buddy] WalkerTreadmill, Walker.cpp), else Lua SetPosition
+						if (!walker::Shift({ shift.x, 0.0f, shift.z }, "fulton anchor")) {
+							const Vec3 b = a_lua.buddyPos + Vec3{ shift.x, 0.0f, shift.z };
+							state::QueueCommand(std::format("owarp {} {} {} {} {}", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw));
+							follow::OnShift({ shift.x, 0.0f, shift.z });
+						}
 					} else if (a_lua.buddyActive == state::kBuddyTypeHorse) {
 						// [Buddy] HorseTreadmill: moved along (Horse.cpp); else whistled back
 						if (horse::Decide(a_lua, false) != horse::plan::Action::kMoveAlong ||
@@ -687,9 +691,16 @@ namespace phantom::guest::frame
 			           a_lua.buddyActive != state::kBuddyTypeDog && a_lua.buddyActive != state::kBuddyTypeQuiet) {
 				// (D-Dog and Quiet ignore SetPosition -- live 2026-10-14, D-Dog stayed put -- and its Vector3 form sends D-Walker to the
 				// world origin: they are left to MGSV, which brings them back to Snake by itself.)
-				const Vec3 b = a_lua.buddyPos + d.shift;
-				cmd += std::format("{}owarp {} {} {} {} {}", cmd.empty() ? "" : ";", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw);
-				follow::OnShift(d.shift);  // and where it is walking to
+				// D-Walker: by its own location object ([Buddy] WalkerTreadmill, Walker.cpp) at the next frame, the one Snake's own placement
+				// shows in -- Lua's SetPosition landed a frame or two late, and Elden Ring drew the walker the radius away and back meanwhile.
+				// (Walker.cpp moves where it walks to as well, in the frame it moves the walker: a destination already behind it made its AI
+				// stop.)
+				const bool native = a_lua.buddyActive == state::kBuddyTypeWalker && walker::Shift(d.shift, "treadmill");
+				if (!native) {
+					const Vec3 b = a_lua.buddyPos + d.shift;
+					cmd += std::format("{}owarp {} {} {} {} {}", cmd.empty() ? "" : ";", a_lua.buddyId, b.x, b.y, b.z, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw);
+					follow::OnShift(d.shift);  // and where it is walking to
+				}
 			}
 			if (!cmd.empty()) {
 				state::QueueCommand(cmd);
@@ -792,9 +803,9 @@ namespace phantom::guest::frame
 		if (horse::RiddenMissed(g_frame, ::GetTickCount64(), root)) {
 			g_warpPending = false;  // a ridden D-Horse jump Snake didn't follow: the horse is back under him (Horse.cpp), nothing landed
 		}
-		if (state::Staged()) {
+		if (state::Staged() && climb::OdometerStill()) {
 			// A climb / climb-up plays at real MGSV geometry (Climb.h): none of it is Snake's motion for Elden Ring (whose own ladder
-			// or ledge moves the puppet), not the placements there and back either.
+			// or ledge moves the puppet), not the placements there and back either. After it, until the player's stick or 300 ms.
 			g_odo.Still(root);
 		} else {
 			g_odo.Update(odoRoot, dt, warpWindow && g_warpPending, c.teleportJump, c.velocitySmoothing);
@@ -853,6 +864,17 @@ namespace phantom::guest::frame
 			.root = { root.x, root.y, root.z },
 			.yaw = yaw });
 		horse::Update(lua, ::GetTickCount64());  // [Buddy] HorseTreadmill: D-Horse's location object, before the treadmill may move it
+		{
+			// D-Walker's location object: found, moved with the treadmill, led alongside a moving Snake (Walker.h).
+			const bool onFoot = !((lua.flags & state::kLVehicle) || v.vehicleId != kNullId || lua.ridden != kNullId);
+			walker::Update(lua, { .ready = ready && onFoot && !state::Staged() && !state::Parked() && !fulton::Anchored(),
+				.dt = static_cast<float>(std::clamp(dt, 0.0, 0.1)),
+				.nowMs = ::GetTickCount64(),
+				.root = root,
+				.velocity = g_odo.Velocity(),
+				.camPos = { a_sample.pos[0], a_sample.pos[1], a_sample.pos[2] },
+				.yaw = yaw });
+		}
 		// v15: Elden Ring's ladders and ledges with MGSV's own moves (Climb.h): staged at real MGSV geometry, the odometer still
 		const auto moves = climb::Update(a_sample, root, yaw, lua, ready, dt);
 		if (moves.placed) {
@@ -1007,11 +1029,15 @@ namespace phantom::guest::frame
 		if (lua.buddyActive >= 0 && lua.buddyId != kNullId) {
 			bf |= proto::kBuddyPresent;
 		}
+		// D-Walker's own location object when it is known (this frame's: GetPosition is Lua's, up to a tick late -- led alongside
+		// Snake, that is a few dozen centimetres), else GetPosition.
+		const auto walkerFeet = walker::Position();
+		const Vec3 buddyAt = walkerFeet && lua.buddyPosValid ? *walkerFeet : lua.buddyPos;
 		if (lua.buddyPosValid && luaFresh) {
 			bf |= proto::kBuddyPosValid;
 			// Staged for a climb (Climb.h) Snake is far from the buddy in MGSV: it is published where it stands relative to where he
 			// stood on the sandbox, which is where the host had it (the host keeps it on Elden Ring's ground).
-			SetV(s.buddyPos, state::Staged() ? lua.buddyPos + (root - climb::Home()) : lua.buddyPos);
+			SetV(s.buddyPos, state::Staged() ? buddyAt + (root - climb::Home()) : buddyAt);
 		}
 		if (lua.buddyId != kNullId && (lua.ridden == lua.buddyId || (riding && v.vehicleId == lua.buddyId))) {
 			bf |= proto::kBuddyRidden;
@@ -1039,7 +1065,7 @@ namespace phantom::guest::frame
 		}
 		s.buddyFlags = bf;
 		// Where the buddy really is in MGSV (its draws are told apart by it), not the place published while Snake is staged for a climb.
-		capture::NoteBuddy((bf & proto::kBuddyPosValid) != 0, lua.buddyPosValid ? &lua.buddyPos.x : s.buddyPos);
+		capture::NoteBuddy((bf & proto::kBuddyPosValid) != 0, lua.buddyPosValid ? &buddyAt.x : s.buddyPos);
 		s.buddyObjectId = lua.buddyId;
 		s.buddyAmmo = v.buddyGearAmmo[0];
 		s.buddyYaw = lua.buddyYawValid ? lua.buddyYaw : g_buddyYaw;

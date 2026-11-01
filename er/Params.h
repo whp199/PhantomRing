@@ -74,6 +74,8 @@ namespace phantom::er::params
 	inline constexpr Spec kReinforceParamWeapon{ L"ReinforceParamWeapon", "REINFORCE_PARAM_WEAPON_ST", 0x80, 4 };
 	// Read only (er/Fulton.h: the runes a fultoned enemy would have dropped; fromsoftware-rs SoloParam index 6).
 	inline constexpr Spec kNpcParam{ L"NpcParam", "NPC_PARAM_ST", 0x2E0, 6 };
+	// Read only (er/QuickItem.h: whether the quick item opens a screen, is an empty flask, is used up; SoloParam index 3).
+	inline constexpr Spec kEquipParamGoods{ L"EquipParamGoods", "EQUIP_PARAM_GOODS_ST", 0xB0, 3 };
 	inline constexpr std::uint32_t kNpcGetSoul = 0x2C;  // u32 get_soul (tools/re/er_params.py fields NPC_PARAM_ST; soldier 30003214: 114)
 
 	class Table

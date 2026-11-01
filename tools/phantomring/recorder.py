@@ -1,7 +1,7 @@
 """Record what a real MGSV guest sends, so Elden Ring can be tested with MGSV's real Snake and D-Walker
 without running MGSV (`replay.py` plays it back as a guest).
 
-    pr record --seconds N --out F.prrec [--pad 'ly=32767'] [--pad-file F] [--warmup S] [--hud-every S]
+    pr record --seconds N --out F.prrec [--pad 'ly=32767'] [--pad-file F] [--warmup S] [--hud-every S] [--trace F.csv [--trace-draws]]
 
 It stands in for the Elden Ring host (fake_er.FakeHost: stamps a fresh session, so the guest re-sends
 kRenClearAll and every live mesh/texture), keeps every render-ring message (assets), and from the end of
@@ -171,6 +171,9 @@ def main(argv=None) -> int:
 	ap.add_argument("--hud-every", type=float, default=0.1, help="keep the HUD layer at most this often (s); -1 = never")
 	ap.add_argument("--actors", choices=["fixed", "near"], default="fixed", help="the two published actors, as fake_er's --actors "
 		"(near: standing still beside Snake's start, moved/flagged with `pr er actor ...`; Fulton recordings, docs/GUEST.md 20.4)")
+	ap.add_argument("--trace", help="also append fake_er's CSV trace here (one line per guest frame, '# event' lines)")
+	ap.add_argument("--trace-draws", action="store_true", help="with --trace: fake_er's '# draws' line per draw list (each owner's place, "
+		"projectile and buddy draws one by one: which draws were tagged kOwnerProjectile, and where)")
 	ap.add_argument("--force", action="store_true", help="take the host side over even if another live process holds it")
 	ap.add_argument("--quiet", action="store_true")
 	args = ap.parse_args(argv)
@@ -210,6 +213,10 @@ def main(argv=None) -> int:
 	w = Writer(args.out)
 	host = RecordHost(link, w, args.warmup, args.hud_every, args.quiet)
 	host.actors_mode = args.actors
+	if args.trace:
+		host.trace = open(args.trace, "a", buffering=1)
+		host.trace_draws = args.trace_draws
+		host.trace.write(f"# t0 monotonic={host.t0:.4f} recording {args.out}\n")
 	if args.pad_file:
 		host.pad_file = fake_er.PadFile(args.pad_file)
 	else:

@@ -150,6 +150,17 @@ menu, B closed, MGSV's HUD layer hidden throughout, VERIFIED live). The HUD stat
 (`MenuWatch::SubmenuGroup`, review 2026-10-13): closing the map during Margit with his bar (0x12, HUD too) coming back in the
 same frame would otherwise arm a group of the bar alone, held "open" for the whole fight (and learn 0x12 as a menu).
 
+**Dialog boxes** (`[Input] dialog_ui_states` 0x2b, `MenuWatch::DialogOpen`, tested; 0.6.0): Elden Ring's yes/no questions --
+Memory of Grace's "Lose all runes to return to the last site of grace visited?", the map's "Traveling to ... Is that okay?" --
+are CSMenuMan UI state 0x2b on 1.17.2 (`03`, then `07`; 0 without one), found live 2026-10-31 from `pr er ui` with the travel
+question up and gone. While it is visible Elden Ring has the whole pad, however it came up. Reproduced live first (Snake playing,
+fake MGSV, Stormveil Cliffside): Start -> Inventory -> Tools -> Memory of Grace -> Use closed the inventory and put the question
+up with no press and no menu open, 0x2b already "HUD too": `menu closed`, MGSV's HUD layer back over the question, the pad
+Snake's (B reloaded in MGSV, nothing answered it). With the fix (Stormveil, the same path): `menu watch: Elden Ring's dialog box is
+up (a question) -- Elden Ring has the pad until it closes`, MGSV's HUD layer hidden, B during it -> MGSV's pad `Connected|Neutral
+buttons 0`, A on NO -> `Elden Ring's dialog box closed`, the pad Snake's again, runes and place unchanged. (B doesn't close this
+question in Elden Ring itself: A on NO does.) Dialog states are never learned or un-learned as menu states.
+
 **Keyboard menus** (`[Input] menu_keys` 0x1B Esc, 0x47 G = its map; roadmap 1.8): Elden Ring opened its menu from Esc and
 nothing noticed it -- MGSV's HUD layer and the throw markers stayed over it, and its UI entries, coming up "without a
 press", were even taken for HUD. Each frame `MenuWatch` reads those keys (`GetAsyncKeyState`: the down edge, or the
@@ -231,6 +242,22 @@ goes to MGSV instead (its iDroid) and Elden Ring never sees it (MenuWatch's Star
 Elden Ring got). Logged as `input: View held 400 ms -> MGSV (its iDroid; N so far)`. VERIFIED live with fake_mgsv: tap ->
 ER's map, MGSV no Back; 700 ms hold -> MGSV's Back, no ER menu. Re-verified 2026-10-13 with the gate below (tap: map, its
 UI state 0x3d learned; 700 ms: `View held 400 ms -> MGSV Start held 1200 ms`, fake `Start pressed`, no Elden Ring menu).
+**Since 0.6.0** (`[Input] idroid_open_ms`, 1000; `PadGate`, `TestQuickItem`): a View held past `view_hold_ms` opens the iDroid
+when it is let go, or once held `idroid_open_ms` -- no longer at 400 ms while still held: "hold View, then press X" (the flask)
+only drank within 0.4 s of View, later the iDroid had opened and X went to MGSV inside it. View held 0.4-1 s then X: the drink,
+no iDroid (not at the release either), no map, no pause; View let go after 0.4-1 s: the iDroid at the release (MGSV's Start held
+1.2 s); still held at 1 s: the iDroid as before; a tap: the map. View then Start within 1 s is now the chord with both still
+undecided (no iDroid to cut). `idroid_open_ms = 0` brings back the old timing. Logged `input: View held 400 ms+ (let go | still
+held after 1000 ms) -> MGSV Start held 1200 ms`. Live 2026-10-31 (fake MGSV `!idroid on`, the virtual pad): View 600 ms then X ->
+`flask: View + X -> the hidden Tarnished presses his item button` -> `Elden Ring healed 250 HP (37% of 680) -> Snake +2204 life`,
+`Flask of Crimson Tears used 924 ms after the press, 3 left`, no iDroid; View 600 ms let go -> `View held 400 ms+ (let go) -> MGSV
+Start held 1200 ms`, `MGSV menu open`; View held past 1 s (the console's X came after it) -> `(still held after 1000 ms)`, the iDroid,
+no drink; a 120 ms tap -> Elden Ring's map (frame); View + D-pad down 700 ms in -> `the quick item is now slot 1: Flask of Cerulean
+Tears`. **In Tarnished mode** X and D-pad down are Elden Ring's own; an item / cycle press while View is still undecided now only
+keeps View from Elden Ring (no map with the drink: live, View then X ~250 ms later -> the Cerulean flask drunk by Elden Ring's own
+X, `menu false`, no map). **Keyboard** (`input kbm on`): Tab held 0.6 s then Space -> `flask: View + X ...`, healed 90 HP, `2 left`;
+Tab + 2 -> the next quick item. The switch's corner line names an emptied flask "(empty -- rest at a grace)" (live it said
+"Flask of Cerulean Tears (1)" for the drunk-out flask: its empty twin's entry counts 1; `quickitem::CycleText`, tested).
 
 **Start, View and Tarnished mode** (`er/Chord.h` `PadGate`, pure, `tests/test_host_chord.inc`; roadmap 1.1). Everything
 Snake can't do yet -- a flask, the Spirit Calling Bell, Margit's Shackle, Torrent's whistle, jumps, ladders, an NPC's
@@ -290,6 +317,68 @@ Tarnished went through is Snake's too: the HP bar's net change between the two t
   ridden 12 m, dismounted, the chord -> Snake back in the grass where the Tarnished stood. The ladder state reads -1 on foot;
   on a ladder the chord is refused too (VERIFIED live 2026-10-13, Fort Haight: "Ladders" below).
 
+**Flasks and the quick item** (`er/QuickItem.*`, `er/QuickItemLogic.*`, `er/Chord.h` the View shift, `[Flask]`; roadmap 2.10;
+console `flask [use|next|slots|on|off]`; 2026-10-31). Camps killed Snake and his only heal was a grace or Tarnished mode. Now
+**View held + X** makes the hidden Tarnished use the item in his selected quick slot while Snake keeps the controller, and
+**View held + D-pad down** switches to his next quick item -- X and D-pad down are Elden Ring's own "use item" and "switch item".
+- **The binding** (every candidate's uses: the D-pad is MGSV's weapon / item select and wheels, X its dive, A its stance, B its
+  reload, Y its action (and Elden Ring's prompts, the climb), LB its call menu, RB its binoculars / first person, L3 its sprint,
+  R3 the jump, Start Elden Ring's menu, View tapped its map, View held MGSV's iDroid, View + Start Tarnished mode): View is
+  already "Elden Ring's button", and nothing uses View + a face button or View + the D-pad. `PadGate` (pure, `TestQuickItem`):
+  in kSnake the item / cycle button going down while View is down and still undecided (before the 400 ms that make it the
+  iDroid) is a shift press -- View then belongs to the shift (no map at its release, no iDroid, no chord; a Start meanwhile is a
+  plain Start), every further press while View stays down counts (drink twice), and the pressed button stays out of MGSV's pad
+  until released (no dive, no handgun switch). The other order (X first: MGSV's dive) is no shift; View alone works as before;
+  not in Tarnished mode (Elden Ring has X itself). Keyboard: Tab (View) + Space (X) / 2 (D-pad down) should do the same (the keys
+  become the pad before the gate; UNVERIFIED live). All four
+  buttons are ini names (`button`, `cycle_button`, `er_use_button`, `er_cycle_button`).
+- **The press** is Elden Ring's own: `InputBridge::PressErButtons` adds its use button to the masked pad for `press_ms` (150);
+  Elden Ring plays the drink on the hidden Tarnished, counts the flask and heals him; forward_heals turns the heal into
+  `kHEvHeal` (er/Puppet.cpp). The kinematic puppet keeps moving him meanwhile (SetPosition each frame: Snake's run is not slowed).
+- **Before the press** the slot is read and refused cleanly, with a corner line and a log line: no item ("No quick item in the
+  slot"); an empty flask ("Flask of Crimson Tears: empty -- rest at a grace": EquipParamGoods `goods_use_anim` 254, or a
+  consumable with 0 left); an item that opens one of Elden Ring's screens, calls Torrent or takes the camera ("...: Tarnished mode
+  only (View+Start)": `opme_menu_type` not 0 and not 13 -- Memory of Grace 1, the Spectral Steed Whistle 9, fingers, remembrances
+  -- or the Telescope's `goods_use_anim` 4). Spirit ashes (menu type 13: the bell) are used. Not while Snake isn't playing, an
+  Elden Ring screen has the pad, or he dies; riding D-Walker / D-Horse is allowed (`while_riding`). With **no EquipParamGoods
+  row** for the item (the table not resolved: another regulation or build) only a flask, known by its id, is pressed; everything
+  else is "Tarnished mode only" and the log says why once (`flask: no EquipParamGoods row for goods N: <table> -- only flasks are
+  pressed for Snake`). Before the 0.6.0 review it was pressed as it was: Memory of Grace's question, the whistle's Torrent or the
+  telescope under the hidden Tarnished (`quickitem::Classify`, `TestQuickItem`).
+- **After the press** a consumable's count is watched: "Flask of Crimson Tears: 3 left" when it drops, "none left" for the last
+  (the slot keeps the full flask's handle while Elden Ring swaps the entry to its empty twin in place: 1001 -> 1000), "the
+  Tarnished couldn't use it now" when it didn't drop within `confirm_ms` (3000). A non-consumable (spirit ashes, a shackle) has
+  nothing to count: "Spirit ashes: pressed" (since the 0.6.0 review; it said "used" even when Elden Ring refused the summon). A
+  switch is checked 0.4 s later and pressed once more when the slot didn't move (live: the first D-pad down after a while
+  switched nothing, also the Tarnished's own in Tarnished mode; the next ones did -- and with both games 2026-11-01 every one of
+  six switches took the second press), then "Quick item: Flask of Cerulean Tears (3)" / "(empty -- rest at a grace)". Not while a
+  use is being followed: the retry would switch the item under the tracker, which then said "couldn't use it now" for a drunk
+  flask. Elden Ring-only presses keep a deadline per button (`er/ErPresses.h`, tested): one slot used to hold them, so the cycle
+  retry landing on a View + X cut the X to under a frame.
+- **Layout** (fromsoftware-rs `cs/player_game_data.rs`; no code address -- each object's RTTI name and the inventory pointer are
+  checked on every read, any failure refuses with the reason and presses nothing): PlayerIns +0x580 PlayerGameData, +0x2B0
+  EquipGameData (+0x158 EquipInventoryData, +0x288 EquipItemData: +0x8 ten quick slots {u32 handle 0xB0000000 | goods id, i32
+  inventory index}, +0x98 the inventory pointer == EquipGameData +0x158, +0xA0 the selected slot); the inventory index is a key
+  item below the key capacity (+0x1C; entries through the accessor at +0x50) or a normal one at index - capacity (+0x10, 0x18
+  bytes: handle, item id 0x40000000 | goods id, quantity). Live on 1.17.2: slot 0 handle 0xB00003E9, index 397, key capacity 384
+  -> normal entry 13, Flask of Crimson Tears (1001) x4; slot 1 Cerulean (1051) x1. EquipParamGoods row size 0xB0 (SoloParam
+  index 3): `goods_use_anim` +0x42, `opme_menu_type` +0x43, `is_consume` +0x48 bit 7 (regulation rows checked offline with
+  `tools/re/er_params.py`: 1001 anim 10 consume 1, 1000 anim 254, 130 menu 9, 115 menu 1, 2040 anim 4, 200000 menu 13).
+- **VERIFIED live** 2026-10-31 (Elden Ring 1.17.2 alone, fake MGSV with `!life 3000 0`, Stormveil then the Church of Elleh;
+  presses through the virtual pad as View, then View + X 120 ms later): `flask: View + X -> the hidden Tarnished presses his item
+  button` -> 0.9 s later `Elden Ring healed 250 HP (37% of 680) -> Snake +2204 life (kHEvHeal 551)` -> fake `life 3000 -> 5204`,
+  `Flask of Crimson Tears used 917 ms after the press, 3 left`, the corner "Flask of Crimson Tears: 3 left" and Elden Ring's own
+  quick slot showing 3; all four drunk, the fifth refused ("empty -- rest at a grace", HP unchanged); drinking while walking:
+  the puppet moved 0.3-0.5 m every 0.3 s throughout the drink; the Cerulean flask (FP) used to 0; the switch both ways (one
+  needed the second press). Frames: during the drink Elden Ring's flask shows at the hidden Tarnished's hand -- at Snake's
+  chest, glowing red -- and nothing else of the Tarnished. MGSV's pad never carried X, View or D-pad down (fake `presses` none).
+  Not tried: spirit ashes, a refused screen item (this save's quick slots hold the two flasks only), the real MGSV,
+  `motion = root_motion` (Elden Ring's own movement: the drink would hold him).
+- **VERIFIED live with both games** (0.6.0, Stormveil's ladder room, the player's save): a drink right after a 15.5 m/s fall (42%)
+  -> `Elden Ring healed 250 HP (37% of 680) -> Snake +2868 life (kHEvHeal 717)`, Snake 4570 -> 7438 of 7801 1.5 s after the press
+  (before MGSV's regeneration starts); the count down to 0, the fifth refused (`empty: refused`); ~5 m walked during one drink; the
+  frames: Elden Ring's flask in the air at Snake's chest, the Tarnished never. MGSV never dived (X stayed the shift's).
+
 **Ladders** (`er/Ladder.h`, `[Input] ladder_prompts` 5000 "Climb" / 5010 "Descend", `ladder_press_delay_ms` 100, `ladder_wait_ms`
 1500, `ladder_settle_ms` 300; `[Ladder]`; roadmap 1.7; protocol v15 `kHEvClimb` / `kGuestClimbing`). Elden Ring climbs the ladder
 with the hidden Tarnished -- its ladder state moves him exactly, and Snake's kinematic body couldn't -- for as long as its own
@@ -319,7 +408,10 @@ on the ladder, facing it. Before (and with `snake = off`) the Tarnished showed a
   last moving pace is sent. `a = 1` again when the climb turns (up / down / **still**: a stop on the rungs that lasts 0.3 s --
   Elden Ring's climb passes through its idle states between two pushes of the stick -- sends speed 0 with the last direction)
   or its pace changes by more than half (at most once a second), never more than once in 0.2 s; `a = 0` once when the hand-over
-  ends (off it, a load, a death, a press Elden Ring refused). Logged: `ladder: kHEvClimb a=1 b=0 (up at 1.20 m/s; ER ladder
+  ends (off it, a load, a death, a press Elden Ring refused). Speed exactly 0 means "still on the rungs" (the guest holds MGSV's
+  climber still since 0.6.0); a moving climb never sends 0 -- with no speed to tell it sends -1, "unknown" (MGSV's own pace). An
+  origin shift moves the last height the speed is measured from (`ClimbPace::Shift`). `kGuestClimbing` counts as MGSV playing
+  *this* climb only once it rose after the hand-over began (the last climb's flag can still be up while MGSV takes Snake home). Logged: `ladder: kHEvClimb a=1 b=0 (up at 1.20 m/s; ER ladder
   state 0 StartBottom) -- MGSV plays Snake's climb`, `ladder: MGSV plays Snake's climb (kGuestClimbing) 33 ms after kHEvClimb`,
   `ladder: kHEvClimb a=0 (the climb is over; N events)`; `pr er status` / `pr er ladder`: Snake drawn on N climbs, MGSV played N,
   kHEvClimb events, the pace.
@@ -347,6 +439,17 @@ on the ladder, facing it. Before (and with `snake = off`) the Tarnished showed a
   the Tarnished never visible in the frames, Snake in control at both ends. Elden Ring moved its origin 32 m mid-climb at Fort
   Haight: the start (`g_ladderFrom`) and the climb anchor's blend now follow origin shifts (`Host::OnWorldShift`; the summary
   had read "-13.1 m up"). `[Ladder] offset` stays 0: the frames showed his hands on the rails.
+- **The puppet's start after a ladder** (0.6.0, review 2026-10-31; `Puppet::Start`, `er/StagedFacing.h`): Elden Ring's climb is over
+  at once, MGSV takes Snake home 0.2-2 s later, so the puppet starts while the guest still has him at its airport ladder. Its
+  delta used to be taken from his facing there (the ladder's yaw): once he was home Snake, his motion and the camera turned by
+  (home - ladder) yaw, a different angle after every climb. Now the delta comes from his facing before the climb (the last one
+  while he wasn't staged) and the Tarnished's, and is taken again from where MGSV puts him once `kGuestClimbing` drops (3 s at
+  most); meanwhile his body is drawn the Tarnished's way. Live: `puppet: MGSV still plays Snake's ladder climb (staged at the
+  airport) -- drawn the Tarnished's way, delta from his facing before it (known)` -> `MGSV has Snake home -- delta 2.280 -> 2.280
+  rad` 0.22 s later (no turn), after both climbs.
+- **Live 2026-10-31 evening with the real MGSV, 0.6.0** (docs/STATUS.md): Stormveil's AEG219_067_4000 up `+14.6 m` in 18.9 s with a 5 s
+  stop on the rungs (`kHEvClimb a=1 b=0 (still on it at 0.00 m/s ...)` -> MGSV held still), down `-14.5 m` in 14.0 s; MGSV moved along
+  its own ladder 4 times each way, 0 loops (frames: hands on the rungs at every point looked at).
 - **The press reaches Elden Ring only after the step-aside** (`InputBridge::SetPrompt(.., deferred)` + `PressForEr`): the
   bridge keeps the real Y out of both games, and Elden Ring alone gets a 150 ms Y `ladder_press_delay_ms` later, with the
   Tarnished in its hands. Found live: pressed while the puppet still held him, "Descend" at the top never started (the prompt
@@ -355,6 +458,21 @@ on the ladder, facing it. Before (and with `snake = off`) the Tarnished showed a
   mode from then on, counted from the ladder for the HP carried over), never Elden Ring's menu and map together (found live: the
   chord on a ladder opened Elden Ring's main menu). Tarnished mode's own chord back to Snake is refused on a ladder ("get off the
   ladder first").
+- **The end, without a dead stick** (0.6.0; `LadderEndedForGood`, `TestLadder`; console `ladder early on|off` for before/after): Elden
+  Ring's none right after EndTop / EndBottom is the climb's real end -- `kHEvClimb a=0` goes out then (`ladder: Elden Ring's climb is
+  over (EndTop -> none) -> kHEvClimb a=0 now: MGSV takes Snake home during the 300 ms settle`), not with the puppet's start, so MGSV
+  has him home (0.18-0.23 s live) before the settle ends; and the climbing stick is latched at EndTop / EndBottom (if still pushed
+  then, until let go), not at the end, so a stick let go at the top and pushed again during the settle is a fresh one. Measured live
+  2026-10-31 (Stormveil's AEG219_067_4000, +14.6 m in 13.8-14.0 s, fake MGSV with `!climbhome 200` as the real guest's way home):
+  before (`early off`) -- none at 0, puppet ON +300 ms still staged, `MGSV has Snake home` +519 ms, and the stick pushed again at
+  +162 ms never moved him (latched as the climbing one) within 3 s; after -- none at 0, `kHEvClimb a=0` at 0, puppet ON +317 ms with
+  Snake home already (no staging line), the stick pushed at +78 ms -> Snake walking in MGSV at +347 ms (30 ms after the puppet's
+  start). Held through the end it still stays latched: 0.00 m in 1.5 s pushed, 3.24 m in 0.6 s after letting go and pushing again.
+  With both real games (2026-11-01, the same ladder; the guest's odometer no longer still for 300 ms after a pushed stick, GUEST.md
+  22.2): up `+14.6 m` in 18.8 s with a 5 s stop at +7 m (`still on it at 0.00 m/s`, +6.991 m at both ends of the stop, frames 2.5 s
+  apart the same pose), `15.5 m climbed in MGSV, 4 moved along MGSV's ladder (seamless), 0 loops`; down `-14.5 m` in 19.1 s with a
+  4.5 s stop, `16.1 m ..., 4 moved ..., 0 loops`. After each: none at 0, the stick pushed at +53 / +35 ms, `back on the sandbox` +205
+  / +195 ms, puppet ON +301 / +317 ms, Snake walking in MGSV +522 / +440 ms (MGSV's first step once the pad is his again).
 - Off the ladder for `ladder_settle_ms` (EndTop/EndBottom then none), Snake takes over where the Tarnished stands (the puppet's
   start anchors him there); what the Tarnished went through on it (an arrow, a fall) goes to Snake as in Tarnished mode (`CarryHp`,
   `kHEvHeal` / `kHEvHurt`). **The stick that climbed doesn't run Snake on** (`InputBridge::HoldLeftStickUntilReleased`): it stays
@@ -415,26 +533,39 @@ kinematic puppet up and over while MGSV plays it.
   the face (`climb_room` 1 m over the top: his axis from the feet, his sides, back and front from just above the top -- live,
   Gatefront's rocks lean toward him and are 0.1 m higher at his side, so knee height read "no room"). Then:
   - **vault over** (b = 1): a top at most `vault_max_depth` (0.7 m) deep (a fence, a low wall), its highest point on the way over
-    at most `vault_max_height` (1.2 m), ground behind it no more than `vault_max_drop` (1.6 m) below his feet (more: "a drop behind
+    at most `vault_max_height` (1.35 m since 0.6.0: Limgrave's wooden rail fences stand 1.26 m -- AEG700_068 by the Church of
+    Elleh, live 2026-10-31: `none -- nothing to stand on up there (face 0.20 m ahead, top 1.26 m up)` with 1.2, `vault over -- fits
+    (face 0.26 m ahead, top 1.26 m up, 0.15 m deep, drop -0.04 m, 1.42 s)` with 1.35; lane 170 of `TestMantle`; with both real games
+    2026-11-01 AEG700_068_1003 by Y: `vault over a 1.10 m obstacle ... -> kHEvMantle a=110 b=1 1.40 s`, MGSV 16 ms later, over in
+    1.40 s; running into it: `1.16 m ... (running into it) -> kHEvMantle a=116 b=1 1.41 s`; AEG700_069_1003 measured 1.31 m from the
+    west and ~1.45 m from the east, above `run_into_max`: running into it broke it), ground behind it
+    no more than `vault_max_drop` (1.6 m) below his feet (more: "a drop behind
     it"), the whole body standing there (five probes) with room for his height, and nothing in the way 0.3-0.9 m over its crest.
     Path: up beside it to the crest + 0.25 m (35% of the time), over (70%), down to the far ground; `vault_base_s` 1.1 +
     `vault_per_m` 0.25 per metre (+ 0.2 s per metre of drop): MGSV's own vault, from the request, is on top at ~0.8 s and down
     at ~1.35 s (live 2026-10-31; 0.55 had Elden Ring's path done while MGSV still reached for the top).
   - **climb up** (b = 0): a top to stand on `radius` + 0.1 m past the face (its height within `maxSlope` x that of the edge's, the
     body's five probes on it, room for his standing height), nothing in the way over the edge. Path: straight up beside the face
-    to the top + 5 cm (55%), then over onto it; `climb_base_s` 0.75 + `climb_per_m` 0.45 per metre (1.2 s for 1 m, 1.5 s for 1.6 m).
+    to the top + 5 cm (55%), then over onto it; `climb_base_s` 1.8 + `climb_per_m` 0.2 per metre (2.0 s for 1 m, 2.14 s for 1.7 m;
+    0.6.0: the guest plays MGSV's full climb-up onto a crate / drum, ~2 s from its Y at any height -- live, 0.75 + 0.45/m ended Elden
+    Ring's path 0.6-1.0 s before MGSV's move; now `climb up done` came 8 ms after MGSV's `move over`).
   - a thin obstacle where climbing isn't possible is vaulted even when only climbs are wanted; anything else is refused with a
     reason ("too high to climb (a wall)", "no room above him to climb", "nothing to stand on up there", "a drop behind it", ...).
 - **When**: **Y** (rising edge on the real pad, `[Mantle] y`) with none of Elden Ring's prompts up now or within
   `prompt_quiet_ms` (400): at a grace, a door or an item the Y stays Elden Ring's (`InputBridge::SetPrompt`). Facing: Snake's.
   Nothing in front: nothing happens (the Y was MGSV's anyway); a ledge that doesn't fit: logged `puppet: Y at a ledge 0.25 m ahead
   -- no climb: <why>`. **Running into it** (`run_into = low`, the default: asking `run_speed` 3 m/s or more and stopped by it for
-  `run_blocked_s` 0.12 s): a ledge or fence up to `run_into_max` 1.1 m is climbed / vaulted without Y (`all`: any that fits;
+  `run_blocked_s` 0.12 s): a ledge or fence up to `run_into_max` 1.3 m (1.1 before 0.6.0: below the rail fences, which broke
+  instead) is climbed / vaulted without Y (`all`: any that fits;
   `off`: Y only). Never riding, prone, aiming (first person, binoculars, a throw), in CQC, the box, a dive or a jump, in the air,
   in MGSV's menu, nor with the buddy within `buddy_clear` (1.3 m: Y mounts D-Walker / D-Horse in MGSV). With C4 in hand the
   climb's Y no longer sets one off (below).
 - **Y is the climb's alone** (`LedgeAhead` every 100 ms in Snake's facing, with TryMantleY's refusals; `InputBridge::SetLedge`):
-  while a ledge that fits is in front of him, a fresh Y stays out of MGSV's pad until released. Found live 2026-10-31 with the
+  while a ledge that fits is in front of him, a fresh Y stays out of MGSV's pad until released. Since 0.6.0 the climb starts from
+  exactly those presses (`InputBridge::LedgePresses` rising), not from the puppet's own look at the button: the two could disagree
+  within the 100 ms (review 2026-10-31: a ledge just in reach let Y reach MGSV *and* climb; a press and release between two frames
+  was missed). A kept press that finds no climb a frame later goes to MGSV after all (`InputBridge::PressForMgsv`, 150 ms; logged
+  `puppet: Y kept from MGSV for a climb that no longer fits`). Found live 2026-10-31 with the
   real MGSV: D-Walker follows ~2.5 m away (outside `buddy_clear`), MGSV's Y reached it first and mounted it at a Stormveil fence;
   with C4 in hand MGSV's Y also set one off. Now neither happens (`pr er mantle`: `a ledge ahead now: yes (N Y presses kept from
   MGSV)`); live: Y onto a 1.09 m wall with D-Walker 2.36 m away in MGSV -> climbed, not mounted. Within `buddy_clear` Y still
@@ -447,6 +578,12 @@ kinematic puppet up and over while MGSV plays it.
   1.05 s, to (...)`, `puppet: the climb up starts 67 ms after kHEvMantle -- MGSV plays it (kGuestMantling)`, `puppet: climb up
   done at (...)`. The drawn Snake follows the puppet's root (MGSV's draws are relative to his root, as for a jump): the guest's
   move should keep his root where the body is, else the lift shows twice.
+- **Drawn facing the move** (0.6.0, review 2026-10-31; `er/StagedFacing.h`, `Puppet::StagedDrawAnchor`, `RenderScene::Capture`): the
+  guest plays the move at its own obstacle, facing that obstacle; drawn with the puppet's delta his body faced (the site's yaw +
+  delta), sideways or backwards to the climb. While `kGuestMantling` is up the draw list is drawn with a delta of its own -- the
+  plan's direction minus the list's `anchorYaw` -- eased in over 0.15 s from the way he faced and back out once MGSV has him home;
+  the camera and everything mapped from around his home keep the puppet's delta, and the hidden Tarnished faces the plan's way.
+  Live: frames through three climb-ups (1.71, 1.15, 0.57 m): hands on the top, a knee up, standing on it, facing the face throughout.
 - **Hints** (`[Hints]`, `count` 3 per kind and session, `blocked_s` 0.6, at least 20 s apart -- live the three of a kind went out
   in three seconds at the first wall): walking into something (stopped by it while asking to move) for 0.6 s plans a climb in
   that direction once a second; what fits gets a corner hint the first few times: "R3: jump onto
@@ -459,7 +596,42 @@ kinematic puppet up and over while MGSV plays it.
   mouse button jumps), not in MGSV's menus.
 - `pr er "mantle plan [deg]"` says what a climb would do in front of Snake (or along a heading), `mantle go` starts one as Y would,
   `mantle on|off`, `mantle run off|low|all`; `pr er status` (puppet line) counts climbs up / vaults (running, played by MGSV,
-  refused) and hints.
+  refused) and hints. A refusal also gives how slanted the face is and where the refusing ray hit (`..., 21 deg from the face's
+  normal [blocked 0.97 m up, 1.13 m ahead, 0.00 m aside]`); running into one that fits nothing logs it too (`puppet: ran into a
+  1.08 m ledge 0.00 m ahead -- no climb: <why>`, the first 10, then every 50th).
+- **Rougher world** (2026-10-31 evening; Gatefront's rocks, the Church of Elleh's rubble and rail fence; `TestMantle` now 17 lanes
+  plus every lane at four headings with Elden Ring's ray rule -- a ray from inside a shape sees nothing of it, `MantleRayEr` -- and
+  the path checked clear each time):
+  - **A slanted face** (`FaceNormal`: three parallel rays 0.2 m apart across it at the height that hit nearest; `[Mantle] max_slant`
+    70 for Y, `run_max_slant` 50 for running into it): a face 25 degrees or more off square is planned square to it first, along
+    its normal (MGSV climbs and vaults straight on; a diagonal vault would cross a fence lengthwise), the asked direction only if
+    that fails; nearly square, as asked first. Past the slant allowed (running along a wall) nothing is squared. Live: Y at a
+    Church of Elleh boulder at 21 degrees -> `Snake climbs onto a 0.72 m ledge 0.17 m ahead (Y, squared up to the face)`, +0.88 m.
+    Before, the 45-degree case worked in the synthetic world but 70 degrees found no face in reach (the body slides to 0.35 m
+    of the wall: 1.0 m away along a 70-degree line).
+  - **A rounded rock's crown**: the top is the highest of the three columns past the face (0.06, 0.15, 0.25 m), not the first.
+    Live at Gatefront a boulder's 0.40 m lip read "low enough to step onto" while its crown stopped the walk -- Snake stood
+    stuck against it; now `climb up -- fits (top 0.68 m up)`, Y -> on top (+0.76 m, 1.06 s).
+  - **A top rising past its lip**: the landing's ground is looked for from 0.65 m over the lip (was 0.3: inside the rock, and
+    Elden Ring's rays don't hit from inside -- "nothing to stand on up there").
+  - **Stacked rubble, a rock still rising** (`kFarLandings` 4 x `kFarStep` 0.25 m): when the first landing has no room, too little
+    top, too steep a top or something in the way, landings farther on are tried on the highest ground met so far (each at most
+    0.7 m above it, never above `max_height`), with room to rise to that height, room to stand there and nothing in the way over
+    everything passed. A wall past the first step higher than he climbs, a gap or a drop ends the search (lane 130: refused).
+  - **Rail fences**: the face rays run every 0.2 m from 0.3 to 1.1 m (a Limgrave rail fence's two rails slipped between 0.3, 0.7
+    and 1.1 m: "nothing in front to climb" at a fence the walk was stopped by), and the path's clearance rays over the crest every
+    0.08 m (every 0.2 m let a 0.12 m beam over a ledge slip between two rays once rays from inside a shape stopped counting -- the
+    synthetic lane 110 climbed through its beam with Elden Ring's ray rule; a latent hole, closed).
+  - **Running into a fence vaults it instead of breaking it**: the bump breaker (`Explosion::Break`, "Snake bumped into it") fired
+    on the first blocked frame, `run_blocked_s` before the vault could start -- live a rail fence by the Church of Elleh broke and
+    Snake ran through. Now a blocked running frame first asks whether a climb / vault fits running into it, and while one does
+    (0.5 s) nothing is broken. Walking into one (below `run_speed`) still breaks it, as before. UNVERIFIED live: both fence tries
+    broke it walking into position, and the Tree Sentinel patrols that road (it killed Snake once; the save was put back).
+- **MGSV's HUD at a climb's start** (`[Overlay] climb_hide_ms` 1600, `Hud::HideLayerFor`): the guest stages Snake at MGSV's barrier
+  or wall ladder, and MGSV's last prompt there (D-Walker's ride icon, its action prompt) faded out over ~1.5 s over Elden Ring's
+  frame. From each `kHEvMantle` and each climb's first `kHEvClimb` the layer is cut at once (no fade) for 1.6 s, then fades in
+  as usual. Live with fake MGSV's layer: `HUD layer 0.00 ... cut at a climb's start 1 times` 0.25 s after Y, 1.00 again after
+  the climb; `TestOverlay`.
 
 **MGSV's own menu** (`[Input] guest_menu_owns_pad`): while GuestState `kGuestInMenu` is set (iDroid, pause) MGSV gets the
 whole pad -- Start, View and Y included, to work the menu and close it -- and Elden Ring a neutral one (no map, no menu,
@@ -918,11 +1090,33 @@ at 20 and 50 m show the comet with its trail in flight and the fireball cluster 
 
 ### Projectile meshes and muzzle flashes (roadmap 5.4: `er/Projectiles*`, `er/ProjectileLogic*`, `[Render] projectile_meshes`, `[Combat] muzzle_flash`)
 
-Both are **off by default and don't work yet** (live pass A, 2026-10-14, docs/FEATURES-1.md): no grenade draw was ever
-tagged by the guest, a rocket only as a 4-vertex quad 41 m out 18 frames after the release, and the host learned no
-template (`24 lists with tagged draws, 0 templates learned`); the muzzle flash fires once per shot as designed but the look
-is a 1-3 m fireball (10030001) or a golden burst with shards (10035001). Live switches: `pr er "throw meshes on|off"`,
-`pr er "boom set muzzle_flash on|off"`.
+Both are **on by default since 2026-10-31** (live switches: `pr er "throw meshes on|off"`, `pr er "boom set muzzle_flash on|off"`).
+Live pass A (2026-10-14) had no grenade draw tagged by the guest and a 1-3 m fireball for a flash. 2026-10-31, Elden Ring 1.17.2:
+- **Projectile meshes** with the MGSV agent's new real-MGSV recordings (guest tagging on; `recordings/README.txt`):
+  `throw_grenade.prrec` -> `projectiles: throw equip 354 drawn with MGSV's mesh from now on: 1 part(s), first mesh
+  b1332cea2c489926` on the first release, `measures 0.14 m across`, 747 copies drawn with it over two loops; frames: MGSV's dark
+  grenade with its red band flying along the arc where the olive ball was. `fire_rocket.prrec` -> `round bullet 46 drawn with
+  MGSV's mesh: 2 part(s) ... 0.53 m across` (the rocket hit the church wall 1 m out: no flight frame). Also fake MGSV's own tagged
+  grenade stand-in (`!projmesh on`, `--model humanoid`: a 9 cm grenade drawn as `kOwnerProjectile` while it flies): learned
+  (`0.20 m across`) and drawn instead of the ball at the same spot (`throw meshes off` shows the ball there). A guest that tags
+  nothing leaves the ball, so the switch is on.
+- **Muzzle flashes**: the look is now the Fire Pot's bullet with the Spark Aromatic's burst of sparks (`explosion_muzzle =
+  10030001 300522`, ~0.4 m) for `muzzle_life` 0.1 s (at 0.06 s it never showed). Tried side by side in front of the Tarnished
+  (`boom look muzzle <bullet> <sfx>`, `boom set muzzle_life 0.3`, `boom muzzle`): 300003 / 5300003 (deflection sparks) show
+  nothing, 300002 / 5300002 a throwing dagger / a ballista bolt, 300172 a 2-3 m lightning burst, 300523 a 1 m fireball, 300122
+  the Fire Pot's fireball (lights the scene orange). Live with fake MGSV's `!fire rifle`: one small burst at the muzzle point per
+  shot. Not yet with the real MGSV's muzzle points.
+- **With both real games** (2026-11-01, the Church of Elleh's meadow at night): a **sleep grenade** thrown (LT, then an RT tap) ->
+  `throw 1: sleep (equip 378 ...) released`, `projectiles: throw equip 378 drawn with MGSV's mesh from now on: 1 part(s), first mesh
+  2142aaa5a2f2dabc ... 0.22 m across` 226 ms later (the guest: `first thrown draw tagged ... 8 frames after the release`); a frame
+  0.5 s after the release shows MGSV's blue sleep-grenade canister in flight over the grass, the blast 4.98 s later 15.8 m out.
+  **Rockets** (FB MR R-LAUNCHER, three, into the open): `round bullet 46 drawn with MGSV's mesh from now on: 2 part(s), first mesh
+  558639bdf551fb9f ... 0.53 m across`, hits 105-129 m out (MGSV) 2.4 s after the shot; frames every 50-170 ms from the release to
+  2.7 s: the rocket flies straight away from the camera, so only its bright exhaust shows (a large glow at the launcher for the
+  first ~0.3 s, then a shrinking white dot down range) and the orange blast at the end -- its body is never seen side on. The guest
+  also tagged four or five rigid MGSV meshes (0 bones, 58-475 vertices) near a rocket's path; they are not the learned template,
+  so they are left out (`60 unclaimed`), not drawn. **Muzzle flashes** with the real MGSV's rifle: the frame of a burst shows
+  orange sparks in front of the SVG-76 (`muzzle flashes on (17 shown, 0 over muzzle_per_second)`).
 
 **Projectile meshes.** The flown copies of Snake's grenades (`er/Throw.cpp`) and rounds (`er/Rounds.cpp`) were a small olive
 ball and a dark ball with a flame. The guest now publishes MGSV's draws of a projectile it just released with owner
@@ -1450,8 +1644,7 @@ through `input virtualpad` + `press`):
   regeneration ticks carried over), the guest adds it, the mirror shows it. Not while max HP just changed (a talisman
   swap may rescale HP). VERIFIED with fake_mgsv: +139 HP (27%) -> `kHEvHeal 399` -> Snake +1596 of 6000. The real guest
   ignores `kHEvHeal` until mgsv/Frame.cpp handles it (then a heal is put back by the mirror: effectively blocked).
-  Flasks themselves can't be drunk while Snake plays (Elden Ring's item button is MGSV's), so heals come from graces and
-  effects.
+  Flasks are drunk while Snake plays with View + X (Control hand-over, "Flasks and the quick item"); their heal reaches Snake this way.
 
 ### Dev console (`er/Console.cpp`; `pr er '<command>'`)
 
@@ -1476,6 +1669,10 @@ puppet set <key> <value>     live: ground_keep ground_layers ground_filter wall_
 flag [name [on|off]]         render dead nodead nodamage nohit noattack nomove nogravity
 puppet auto|off   menu auto|open|closed   debug on|off
 tarnished [on|off|toggle]    Tarnished mode, as View + Start held 1 s toggles it
+die [snake|er]               a test death: Snake's as MGSV reports it (kGEvDied, the default), or Elden Ring killing the Tarnished
+ladder early on|off          kHEvClimb a=0 and the stick's latch at Elden Ring's EndTop/EndBottom (on, 0.6.0) or after the settle
+mantle set <key> <m>         [Mantle] vault_max_height vault_max_depth vault_max_drop min_height max_height reach run_into_max live
+flask [use|next|slots|on|off]   the quick item for the hidden Tarnished (View + X / View + D-pad down; [Flask]); slots lists all ten
 puppet motion kinematic|root_motion   switch [Puppet] motion live (and zero the moved/asked, walls and breakers counters)
 puppet hop [on|off]          dive = hop ([Puppet] hop) live; without an argument its settings
 render [status | keys | set <key> <value> | probe]
@@ -1490,11 +1687,22 @@ snap tree root <addr|player> | take <label> [depth [bytes]] | diff <a> <b> [max]
 input key|keydown|keyup <vk> | mouse <dx> <dy> | wheel <notches> | mbutton left|right|middle down|up   SendInput inside
                              Elden Ring's Wine desktop (keydown/keyup: Elden Ring reads the keyboard once a frame; wheel and
                              mbutton are real mouse events: DirectInput sees them, unlike a VK_xBUTTON key event)
-input virtualpad on|off      test automation with no controller plugged in: user 0 reports a connected neutral pad to
+input virtualpad on|exclusive|shared|off   (on = exclusive since 0.6.0: every real XInput pad -- and a DirectInput game
+                             controller -- is ignored meanwhile, for Elden Ring and MGSV; shared: only while no real pad
+                             answers on user 0, the old `on`; [Keyboard] virtual_pad turns on a shared one)
+                             test automation with no controller plugged in: user 0 reports a connected neutral pad to
                              Elden Ring's XInputGetCapabilities and polls, and Elden Ring is told devices changed
                              (WM_DEVICECHANGE): it enumerates and polls it, so `press` reaches Elden Ring itself (title,
                              menus, map, graces, prompts). Without it Elden Ring polls nothing and the bridge polls for
-                             MGSV alone while a `press` lasts (`InputBridge::PollIfIdle`)
+                             MGSV alone while a `press` lasts (`InputBridge::PollIfIdle`). 0.6.0: Elden Ring re-enumerates
+                             its controllers only on WM_DEVICECHANGE DBT_DEVICEARRIVAL / REMOVECOMPLETE with a
+                             DEV_BROADCAST_DEVICEINTERFACE of GUID_DEVINTERFACE_HID (2.7.2.0: its handler 0x141F6FB90 checks
+                             wParam 0x8000/0x8004, type 5 and the GUID at 0x1430CF278, then flags its pad object (+0x899) for
+                             the XInputGetState(0..3) loop at 0x141F2C570); the DBT_DEVNODES_CHANGED posted before did nothing
+                             there (live 2026-10-31 with no controller: 16 polls at its start, none after `virtualpad on`).
+                             Now one such arrival is sent (SendMessageTimeout from a thread of its own): `Elden Ring told a HID
+                             game controller arrived (1 window(s) answered of 1)` -> it polled the virtual pad every frame
+                             (70,619 calls in the session; menus, the map, graces, the ladder's Y, the flask all through `press`)
 press <buttons|none> [ms] [lx ly [rx ry]]   the injected pad (lt/rt included), through the same masks as a real one
 puppet hide render_flag|fade|none   switch [Puppet] hide_mode live
 buddy                        the buddy, plus D-Walker's orders seen and the LB hints shown (er/BuddyOrders)
@@ -1509,7 +1717,7 @@ combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_correction|b
 boom [status | lethal|stun|sleep|smoke|flame|breaker|shrapnel [radius] | mode ... | restore | pool]   looks 5 m ahead;
                              `pool`: Elden Ring's bullet/emitter counts and ours alive
 boom look <kind> <bullet> [sfx] | set <key> <value> | raw <bullet> x y z   change a look live, tune the breakers (set
-                             muzzle_flash on|off: [Combat] muzzle_flash), fly
+                             muzzle_flash on|off, muzzle_life <s>, muzzle_ahead <m>: [Combat]), fly
                              an unmodified Elden Ring bullet from the Tarnished's chest (what does Elden Ring break?)
 stealth [hide on|off | speffect <id>]   the cardboard box (er/Stealth.h)
 geom [learn [use] | offset <hex> | near|all [radius [filter|-filter]] | ladders [radius] | dump <ins>]   map assets (er/GeomProbe.h)
@@ -1785,6 +1993,45 @@ a dark silhouette); `nvg_curve` 0.6 x 5: the tunnel's mean brightness 8 -> 81 (o
 20:00 41 -> 131, the sky not washed out (the pair of screenshots each). Nothing gets darker: MGSV's own overlay is left out
 of the HUD layer (the guest), the layer showed only the weapon and NVG boxes.
 
+#### Grass over Snake (roadmap 5.1; 2026-10-31, Elden Ring 1.17.2, the Church of Elleh's tall grass and bushes)
+
+The known issue -- Elden Ring's grass drawn over Snake even where it stands behind him -- is the see-through of the old G-buffer
+point, gone with `gbuffer_point = clear` (the default since 2026-10-14) but never re-checked in grass:
+- **Pass order and depth** (`render probe shaders`): the frame's G-buffer batch clears the scene depth (list 10, `k9`), then draws
+  lists 11-27: a depth/stencil pre-pass (`0f3269f0cbaacee5`, `z7w m00000`) and its colour pass with an EQUAL test (`ac8e8663099e0d63`
+  `z3r`) for characters, foliage `f9ceb4dfb05c4045` (`st wffp3f8 z7w mfff00`: GREATER_EQUAL with depth write, stencil REPLACE 0xD2,
+  translucency 0.4 in RT1.z) and the rest, all GREATER_EQUAL against the scene depth. Snake goes in right after the clear, so
+  every one of them, grass included, depth-tests against him; the forward passes after the lighting test the same depth.
+- **Per texel** (`render gbuf peek` now also copies the depth and stencil right after Snake's own draw and compares them with
+  the final ones: `right after Snake's draw: ...; N of 256 texels Snake's then, M of them drawn over later (0xd2xM), K by
+  something FARTHER than Snake`): 16x16 boxes every 48-64 px over the real Snake (`idle_walker.prrec`) standing in tall grass, at
+  dusk and at noon: 32776 and 19067 of his texels, 2042 and 1341 drawn over later -- all by foliage (stencil 0xD2) **nearer** than
+  him -- and **0 by anything farther**. Kalé's hat behind his shoulder: behind him, as it should.
+- **Before / after frames** (`render set gbuffer_point last` / `clear` a second apart, the same spot and moment, noon and dusk):
+  with `last` the bushes behind him show through his back, pack and legs; with `clear` he is solid and only the grass in front
+  covers his lower legs.
+- **One remaining way in, closed**: a batch whose depth clear came in an earlier batch of the frame used to fall back to the
+  last G-buffer list (the see-through) for those frames. Now, when the scene depth was fully cleared earlier this frame
+  (`RenderDepth::FullyClearedThisFrame`) and this is the frame's first batch with G-buffer lists, Snake goes in before its first
+  G-buffer list (`render`: `G-buffer point: clear (N frames after Elden Ring's depth clear, M before its first G-buffer list
+  (the clear in an earlier batch), K after its last G-buffer list: no clear seen)`). Never seen on this machine (0 such frames;
+  0 fallbacks in every session since 2026-10-14); the player's grass reports may have come from such frames, or from before then.
+- Not re-checked: the cardboard box in grass (no recording with the box; its draws go the same way as Snake's).
+
+#### Minimum light on Snake (roadmap 5.3; `[Render] min_ambient` 0.004, `render set min_ambient <v>`; 2026-10-31)
+
+Snake is lit by Elden Ring's world light set (0); the character sets that give the Tarnished his rim light light nothing while no
+character of Elden Ring's uses them on screen, so in a dark tower at night Snake went nearly black. RT4 (R16G16B16A16_FLOAT) is
+Elden Ring's emissive term: only its glowing materials write it (`mfffff`), every other opaque pipeline leaves it alone, and the
+lighting adds it unlit. Snake's albedo x `min_ambient` goes there as a floor of light -- **not** at the injection: written there
+it stayed under whatever Elden Ring drew in front of him later (their pipelines leave RT4 as it is) and his legs glowed through
+the rock he stood behind (live). It is its own pass after Elden Ring's last G-buffer list, before the lighting
+(`Gbuffer::RecordEmissive`): Snake's draws again, RT4 written alone, the depth read-only and tested as the velocity pass does, so
+only where he is still the nearest surface (live: nothing through the rock in front of him, nothing on the Tarnished behind him).
+Values (Gatefront at 00:11, the humanoid next to the Tarnished, `debug_offset`): mean luminance over his body 20.3 at 0, 22.4 at
+0.002, 28.5 at 0.005, 30.1 at 0.01; 0.025 and up glow. 0.004 is the default: barely there under the moon, a visible figure
+where nothing else lights him. By day the sun's light dwarfs it. Not yet tried in a dark tower.
+
 #### Not done yet / next
 
 - **Light set while the puppet runs.** It is learned only while the Tarnished is visible. Findings (2026-10-12, Gatefront
@@ -1919,6 +2166,40 @@ itself, until the respawn or the character changes:
   screen in Snake's place. Restored at the respawn when Snake does not take over again.
 - The MGSV HUD layer and reticle hide (death counts as "not Snake's screen").
 
+**0.6.0** (`er/Revival.h` `AtStop`, `TestRevival`; `Puppet::DeathSeconds`; the death trace): seen once in 0.6.0 testing, 2.4 s
+after Snake died the Tarnished knelt on screen (his death, HP 0) and Snake wasn't drawn. Two holes found and closed:
+- Whatever stops the puppet while a death is under way -- Snake's kill already out (KillForGuest, the dead bit a frame later), or
+  this character dying -- the Tarnished now stays hidden until the respawn (`puppet: stopped (<why>) during Snake's death -- the
+  Tarnished stays hidden`). Before, only the reason "player dead" did: Tarnished mode, a step-aside, MGSV's heartbeat lost, a ladder
+  in those frames showed him dying, with the puppet off and no death of Snake's recorded (nothing of Snake drawn).
+- A death of the Tarnished while the player plays him (Tarnished mode) is his: he dies on screen and Snake is not drawn. Live
+  2026-10-31 (`tarnished on`, `call kill yes`): the dying Tarnished *and* Snake's test model popped up over him at the anchor
+  Tarnished mode had left (frames at 0.3-6 s); `DeathSeconds` is now -1 for such a death (only Snake's own deaths draw him).
+  A possible match for the frame from 0.6.0 testing (its stray DualSense presses could have made the chord); not proven.
+- **Review of 0.6.0** (`er/Revival.h` `StopReason`, `ChordRefusedWhileDying`, `TestRevival`): the puppet's own character dead
+  (the dead bit, in a loaded world) is now tested before every other reason to stop it -- "guest lost", Tarnished mode, a
+  step-aside, a ladder, "disabled" used to win in a death's first frames -- and `Stop()` treats the dead bit as a death whatever the
+  reason. View + Start is ignored from Snake's kill until the respawn (`input: View+Start during a death -- ignored`): on, it
+  stopped the puppet with the Tarnished on screen; off, it would hand Snake a dead Tarnished.
+- **The death trace** (every death, at 0.3, 1, 2.4, 4, 6, 9, 14 s): `puppet: death trace 2.4 s (Snake's death): puppet off, the
+  Tarnished hidden (render bit 0, base transparency 0.00; hidden by us yes), dead bit 1, HP 0/680, Snake drawn (2 draws), MGSV
+  ready, killed for Snake's death`, and a warning if the Tarnished is visible in Snake's death.
+- Live 2026-10-31 (fake MGSV humanoid, Stormveil and the Church of Elleh): frames at 0.3, 1, 2.4, 4, 6, 9 s after `!die` (Snake's
+  death as the real guest reports it), `call kill yes` (Elden Ring's own kill) and a 34 m fall (`landed at 25.7 m/s -> fall damage
+  100%`): Snake drawn, no Tarnished in any frame; and the trace (no frames) of three enemy kills by the Church of Elleh's fences
+  (`hit hook ... 5 calls, 5 cancelled` -> `guest: Snake died`): every line "the Tarnished hidden ... Snake drawn" until the respawn
+  load (`ER player respawned` 11.7-18.4 s after the death).
+- **With both real games** (2026-11-01, the review fixes in; Church of Elleh at night): `pr er die` (Snake's death as MGSV reports
+  it), a 36 m fall (`call setpos` 36 m up: `guest: Snake died` on the landing) and a Godrick soldier's torch and sword (the guest's
+  own death from Elden Ring's hits, `hit hook ... cancelled`), plus three more enemy kills by the same patrol: frames at 0.3, 1,
+  2.4, 4, 6, 9 s of the first three -- Snake lying where he died (the soldier standing over him, D-Walker beside), YOU DIED, never the
+  Tarnished; every death trace `the Tarnished hidden ... hidden by us yes ... Snake drawn (46-65 draws)` to 9 s, `another character`
+  at 15.3 s (the respawn load), `ER player respawned` 13.1-18.4 s after the death, `puppet ON`, and Snake back at the grace (frame).
+  A Tarnished-mode death (`tarnished on`, `die er`) the same night: the Tarnished dying on screen, no Snake drawn (frames 0.3-9 s). A
+  View + Start held during it counted no chord at all, so the refusal above is unit-tested only. After a respawn load the new player
+  object can be fully visible (`the Tarnished VISIBLE ... base transparency 0.92 ... another character` at 14.0 s) while Elden Ring's
+  loading screen is still up; the puppet hides him in the frame it closes (no frame showed him).
+
 Verified live: `!die` → `killed the ER player`, `puppet OFF (player dead)`; a screenshot ~0.5 s later shows
 Snake and D-Walker half dissolved, ~2 s later nothing but Elden Ring's world (no Tarnished), 6 s later `ER
 player respawned`, "Snake is in control" and the HUD back.
@@ -1985,7 +2266,8 @@ pad (Start/View gate and chord, prompt button, MGSV's menu owning the pad, held-
 - **Device**: `Kbm::Apply` (XInputGetState detour, before publish and masking) replaces the published pad with the keyboard's
   when the keyboard is the device in use: the last one used, the real pad on a tie (pad activity = past XInput's dead zones).
   The pad is where it starts, so controller players never notice.
-- **No controller**: Elden Ring then never calls XInputGetState. `virtual_pad = auto` turns on the bridge's virtual pad
+- **No controller**: Elden Ring then never calls XInputGetState (until told a HID device arrived: the virtual pad does that since
+  0.6.0, see `input virtualpad` in the console list). `virtual_pad = auto` turns on the bridge's (shared) virtual pad
   (`input virtualpad on`) the first time the keyboard is used while Elden Ring hasn't polled XInput for 0.5 s.
 - **Glyphs**: `keyboard_glyphs` makes KeyGuide set Elden Ring's keyboard glyphs ("E: Rest") while the keyboard plays Snake.
 - **Cursor**: `capture_cursor` clips it to Elden Ring's client area while the keyboard plays Snake (only our own clip is undone).

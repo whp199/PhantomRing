@@ -32,7 +32,7 @@ namespace phantom::er
 		float       exposure{ 1.0f };
 		bool        dayNight{ true };        // follow Elden Ring's clock: sun arc by day, dim blue moonlight by night
 		// (roadmap 5.4) Snake's flown grenades / rockets drawn with MGSV's own meshes (er/Projectiles.h); UNVERIFIED live: off
-		bool        projectileMeshes{ false };
+		bool        projectileMeshes{ true };
 		float       projectileSpin{ 9.0f };  // rad/s a thrown one tumbles about its flight while it flies
 		bool        albedoSrgb{ true };      // UNORM albedo textures hold sRGB values
 		std::string normalXy{ "auto" };      // auto | rg | ag (normal map channels)
@@ -59,6 +59,9 @@ namespace phantom::er
 		float       gbufferAo{ 1.0f };          // RT1.w (characters: vertex colour red)
 		float       gbufferTranslucency{ 0.0f };  // RT1.z (foliage wrap lighting; 0 for characters)
 		float       albedoScale{ 1.0f };
+		// Stage C: a minimum light on Snake (roadmap 5.3; dark towers at night): his albedo x this written into Elden Ring's RT4, which
+		// its emissive materials fill and its lighting adds unlit (UNVERIFIED which: `render set min_ambient` compares live). 0 = off.
+		float       minAmbient{ 0.004f };
 		float       glossScale{ 1.0f };          // gloss = (1 - roughness)^2 * scale + bias
 		float       glossBias{ 0.0f };
 		float       metalScale{ 1.0f };          // SRM blue as metalness
@@ -116,6 +119,10 @@ namespace phantom::er
 		bool        enabled{ true };
 		bool        hud{ true };              // composite the guest's HUD layer (HudCtl triple buffer)
 		int         hudFadeMs{ 350 };
+		// The layer is cut (no fade) for this long from the start of a climb up / vault / ladder climb: the guest stages Snake at
+		// MGSV's barrier or wall ladder and MGSV's last prompt there (D-Walker's ride icon, its action prompt) faded out over ~1.5 s
+		// on top of Elden Ring's frame (live 2026-10-31). 0 = never.
+		int         climbHideMs{ 1600 };
 		std::string reticle{ "auto" };        // auto (while no MGSV HUD layer arrives) | on | off
 		float       reticleScale{ 1.0f };
 		bool        status{ true };           // MGSV boot progress / absent / failed, in a corner
@@ -183,6 +190,7 @@ namespace phantom::er
 		std::uint16_t allowButtons{ 0x0030 };   // passed to ER while puppeting (START | BACK/View)
 		bool          menuLearn{ true };
 		std::vector<int> menuUiStates;          // CSMenuMan UIState indices that mean "an ER menu is open"
+		std::vector<int> dialogUiStates{ 0x2b };  // ...Elden Ring's dialog box (a yes/no question): always a menu while visible
 		int           menuLatchMs{ 1500 };      // after Start/View: assume a menu opened for this long
 		std::uint16_t promptButton{ 0x8000 };   // Y (ER's "event action" on an Xbox pad, VERIFIED live): goes to ER (not MGSV) while ER shows an interaction prompt; 0 = off
 		int           interactionHudState{ 7 };  // CSMenuMan UI state hidden while ER runs an interaction (grace rest, VERIFIED live); -1 = none
@@ -191,6 +199,7 @@ namespace phantom::er
 		std::vector<int> releasePrompts{ 10000 };  // ActionButtonParam ids where Elden Ring walks the Tarnished itself (the mist): the puppet steps aside
 		int              releaseMs{ 4500 };        // ...for this long after the press, then Snake takes over where ER left him
 		int           viewHoldMs{ 400 };         // View held this long while Snake plays = MGSV's iDroid (a tap stays ER's map); 0 = off
+		int           idroidOpenMs{ 1000 };      // ...at its release, or once held this long (View + X is the quick item until then); 0 = at viewHoldMs
 		int           guestIdroidStartMs{ 1200 };  // ...sent to MGSV as Start held this long (MGSV: Back = pause menu, Start held ~1 s = iDroid, VERIFIED live)
 		bool          guestMenuOwnsPad{ true };  // kGuestInMenu: MGSV gets the whole pad, Elden Ring nothing
 		int           padGlyphDevice{ 0 };       // Elden Ring's glyph device while Snake plays: 0 pad, 1 keyboard; -1 = leave it to ER
@@ -203,6 +212,8 @@ namespace phantom::er
 		int              ladderPressDelayMs{ 100 };    // ...the puppet steps aside on the press, which reaches Elden Ring this much later
 		int              ladderWaitMs{ 1500 };         // ...until the climb starts (at most this long after the press)
 		int              ladderSettleMs{ 300 };        // ...and back this long after the Tarnished got off the ladder
+		bool             ladderEndEarly{ true };       // kHEvClimb a = 0 at Elden Ring's EndTop/EndBottom -> none, not after the settle (console
+		                                               // `ladder early on|off`, for before/after measurements; not in the ini)
 		// [Ladder] Snake climbs Elden Ring's ladders himself (protocol v15 kHEvClimb / kGuestClimbing, er/Ladder.h ClimbPace): Elden
 		// Ring still moves the hidden Tarnished up or down (the whole pad, its own camera), MGSV plays Snake's own ladder climb at
 		// its pace, and Snake's meshes are drawn where the Tarnished is on the ladder, facing it.
@@ -293,12 +304,14 @@ namespace phantom::er
 		MantleParams mantleParams;
 		bool         mantleY{ true };             // Y (no Elden Ring prompt up) at a ledge in front climbs it
 		std::string  mantleRunInto{ "low" };      // off | low (up to run_into_max) | all: running into a ledge climbs / vaults it
-		float        mantleRunIntoMax{ 1.1f };
+		float        mantleRunIntoMax{ 1.3f };  // Limgrave's rail fences (1.26 m) too: running into one vaults it instead of breaking it
 		float        mantleRunSpeed{ 3.0f };      // m/s Snake must be asking for (running) ...
 		float        mantleRunBlockedS{ 0.12f };  // ... into it this long
 		int          mantleWaitMs{ 300 };         // the move waits this long for MGSV's kGuestMantling, then goes without it
 		int          mantlePromptQuietMs{ 400 };  // Y this soon after one of Elden Ring's prompts was up is never a mantle
 		float        mantleBuddyClear{ 1.3f };    // ... nor with the buddy this near (Y mounts it in MGSV: right beside it)
+		float        mantleSlantY{ 70.0f };       // Y at a face this slanted (degrees from its normal) squares up to it (0: along his facing only)
+		float        mantleSlantRun{ 50.0f };     // running into one: up to this slant (more: he runs along it, no climb)
 
 		// [Hints] corner hints the first few times Snake is stopped by something he could jump onto or climb
 		bool  hints{ true };
@@ -308,6 +321,19 @@ namespace phantom::er
 		// [Jump] the pad button that jumps (the host swaps it with R3 in MGSV's pad while Snake plays; the guest's jump is R3)
 		std::uint16_t jumpButton{ 0x0080 };  // R3; 0x1000 A (then R3 = MGSV's A: crouch), 0x0040 L3 (then R3 = MGSV's L3: sprint)
 		std::string   jumpButtonName{ "R3" };
+
+		// [Flask] Elden Ring's quick item without leaving Snake (roadmap 2.10, er/QuickItem.h): View held + button = the hidden
+		// Tarnished uses his quick item (a Flask of Crimson Tears...), View held + cycle_button = his next quick item
+		bool          flask{ true };
+		std::uint16_t flaskButton{ 0x4000 };       // X (pad button with View held; 0 = no use press)
+		std::uint16_t flaskCycleButton{ 0x0002 };  // D-pad down (0 = no cycling)
+		std::string   flaskButtonName{ "X" };
+		std::string   flaskCycleName{ "D-pad down" };
+		std::uint16_t flaskErUse{ 0x4000 };        // Elden Ring's own "use item" button (X on an Xbox pad)
+		std::uint16_t flaskErCycle{ 0x0002 };      // ...and its "switch quick item" (D-pad down)
+		int           flaskPressMs{ 150 };         // how long the hidden Tarnished's press lasts
+		int           flaskConfirmMs{ 3000 };      // a consumable whose count hasn't dropped this long after the press: not used
+		bool          flaskWhileRiding{ true };    // also while Snake rides D-Walker / D-Horse (the Tarnished is on foot)
 
 		// [Axes] (UNVERIFIED conventions; confirmed live and pinned here)
 		float mirrorX{ -1 };         // Fox and Havok differ in handedness (verified live 2026-10-12)
@@ -419,9 +445,10 @@ namespace phantom::er
 		// Order: lethal, stun, sleep, smoke, flame (D-Walker's flamethrower: the Dragonfire incantation's flames), breaker and shrapnel
 		// (no look: the flying Fire Pot's bullet carrying an object-only attack, light / heavy: they break Elden Ring's destructible
 		// assets).
-		// ... and muzzle (the Fire Pot's fireball cut after muzzle_life s: a short flash).
+		// ... and muzzle (the Fire Pot's bullet with the Spark Aromatic's small burst of sparks, effect 300522, cut after muzzle_life s:
+		// a short flash; the fireball itself read as a 1-3 m explosion at every shot, live 2026-10-14).
 		std::array<std::uint32_t, 8> explosionTemplate{ 10030001, 10035001, 10064001, 10033001, 10700000, 10030000, 10030000, 10030001 };  // BulletParam rows
-		std::array<std::int32_t, 8>  explosionSfx{ -1, -1, -1, 300192, -1, -1, -1, -1 };  // flight effect instead of the row's own (-1 = its own)
+		std::array<std::int32_t, 8>  explosionSfx{ -1, -1, -1, 300192, -1, -1, -1, 300522 };  // flight effect instead of the row's own (-1 = its own)
 		std::array<std::uint32_t, 8> explosionCarrier{ 10048000, 10048001, 10302000, 10302001, 10302002, 10302003, 10302004, 10302005 };  // cut-content rows
 		int                          explosionMaxBursts{ 7 };       // per blast (centre + a ring)
 		float                        explosionPerSecond{ 40.0f };   // bursts per second, all kinds
@@ -457,9 +484,9 @@ namespace phantom::er
 		float         flameSpeed{ 14.0f };          // m/s the flames fly (0 = the template's own)
 		// (roadmap 5.4) A muzzle flash at each of Snake's (and the buddy's) shots: explosion_muzzle's effect cut short
 		// (er/Explosion.h Muzzle); UNVERIFIED live: off
-		bool          muzzleFlash{ false };
+		bool          muzzleFlash{ true };
 		float         muzzlePerSecond{ 10.0f };     // flashes per second at most (automatic fire)
-		float         muzzleLife{ 0.06f };          // s the flash lasts (its effect is cut with the bullet)
+		float         muzzleLife{ 0.1f };           // s the flash lasts (its effect is cut with the bullet; at 0.06 s 300522 never showed)
 		float         muzzleAhead{ 0.1f };          // m in front of MGSV's muzzle point
 		bool          muzzleTranq{ false };         // also for tranquilizer rounds (MGSV's are suppressed: no flash)
 

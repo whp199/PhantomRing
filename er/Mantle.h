@@ -37,6 +37,11 @@ namespace phantom::er
 		float       drop{ 0 };       // vault: how far the ground behind is below the feet (m, < 0 above)
 		Vec3        dir;             // horizontal, unit
 		float       duration{ 0 };   // s
+		bool        squared{ false };  // planned square to the face (its normal), not along the asked direction (a slanted approach)
+		int         farther{ 0 };      // climb: its landing is this many steps (0.25 m) past the first one (stacked rubble, a rising top)
+		float       slant{ 0 };        // degrees between the asked direction and the face's normal (0 = straight on; -1 unknown)
+		bool        hasBlock{ false }; // kNone: where the refusing ray hit (relative to the feet; the log and `mantle plan`)
+		Vec3        block;
 		std::array<Vec3, 4>  keys{};  // the feet along the path: keys[0] = the start ...
 		std::array<float, 4> keyT{};  // ... at these times (s; keyT[0] = 0, the last = duration)
 		int                  keyCount{ 0 };
@@ -47,8 +52,16 @@ namespace phantom::er
 	// his stance (room to stand where he ends up); a_params' radius is his body's. a_vault: a thin obstacle is vaulted over when
 	// it can be (Y and running into it both do: MGSV vaults a fence); false = only climb onto things (the vault stays possible
 	// only where climbing isn't: nothing to stand on).
+	//
+	// A face met at a slant (live 2026-10-31: running into a ledge at a slant slid along it) is planned square to it as well, its
+	// normal from three rays across the face, when the straight plan along a_dir is refused and a_dir is at most a_maxSlantDeg from
+	// the face's normal (0 = never square up): MGSV climbs and vaults straight on.
 	MantlePlan PlanMantle(const Vec3& a_feet, const Vec3& a_dir, float a_body, const MantleParams& a_m, const KinematicParams& a_params, const RayFn& a_ray,
-		bool a_vault = true);
+		bool a_vault = true, float a_maxSlantDeg = 0.0f);
+
+	// The face straight ahead (its nearest point within a_max of the body's axis, along a_dir) and its horizontal normal (unit, toward
+	// a_feet) from three parallel rays a_spread apart at the height that hit nearest. nullopt: no face, or no normal.
+	std::optional<Vec3> FaceNormal(const Vec3& a_feet, const Vec3& a_dir, float a_max, float a_spread, const RayFn& a_ray);
 
 	// The feet a_t seconds into the plan (clamped): each leg eased in and out.
 	Vec3 MantlePoint(const MantlePlan& a_plan, float a_t);

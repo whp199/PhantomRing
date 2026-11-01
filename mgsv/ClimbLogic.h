@@ -57,8 +57,9 @@ namespace phantom::guest::climb::plan
 	float BottomFacing(const LadderSite& a_site);  // radians (MGSV yaw)
 	float TopFacing(const LadderSite& a_site);
 
-	// Elden Ring's speed against MGSV's fixed one: the stick is held while MGSV is behind what Elden Ring climbed. Speeds at or
-	// below 0 (or not finite) are "unknown": MGSV's own pace (the stick always held).
+	// Elden Ring's speed against MGSV's fixed one: the stick is held while MGSV is behind what Elden Ring climbed. Exactly 0 = Elden
+	// Ring's climber stopped on the rungs: MGSV holds still too (no stick). Below 0 (or not finite) = "unknown": MGSV's own pace (the
+	// stick always held). (Before 0.6.0 0 was "unknown" too, and a climber resting on Elden Ring's rungs kept climbing in MGSV.)
 	class Pacer
 	{
 	public:
@@ -90,7 +91,13 @@ namespace phantom::guest::climb::plan
 		// the placement home cancels the landing that drop would play (live 2026-10-31).
 		bool                knockOff{ false };
 		bool                pressAction{ false };  // pulse MGSV's action button (Y)
+		// The placements home never got him back on the sandbox (still on MGSV's ladder, or they failed): MGSV's own Warp home as
+		// the last resort (Climb.cpp; it logs a warning). The move is over with it.
+		bool                warpHome{ false };
 		std::int16_t        stickY{ 0 };           // the left stick's Y MGSV gets this frame (the guest owns the pad)
+		// Move him this many rung pairs (0.5 m each) along MGSV's ladder in the middle of his climb (ladder_rung::Shift): a long
+		// Elden Ring ladder never reaches MGSV's ends (RecycleShift). 0 = none.
+		int                 rungShift{ 0 };
 		bool                active{ false };       // the flag (kGuestClimbing / kGuestMantling) is up
 		const char*         note{ nullptr };       // something worth a log line happened (static text)
 	};
@@ -104,7 +111,25 @@ namespace phantom::guest::climb::plan
 		bool          standing{ false };      // STAND and not SQUAT / CRAWL (a stance change is no NORMAL_ACTION either)
 		float         yaw{ 0 };               // the way he faces (radians, MGSV yaw)
 		bool          ready{ false };         // the sandbox plays (else the move is dropped where it is)
+		// MGSV's ladder record while he is on the staged ladder (ladder_rung::Read; -1 = unknown: no seamless climb, he loops
+		// through MGSV's ends as before): the rung pair he is on, the one he climbs to, the ladder's top one.
+		int           rung{ -1 }, rungTarget{ -1 }, rungTop{ -1 };
 	};
+
+	// Seamless long ladders: MGSV's ladder is 8 m (top rung pair 16; the bottom mount puts him on 5, a rung pair is 0.5 m). Climbing
+	// up, once he is on (or climbs to) the pair two below the top he is moved kRecycleSpan pairs (3 m) down the same ladder; climbing
+	// down, once on (or to) the pair two above the bottom mount's, kRecycleSpan up. MGSV's climb goes on from there with the same
+	// pose, so it never reaches its climb-over or step-off. 0 = nothing to do (unknown record, a ladder under 6 m, or not there).
+	inline constexpr int kRecycleSpan = 6;
+	inline constexpr int kRecycleLow = 7;  // ... the lowest pair a down climb is let reach (the step-off comes below 5)
+	int RecycleShift(bool a_down, int a_rung, int a_target, int a_top);
+
+	// The way home ends only with Snake back on the sandbox: within kHomeRadius of where he stood (horizontally). A placement home
+	// that didn't take him there (he was still on MGSV's ladder: no placement reaches him there; or it failed) is tried again, up to
+	// kReturnTries in all, waiting kHomeWaitMs for each to land; then MGSV's Warp (Step::warpHome).
+	inline constexpr float         kHomeRadius = 2.0f;
+	inline constexpr int           kReturnTries = 3;
+	inline constexpr std::uint64_t kHomeWaitMs = 250;
 
 	enum class Phase
 	{
@@ -141,20 +166,28 @@ namespace phantom::guest::climb::plan
 		// a_home: Snake's feet on the sandbox and his facing (radians) to come back to.
 		void Start(const LadderSite& a_site, const LadderGeometry& a_geo, bool a_down, float a_speed, const Vec3& a_home, float a_homeYaw,
 			std::uint64_t a_nowMs);
-		// a = 1 again while climbing: a new direction or speed (no new mount).
+		// a = 1 again while climbing: a new direction or speed (no new mount). Not while Ending(): that climb is over (Climb.cpp
+		// keeps the new one for after it).
 		void Change(bool a_down, float a_speed);
 		void Stop(std::uint64_t a_nowMs);
 		Step Update(const Facts& a_facts, double a_dt);
-		// The placement of the last Step was refused (the native call failed): the move ends where he is.
-		void PlacementFailed();
+		// The placement of the last Step was refused (the native call failed): on the way home it is tried again next frame (up to
+		// kReturnTries, then Step::warpHome); anywhere else he goes home from where he is.
+		void PlacementFailed(std::uint64_t a_nowMs);
+		// The climb is on its way out (a = 0 came, or he is leaving MGSV's ladder / going home): a new a = 1 is a new climb.
+		[[nodiscard]] bool Ending() const { return phase_ != Phase::kIdle && (stopAsked_ || phase_ == Phase::kLeave || phase_ == Phase::kReturn); }
 
 		[[nodiscard]] Phase Current() const { return phase_; }
 		[[nodiscard]] bool  Active() const { return phase_ != Phase::kIdle; }
 		[[nodiscard]] bool  Down() const { return down_; }
 		[[nodiscard]] int   Loops() const { return loops_; }
+		[[nodiscard]] int   Recycles() const { return recycles_; }  // rung shifts handed out (seamless: no climb-over)
+		// The last rung shift was refused (the record moved under it or isn't there): no more this climb -- MGSV's ends again.
+		void ShiftFailed() { noRecycle_ = true; }
 		[[nodiscard]] float Climbed() const { return climbed_; }
 		[[nodiscard]] const Pacer& Pace() const { return pacer_; }
 		[[nodiscard]] std::uint64_t MountedMs() const { return mountedMs_; }  // Y -> on the ladder (last mount)
+		[[nodiscard]] float HomeYaw() const { return homeYaw_; }
 		Timing timing;
 
 	private:
@@ -175,14 +208,18 @@ namespace phantom::guest::climb::plan
 		std::optional<float> lastY_;
 		float          climbed_{ 0 };
 		int            loops_{ 0 };
+		int            recycles_{ 0 };
+		bool           noRecycle_{ false };
 		int            mounts_{ 0 };
 		int            mountTries_{ 0 };
 		int            faceRetries_{ 0 };
 		std::uint64_t  offSince_{ 0 };
 		float          leaveY_{ 0 };
 		bool           droppedOff_{ false };
-		bool           leaveTried_{ false };  // the way home went through kLeave once (he was still on the ladder)  // a = 0 dropped him off the ladder: his landing is cancelled after the home placement
+		bool           leaveTried_{ false };  // the way home went through kLeave once (he was still on the ladder)
 		std::uint64_t  standSince_{ 0 };
+		int            returnTries_{ 0 };     // placements home handed out (kReturnTries)
+		int            placeFails_{ 0 };      // ... and refused by the native call
 	};
 
 	// A real obstacle Snake is staged at for a climb-up or a vault: where he stands (feet) and which way he faces (degrees), and
@@ -196,10 +233,11 @@ namespace phantom::guest::climb::plan
 		bool  cutAtTop{ false };  // a climb-up played on a vault site: over once he is on top (before he drops down its far side)
 	};
 
-	// Which site a kHEvMantle gets: a vault (b = 1) the vault site; a climb-up the low one up to a_lowMaxCm, the high one above
-	// (either when only one is set), else the vault site cut at its top (cutAtTop). Invalid = none fits.
+	// Which site a kHEvMantle gets: a vault (b = 1) the vault site; a climb-up the step one up to a_stepMaxCm (when set), the low one
+	// up to a_lowMaxCm, the high one above (either when only one is set), else the vault site cut at its top (cutAtTop). Invalid =
+	// none fits.
 	MantleSite PickMantle(int a_heightCm, bool a_vault, const MantleSite& a_vaultSite, const MantleSite& a_low, const MantleSite& a_high,
-		int a_lowMaxCm);
+		int a_lowMaxCm, const MantleSite& a_step = {}, int a_stepMaxCm = 0);
 
 	// A climb-up or vault: Start .. done (it ends by itself).
 	class Mantle
@@ -215,12 +253,13 @@ namespace phantom::guest::climb::plan
 
 		void Start(const MantleSite& a_site, const Vec3& a_home, float a_homeYaw, std::uint64_t a_nowMs);
 		Step Update(const Facts& a_facts);
-		void PlacementFailed();
+		void PlacementFailed(std::uint64_t a_nowMs);  // as Ladder::PlacementFailed
 
 		[[nodiscard]] Phase Current() const { return phase_; }
 		[[nodiscard]] bool  Active() const { return phase_ != Phase::kIdle; }
 		[[nodiscard]] std::uint64_t MoveMs() const { return moveMs_; }  // the last move: Y -> back in NORMAL_ACTION
 		[[nodiscard]] float Rose() const { return rose_; }              // ... and how high his root rose
+		[[nodiscard]] float HomeYaw() const { return homeYaw_; }
 		Timing timing;
 
 	private:
@@ -241,5 +280,53 @@ namespace phantom::guest::climb::plan
 		std::uint64_t standSince_{ 0 };
 		int           faceRetries_{ 0 };
 		bool          cut_{ false };  // the move was cut short (dmoff): once more after the placement home
+		int           returnTries_{ 0 };
+		int           placeFails_{ 0 };
+	};
+	// After a move is over (Climb.cpp Finish) MGSV's root settles 0.5-0.9 m forward over a few frames (live, 0.5.0), which Elden
+	// Ring's puppet would walk: the odometer stays still until kCapMs. Before the 0.6.0 review it stayed still for the whole
+	// 300 ms whatever the player did -- with the time MGSV takes Snake home that was the 0.2-0.5 s of a dead stick after a ladder.
+	// Now a push of the player's own left stick ends it at once (MGSV moves Snake with it from that frame; the settle's first
+	// centimetres may count with it). A stick held through the ladder's end never reaches MGSV's pad (the host holds it neutral
+	// until released: er/InputBridge.cpp HoldLeftStickUntilReleased), so only a fresh push counts.
+	class OdoThaw
+	{
+	public:
+		static constexpr std::uint64_t kCapMs = 300;
+		static constexpr int           kStickDeadZone = 7849;  // XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE
+
+		enum class Why : std::uint8_t
+		{
+			kStill,  // keep it still this frame
+			kStick,  // the player pushed the stick
+			kCap,    // kCapMs over
+		};
+		void Start(std::uint64_t a_nowMs)
+		{
+			since_ = a_nowMs;
+			active_ = true;
+		}
+		void Cancel() { active_ = false; }
+		// Each frame while Active(): kStill keeps the odometer still; anything else ends it (Active() false from then).
+		Why Update(std::uint64_t a_nowMs, int a_stickX, int a_stickY)
+		{
+			if (!active_) {
+				return Why::kCap;
+			}
+			const bool pushed = a_stickX > kStickDeadZone || a_stickX < -kStickDeadZone || a_stickY > kStickDeadZone || a_stickY < -kStickDeadZone;
+			const Why  why = pushed ? Why::kStick : a_nowMs - since_ >= kCapMs ? Why::kCap : Why::kStill;
+			if (why != Why::kStill) {
+				active_ = false;
+				endedAfter_ = a_nowMs - since_;
+			}
+			return why;
+		}
+		[[nodiscard]] bool          Active() const { return active_; }
+		[[nodiscard]] std::uint64_t EndedAfterMs() const { return endedAfter_; }
+
+	private:
+		std::uint64_t since_{ 0 };
+		std::uint64_t endedAfter_{ 0 };
+		bool          active_{ false };
 	};
 }

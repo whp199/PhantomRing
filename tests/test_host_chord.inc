@@ -2,6 +2,7 @@
 // FallWatch) against the synthetic world.
 #include "Chord.h"
 #include "Ladder.h"
+#include "VirtualPad.h"
 
 namespace
 {
@@ -17,6 +18,10 @@ namespace
 		std::uint64_t   guestRealStartMs{ 0 };  // ...and the real Start, unmasked, in MGSV's menu (MGSV takes it there)
 		bool            sawErStart{ false }, sawErView{ false }, sawGuestStart{ false };
 		std::uint64_t   firstErStart{ 0 };  // when Elden Ring first saw Start since Clear()
+
+		// These cases were written for the iDroid opening at view_hold_ms while View is still held (idroid_open_ms 0, before
+		// 0.6.0): the iDroid-then-chord timings below need it there. TestQuickItem has the default (at the release, or 1 s).
+		GateRun() { params.idroidOpenMs = 0; }
 
 		void Step(bool a_start, bool a_view, PadGate::Mode a_mode, std::uint64_t a_ms)
 		{
@@ -260,6 +265,31 @@ static void TestChord()
 	}
 }
 
+// The test virtual pad (er/VirtualPad.h, console `input virtualpad on|exclusive|shared|off`): exclusive hides every real pad
+// (2026-10-31: the player's DualSense, its stick resting pushed, walked Snake through a scripted run); shared and off leave a
+// real one as it is (a player's [Keyboard] virtual_pad is shared).
+static void TestVirtualPad()
+{
+	using V = VirtualPadMode;
+	// Exclusive: user 0 is the neutral virtual pad whether a real one is there or not; users 1-3 report nothing.
+	CHECK(VirtualPadPoll(V::kExclusive, 0, true) == PadPoll::kVirtual);
+	CHECK(VirtualPadPoll(V::kExclusive, 0, false) == PadPoll::kVirtual);
+	for (std::uint32_t i = 1; i < 4; ++i) {
+		CHECK(VirtualPadPoll(V::kExclusive, i, true) == PadPoll::kDisconnected);
+		CHECK(VirtualPadPoll(V::kExclusive, i, false) == PadPoll::kDisconnected);
+	}
+	// Shared: only an empty user 0; a real pad (on 0 or elsewhere) as it is.
+	CHECK(VirtualPadPoll(V::kShared, 0, false) == PadPoll::kVirtual);
+	CHECK(VirtualPadPoll(V::kShared, 0, true) == PadPoll::kReal);
+	CHECK(VirtualPadPoll(V::kShared, 1, true) == PadPoll::kReal && VirtualPadPoll(V::kShared, 2, false) == PadPoll::kReal);
+	// Off: everything real.
+	for (std::uint32_t i = 0; i < 4; ++i) {
+		CHECK(VirtualPadPoll(V::kOff, i, true) == PadPoll::kReal && VirtualPadPoll(V::kOff, i, false) == PadPoll::kReal);
+	}
+	CHECK(std::string(VirtualPadName(V::kExclusive)) == "exclusive" && std::string(VirtualPadName(V::kShared)) == "shared" &&
+	      std::string(VirtualPadName(V::kOff)) == "off");
+}
+
 // The fall watchdog (roadmap 1.3): a chasm with no ground at all past z = 20 (a kill volume would end it in Elden Ring;
 // under NoDead nothing does). The ledge fall into the synthetic world's 5 m pit lands and never fires it.
 static void TestFallWatch()
@@ -332,6 +362,10 @@ static void TestLadder()
 {
 	using phantom::er::LadderHandOver;
 	using Ev = LadderHandOver::Event;
+	// The climb over for good (MGSV told then, so it has Snake home before the settle ends): none after EndTop / EndBottom only.
+	CHECK(phantom::er::LadderEndedForGood(6, -1) && phantom::er::LadderEndedForGood(7, -1));
+	CHECK(!phantom::er::LadderEndedForGood(2, -1) && !phantom::er::LadderEndedForGood(9, -1) && !phantom::er::LadderEndedForGood(14, -1));  // a flicker
+	CHECK(!phantom::er::LadderEndedForGood(6, 6) && !phantom::er::LadderEndedForGood(-1, -1) && !phantom::er::LadderEndedForGood(6, 8));
 	LadderHandOver::Input in;
 	in.nowMs = 1000;
 	in.snake = true;
@@ -493,6 +527,38 @@ static void TestClimbPace()
 		ClimbPace p;
 		const auto o = p.Update(5000, 1, 19.0f, 1.2f);
 		CHECK(o.send && o.on && o.down);
+	}
+	{  // no default speed to tell: a moving climb sends "unknown" (-1, MGSV's own pace), never 0 -- which is "still on the rungs"
+		// (review 2026-10-31: the guest read 0 as unknown and climbed on while the Tarnished hung still)
+		ClimbPace p;
+		auto o = p.Update(1000, 0, 0.0f, 0.0f);
+		CHECK(o.send && o.motion == 1 && o.speed < 0.0f);
+		ClimbPace still;
+		o = still.Update(1000, 8, 0.0f, 1.2f);  // the first state an idle one: still on the rungs
+		CHECK(o.send && o.motion == 0 && o.speed == 0.0f);
+	}
+	{  // an origin shift mid-climb (live: 32 m at Fort Haight's tower) is no speed
+		ClimbPace p;
+		std::uint64_t now = 1000;
+		float         y = 0.0f;
+		p.Update(now, 0, y, 1.2f);
+		for (int i = 0; i < 120; ++i) {
+			now += 16;
+			y += 1.1f * 0.016f;
+			p.Update(now, (i / 40) % 2 ? 3 : 2, y, 1.2f);
+		}
+		const float before = p.Speed();
+		y -= 32.0f;
+		p.Shift(-32.0f);
+		now += 16;
+		y += 1.1f * 0.016f;
+		const auto o = p.Update(now, 2, y, 1.2f);
+		CHECK(!o.send && Near(p.Speed(), before, 0.05f));
+		ClimbPace unshifted;  // the same without Shift: one frame of 2000 m/s, clamped to 20 and eased in
+		unshifted.Update(1000, 0, 0.0f, 1.2f);
+		unshifted.Update(1016, 2, 0.02f, 1.2f);
+		unshifted.Update(1032, 2, -32.0f, 1.2f);
+		CHECK(unshifted.Speed() > 0.3f);
 	}
 }
 

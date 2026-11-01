@@ -381,13 +381,23 @@ namespace phantom::er::MemDiff
 				i.ki.wVk = vk;
 				i.ki.wScan = static_cast<WORD>(::MapVirtualKeyW(vk, MAPVK_VK_TO_VSC));
 			}
-			in[0].ki.dwFlags = w[1] == "keyup" ? KEYEVENTF_KEYUP : 0;
-			in[1].ki.dwFlags = KEYEVENTF_KEYUP;
+			// The arrows and the other keys of the extended block: without the flag their scan code is the numpad's (DirectInput, which
+			// Elden Ring reads, then sees Numpad 2 for the down arrow: its menus never moved).
+			const bool  extended = (vk >= VK_PRIOR && vk <= VK_DOWN) || vk == VK_INSERT || vk == VK_DELETE || vk == VK_RCONTROL || vk == VK_RMENU ||
+			                       vk == VK_DIVIDE || vk == VK_NUMLOCK;
+			const DWORD ext = extended ? KEYEVENTF_EXTENDEDKEY : 0;
+			in[0].ki.dwFlags = (w[1] == "keyup" ? KEYEVENTF_KEYUP : 0) | ext;
+			in[1].ki.dwFlags = KEYEVENTF_KEYUP | ext;
 			n = w[1] == "key" ? 2 : 1;
 		} else if (w.size() > 1 && w[1] == "kbm") {
 			return Kbm::Command(w.size() > 2 ? w[2] : std::string(), w.size() > 3 ? w[3] : std::string());  // [Keyboard] (er/Kbm.h)
 		} else if (w.size() > 2 && w[1] == "virtualpad") {
-			return InputBridge::SetVirtualPad(w[2] == "on");
+			// `on` (test automation) is exclusive: a real controller plugged in (its stick resting pushed, stray presses) reaches
+			// neither game meanwhile. `shared` is the old one: only while no real pad answers on user 0.
+			if (w[2] != "on" && w[2] != "exclusive" && w[2] != "shared" && w[2] != "off") {
+				return "input virtualpad on|exclusive|shared|off";
+			}
+			return InputBridge::SetVirtualPad(w[2] != "off", w[2] != "shared");
 		} else if (w.size() > 3 && w[1] == "mouse") {
 			in[0].type = INPUT_MOUSE;
 			in[0].mi.dx = std::strtol(w[2].c_str(), nullptr, 10);
@@ -416,7 +426,7 @@ namespace phantom::er::MemDiff
 			}
 			n = 1;
 		} else {
-			return "input key|keydown|keyup <vk> | mouse <dx> <dy> | wheel <notches> | mbutton left|right|middle down|up | virtualpad on|off | "
+			return "input key|keydown|keyup <vk> | mouse <dx> <dy> | wheel <notches> | mbutton left|right|middle down|up | virtualpad on|exclusive|shared|off | "
 			       "kbm [on|off|sens|accel|antidz|smooth|minspeed <v>]";
 		}
 		const UINT sent = ::SendInput(n, in, sizeof(INPUT));

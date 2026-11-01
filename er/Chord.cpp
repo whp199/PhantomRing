@@ -13,6 +13,8 @@ namespace phantom::er
 		const bool              chordOn = a_p.chordMs > 0;
 		const std::uint64_t     wait = chordOn && a_p.startWaitMs > 0 ? static_cast<std::uint64_t>(a_p.startWaitMs) : 0;
 		const bool              idroid = a_in.mode == Mode::kSnake && a_p.viewHoldMs > 0;  // else View works like Start
+		// View held this long opens the iDroid while still down; shorter (from viewHoldMs) at its release.
+		const std::uint64_t     openMs = static_cast<std::uint64_t>(std::max(a_p.viewHoldMs, a_p.idroidOpenMs));
 
 		// Presses and releases.
 		bool startPressed = false;
@@ -33,7 +35,13 @@ namespace phantom::er
 					++o.menuPresses;
 				}
 			} else if (!a_down && b.down) {
-				if (armed && b.tracked && !b.passed && !b.consumed && !b.toGuest) {
+				if (armed && b.tracked && !b.passed && !b.consumed && !b.toGuest && &b == &view_ && idroid &&
+					now - b.downAt >= static_cast<std::uint64_t>(a_p.viewHoldMs)) {
+					// View held past view_hold_ms and let go before idroid_open_ms (no item press, no chord): MGSV's iDroid now.
+					b.toGuest = true;
+					guestStartUntil_ = now + static_cast<std::uint64_t>(a_p.idroidStartMs > 0 ? a_p.idroidStartMs : 0);
+					o.viewToGuest = true;
+				} else if (armed && b.tracked && !b.passed && !b.consumed && !b.toGuest) {
 					b.tapUntil = now + kTapMs;  // released before the wait: Elden Ring gets the tap now
 					++o.menuPresses;
 				}
@@ -97,7 +105,7 @@ namespace phantom::er
 				return;
 			}
 			if (a_idroid) {
-				if (now - b.downAt >= static_cast<std::uint64_t>(a_p.viewHoldMs)) {
+				if (now - b.downAt >= openMs) {
 					b.toGuest = true;
 					guestStartUntil_ = now + static_cast<std::uint64_t>(a_p.idroidStartMs > 0 ? a_p.idroidStartMs : 0);
 					o.viewToGuest = true;
@@ -109,6 +117,35 @@ namespace phantom::er
 		};
 		hold(start_, false);
 		hold(view_, idroid);
+
+		// The quick item's shift ([Flask]): View down and still undecided -- or already the shift's -- when the item or cycle button
+		// goes down. View is then the shift's (consumed: no map tap, no iDroid, no chord), and the press stays out of MGSV's pad
+		// until released.
+		const bool shiftOk = a_p.itemShift && a_in.mode == Mode::kSnake && view_.down && view_.tracked && !view_.toGuest && !view_.chord &&
+		                     (view_.undecided() || view_.shift);
+		// Tarnished mode: Elden Ring gets the item / cycle press itself (its X drinks); View, still undecided, then opens no map.
+		const bool tarnishedShift = a_p.itemShift && a_in.mode == Mode::kTarnished && view_.down && view_.tracked && !view_.chord &&
+		                            (view_.undecided() || view_.shift);
+		auto shiftEdge = [&](bool a_down, bool& a_was, bool& a_held, int& a_count) {
+			if (a_down && !a_was) {
+				a_held = shiftOk;
+				if (shiftOk) {
+					++a_count;
+					view_.consumed = true;
+					view_.shift = true;
+				} else if (tarnishedShift) {
+					view_.consumed = true;
+					view_.shift = true;
+				}
+			} else if (!a_down) {
+				a_held = false;
+			}
+			a_was = a_down;
+		};
+		shiftEdge(a_in.item, itemDown_, itemHeld_, o.itemUses);
+		shiftEdge(a_in.cycle, cycleDown_, cycleHeld_, o.itemCycles);
+		o.guestMaskItem = itemHeld_;
+		o.guestMaskCycle = cycleHeld_;
 
 		auto seen = [&](const Button& b) { return (b.down && (b.raw || b.passed)) || now < b.tapUntil; };
 		if (a_in.mode != Mode::kGuestMenu) {

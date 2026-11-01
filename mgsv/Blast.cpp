@@ -83,12 +83,13 @@ namespace phantom::guest::blast
 				}
 			}
 			if (source != Source::kThrown) {
-				bool setOff = false;
-				if (const auto id = placed::MatchBlast(a_at, a_kind, &setOff)) {
+				bool setOff = false, dropped = false;
+				if (const auto id = placed::MatchBlast(a_at, a_kind, &setOff, &dropped)) {
 					a_what = "placed";
 					// MGSV's mines answer MGSV's characters: D-Walker walking into a claymore (live: one went off the moment it
 					// was placed next to the walker), a grenade's blast next to a mine. In Elden Ring only its enemies set them off.
-					a_mgsvWorld = !setOff && (MineAttack(a_attack) || (a_attack >= 284 && a_attack <= 287));
+					// One Elden Ring forgot at the Tarnished's death is MGSV's world whatever set it off.
+					a_mgsvWorld = dropped || (!setOff && (MineAttack(a_attack) || (a_attack >= 284 && a_attack <= 287)));
 					a_ours = setOff;
 					return id;
 				}

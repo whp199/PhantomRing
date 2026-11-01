@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <optional>
@@ -152,6 +153,7 @@ namespace phantom::guest::link
 		{
 			const std::wstring where = *static_cast<std::wstring*>(a_where);
 			delete static_cast<std::wstring*>(a_where);
+			UnixPid();  // the /proc lookup (UnixPidFromProc) here, not in DllMain: it logs the pid
 			bool         loggedWait = false, loggedVersion = false;
 			std::optional<std::uint64_t> mappedId;
 			std::int64_t lastHostSeen = Qpc();
@@ -281,6 +283,9 @@ namespace phantom::guest::link
 		// W); but it looks paths up (stat) in the calling process, so Z:\proc\self\task\<n> exists only for MGSV's own
 		// threads. The first such n above W (MGSV starts after its wineserver; below it as well, for a pid counter that wrapped)
 		// is one of MGSV's threads, and its /proc status says whose (Tgid). Measured under Proton's wine: 67-137 probes, 2-4 ms.
+		// A long-lived wineserver (system Wine's, or Proton's lingering on after a long session) can sit far below MGSV's pids: then the
+		// newest pid the kernel handed out (/proc/loadavg's last field) is looked down from, as the host does (er/Link.cpp).
+		// Run on the link's worker thread, never in DllMain: a miss can take seconds of probes, and the fallback makes a thread.
 		// The answer goes into PHANTOMRING_GUEST_UNIX_PID, which phantom::UnixPid reads before it would try the stub.
 		void UnixPidFromProc()
 		{
@@ -299,6 +304,33 @@ namespace phantom::guest::link
 			for (std::uint32_t n = server + 1; server && n < kPidMax && probes < kProbes && !tid; ++n) {
 				tid = mine(n) ? n : 0;
 			}
+			if (!tid) {
+				// A long-lived wineserver: its pid is far below ours. The kernel hands out pids in order, and /proc/loadavg's last field
+				// is the newest one: a thread made now is at most a few behind it.
+				const HANDLE wake = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+				const HANDLE fresh = wake ? ::CreateThread(nullptr, 0, [](LPVOID a_wake) -> DWORD { return ::WaitForSingleObject(a_wake, 5000); }, wake, 0, nullptr)
+				                          : nullptr;
+				char  text[128]{};
+				DWORD got = 0;
+				if (const HANDLE f = ::CreateFileW(L"Z:\\proc\\loadavg", GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr); f != INVALID_HANDLE_VALUE) {
+					::ReadFile(f, text, sizeof(text) - 1, &got, nullptr);
+					::CloseHandle(f);
+				}
+				const char*         last = got ? std::strrchr(text, ' ') : nullptr;
+				const std::uint32_t newest = last ? static_cast<std::uint32_t>(std::strtoul(last + 1, nullptr, 10)) : 0;
+				for (std::uint32_t n = newest; n > 1 && newest - n < 20000 && !tid; --n) {
+					tid = mine(n) ? n : 0;
+				}
+				if (wake) {
+					::SetEvent(wake);
+					if (fresh) {
+						::WaitForSingleObject(fresh, 1000);
+						::CloseHandle(fresh);
+					}
+					::CloseHandle(wake);
+				}
+			}
+			// Below the wineserver last (a pid counter that wrapped), only if the newest pid didn't find one.
 			for (std::uint32_t n = 2; server && n < server && probes < 2 * kProbes && !tid; ++n) {
 				tid = mine(n) ? n : 0;
 			}
@@ -324,7 +356,7 @@ namespace phantom::guest::link
 		::QueryPerformanceFrequency(&f);
 		g_qpcFreq = f.QuadPart > 0 ? f.QuadPart : 1;
 		g_lastGameTick.store(Qpc());
-		Log::Info("link: unix pid {}, mapping {}", UnixPid(), Narrow(a_where));
+		Log::Info("link: mapping {} (the unix pid is looked up on the link's thread)", Narrow(a_where));
 		if (HANDLE t = ::CreateThread(nullptr, 0, &Worker, new std::wstring(a_where), 0, nullptr)) {
 			::CloseHandle(t);
 		} else {

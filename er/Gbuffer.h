@@ -43,6 +43,10 @@ namespace phantom::er::Gbuffer
 	bool RecordGbuffer(render::Recording& a_rec, const RenderSnapshot* a_snap, UINT a_count, ID3D12CommandList* const* a_lists, bool a_peekHere = true);
 	bool PeekPending();
 	bool RecordPeek(render::Recording& a_rec);
+	// [Render] min_ambient > 0: after Elden Ring's last G-buffer list, before its lighting -- Snake's albedo x min_ambient into RT4 (its
+	// emissive term) where he is still the nearest surface (read-only depth). Its own submission, before a pending peek's.
+	bool WantsEmissive(const RenderSnapshot* a_snap);
+	bool RecordEmissive(render::Recording& a_rec, const RenderSnapshot* a_snap);
 	// After Elden Ring's object-velocity pass: Snake's motion vectors.
 	bool RecordVelocity(render::Recording& a_rec, const RenderSnapshot* a_snap);
 	// A submission that recorded a peek completed up to a_fence: read it back (Present thread).

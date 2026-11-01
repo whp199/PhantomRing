@@ -12,7 +12,9 @@
 #include "Fulton.h"
 #include "Kinematic.h"
 #include "Mantle.h"
+#include "StagedFacing.h"
 #include "DiveHop.h"
+#include "ErPresses.h"
 #include "Link.h"
 #include "Revival.h"
 #include "Log.h"
@@ -364,8 +366,9 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.input == d.input && shipped.puppet == d.puppet && shipped.camera == d.camera && shipped.console == d.console && shipped.actors == d.actors &&
 	      shipped.debugDraw == d.debugDraw && shipped.buddy == d.buddy);
 	CHECK(shipped.userIndex == d.userIndex && shipped.allowButtons == d.allowButtons && shipped.menuLearn == d.menuLearn && shipped.menuUiStates.empty() &&
+	      shipped.dialogUiStates == d.dialogUiStates &&
 	      shipped.menuLatchMs == d.menuLatchMs && shipped.promptButton == d.promptButton && shipped.interactionHudState == d.interactionHudState &&
-	      shipped.interactionMinMs == d.interactionMinMs && shipped.interactionMaxMs == d.interactionMaxMs && shipped.viewHoldMs == d.viewHoldMs && shipped.guestIdroidStartMs == d.guestIdroidStartMs && shipped.releasePrompts == d.releasePrompts && shipped.releaseMs == d.releaseMs &&
+	      shipped.interactionMinMs == d.interactionMinMs && shipped.interactionMaxMs == d.interactionMaxMs && shipped.viewHoldMs == d.viewHoldMs && shipped.idroidOpenMs == d.idroidOpenMs && shipped.guestIdroidStartMs == d.guestIdroidStartMs && shipped.releasePrompts == d.releasePrompts && shipped.releaseMs == d.releaseMs &&
 	      shipped.startWaitMs == d.startWaitMs && shipped.chordMs == d.chordMs && shipped.chordWindowMs == d.chordWindowMs && shipped.restPrompts == d.restPrompts && shipped.menuKeys == d.menuKeys &&
 	      shipped.guestMenuOwnsPad == d.guestMenuOwnsPad && shipped.padGlyphDevice == d.padGlyphDevice);
 	CHECK(d.promptButton == 0x8000);  // Y: Elden Ring's event action on an Xbox pad (VERIFIED live)
@@ -442,6 +445,49 @@ static void TestRevival()
 	CHECK(Revived(in));
 	in.alive = false;
 	CHECK(!Revived(in));
+
+	// The puppet stopping during Snake's death (0.6.0: seen once, 2.4 s after Snake died the Tarnished knelt on screen and Snake
+	// wasn't drawn): whatever stops it while a death is under way, the Tarnished stays hidden and Snake drawn until the respawn.
+	CHECK(AtStop(true, false, false, false) == StopVisual::kHiddenForDeath);   // the dead bit
+	CHECK(AtStop(false, false, true, false) == StopVisual::kHiddenForDeath);   // killed for Snake, the dead bit not up yet: the chord,
+	CHECK(AtStop(false, true, false, false) == StopVisual::kHiddenForDeath);   // ...a step-aside, MGSV's heartbeat, a ladder
+	CHECK(AtStop(false, true, true, true) == StopVisual::kHiddenForDeath);     // a death on the ladder: a death's (the respawn shows him)
+	CHECK(AtStop(false, false, false, true) == StopVisual::kHiddenForClimb);   // a ladder climb, nobody dying
+	CHECK(AtStop(false, false, false, false) == StopVisual::kShow);            // Tarnished mode, the mist, `puppet off`
+
+	// Why the puppet stops (review of 0.6.0): the dead bit on its own character comes before every other reason -- MGSV's heartbeat
+	// lost, a stray View+Start, a step-aside or a ladder in a death's first frames used to win and show the Tarnished dying.
+	{
+		StopInput s;
+		CHECK(StopReason(s) == nullptr);  // nothing: it runs on
+		s.dead = true;
+		s.guestAlive = false;
+		s.tarnished = s.stepAside = s.ladder = true;
+		s.allowed = false;
+		CHECK(std::string(StopReason(s)) == "player dead");
+		s.dead = false;
+		CHECK(std::string(StopReason(s)) == "guest lost");
+		s.guestAlive = true;
+		CHECK(std::string(StopReason(s)) == "Tarnished mode");
+		s.tarnished = false;
+		CHECK(std::string(StopReason(s)).starts_with("stepping aside"));
+		s.stepAside = false;
+		CHECK(std::string(StopReason(s)).starts_with("a ladder"));
+		s = {};
+		s.dead = true;
+		s.samePlayer = false;  // another character's dead bit (a load): not this puppet's death
+		CHECK(std::string(StopReason(s)) == "player object changed");
+		s = {};
+		s.dead = true;
+		s.inGame = false;  // a dead bit read under a load counts as the load
+		CHECK(std::string(StopReason(s)) == "loading");
+		s = {};
+		s.allowed = false;
+		CHECK(std::string(StopReason(s)) == "disabled");
+	}
+	// View + Start while dying: ignored (er/Host.cpp UpdateTarnished), any other time it toggles.
+	CHECK(ChordRefusedWhileDying(true));
+	CHECK(!ChordRefusedWhileDying(false));
 }
 
 static void TestInteraction()
@@ -639,6 +685,20 @@ static void TestMenuGroups()
 	CHECK(!FullScreenMenu(false, false, true, false, false));  // the HUD hides with no menu (a grace, a dialog): not ours
 	CHECK(!FullScreenMenu(false, true, false, false, false));  // already hidden when the menu opened (no transition)
 	CHECK(!FullScreenMenu(true, true, false, false, true));    // a cutscene
+
+	// Elden Ring's dialog box (live 2026-10-31: Memory of Grace's question came up as its inventory closed, no press, no menu open,
+	// its UI state 0x2b already "HUD too"): a menu while visible (03 / 07), whatever else is up; not once it is gone.
+	using phantom::er::MenuWatch::DialogOpen;
+	std::vector<std::uint8_t> box(0x46, 0);
+	box[0x07] = 0x03;  // the in-game HUD
+	CHECK(!DialogOpen({ 0x2b }, box));
+	box[0x2b] = 0x03;
+	CHECK(DialogOpen({ 0x2b }, box));
+	box[0x2b] = 0x07;
+	CHECK(DialogOpen({ 0x2b }, box));
+	box[0x2b] = 0x01;  // created, hidden
+	CHECK(!DialogOpen({ 0x2b }, box));
+	CHECK(!DialogOpen({}, box) && !DialogOpen({ 0x2b }, {}) && !DialogOpen({ 0x50 }, box));
 }
 
 #include "test_host_overlay.inc"
@@ -650,6 +710,7 @@ static void TestMenuGroups()
 #include "test_host_timeskip.inc"
 #include "test_host_hop.inc"
 #include "test_host_mantle.inc"
+#include "test_host_quickitem.inc"
 
 // The real host link + console (er/Link.cpp, er/Console.cpp) against a live guest on a_where -- fake_mgsv.py
 // or the real guest link -- driven by tools/phantomring/test_plugins.py. Prints one "PEER {json}" line.
@@ -754,10 +815,13 @@ int main(int argc, char** argv)
 	TestBuddyOrders();
 	TestPacing();
 	TestChord();
+	TestVirtualPad();
 	TestFallWatch();
 	TestLadder();
 	TestClimbPace();
 	TestMantle();
+	TestStagedFacing();
+	TestQuickItem();
 	TestSupportedStart();
 	TestCeiling();
 	TestGround();

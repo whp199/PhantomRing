@@ -39,7 +39,9 @@ namespace phantom::guest::logic
 	Vec3  BesideOf(const Vec3& a_at, float a_yaw, float a_ahead, float a_side);
 	// Where someone at a_at moving at a_velocity will be in a_seconds (horizontal only, at most a_maxAhead metres on);
 	// a_at itself below a_minSpeed (standing, shuffling: no lead).
-	Vec3  LeadPoint(const Vec3& a_at, const Vec3& a_velocity, float a_seconds, float a_maxAhead, float a_minSpeed);
+	// a_minAhead: once he moves (a_minSpeed), at least this far ahead -- a walker sent to a spot within ~3 m of it doesn't walk at
+	// all (MGSV's arrival radius: live 2026-10-31, the order at Snake's start was taken and ignored), so a start reaches past it.
+	Vec3  LeadPoint(const Vec3& a_at, const Vec3& a_velocity, float a_seconds, float a_maxAhead, float a_minSpeed, float a_minAhead = 0.0f);
 	Vec3  TransformPoint(const float a_m[16], const Vec3& a_p);
 	// Rotation part of a row-major (row-vector) matrix as a unit quaternion xyzw, i.e. the q with
 	// RotateByQuat(q, v) == v * M for the basis rows. Rows are normalised first (Fox roots may carry scale).
@@ -227,6 +229,25 @@ namespace phantom::guest::logic
 	// Counts rising edges of a flag (the host's kHostPuppeting): the host forgets every placed explosive when its puppet
 	// stops (a death, a load, an MGSV stall over the heartbeat timeout) without re-attaching, so each new start of the
 	// puppet is a new audience that must hear about Snake's mines again.
+	// Combat.cpp's strike edge: MGSV's CQC record holds the game frame its current strike began (+0x114, rewritten only by a new
+	// strike: live 2026-10-31) and that strike's attack id (+0x118, kept after the strike). One kGEvMelee per new stamp with an
+	// attack; none on the first look (a strike already under way when the guest attached) and none for attack 0.
+	class StrikeEdge
+	{
+	public:
+		bool Update(std::uint16_t a_stamp, std::uint16_t a_attack)
+		{
+			const bool fresh = primed_ && a_stamp != last_ && a_attack != 0;
+			primed_ = true;
+			last_ = a_stamp;
+			return fresh;
+		}
+
+	private:
+		bool          primed_{ false };
+		std::uint16_t last_{ 0 };
+	};
+
 	class RisingEdges
 	{
 	public:
@@ -240,6 +261,41 @@ namespace phantom::guest::logic
 	private:
 		bool          last_{ false };
 		std::uint32_t count_{ 0 };
+	};
+
+	// Placed.cpp: from the Tarnished's death (HostState kHostPlayerDead) until the puppet runs again with nobody dying, every placed
+	// explosive or decoy of Snake's is dropped (Elden Ring forgets them at the death). Before the 0.6.0 review it ended only at a
+	// new start of the puppet: when Elden Ring refused the kill (its dead bit never came, er/Puppet.cpp gives up after three tries
+	// and sends the respawn) the puppet ran on without a new start, and every mine, C4 and decoy after it was dropped for good.
+	class AfterDeath
+	{
+	public:
+		enum class Change : std::uint8_t
+		{
+			kNone,
+			kDied,       // dropping from now
+			kRestarted,  // the puppet started again after the death (the usual respawn)
+			kRanOn,      // the puppet ran on with the death over (a kill Elden Ring refused)
+		};
+		// a_start: the puppet's start count (RisingEdges of kHostPuppeting) this frame.
+		Change Update(bool a_hostDead, bool a_puppeting, std::uint32_t a_start)
+		{
+			if (a_hostDead && !on_) {
+				on_ = true;
+				deathStart_ = a_start;
+				return Change::kDied;
+			}
+			if (on_ && !a_hostDead && a_puppeting) {
+				on_ = false;
+				return a_start != deathStart_ ? Change::kRestarted : Change::kRanOn;
+			}
+			return Change::kNone;
+		}
+		[[nodiscard]] bool On() const { return on_; }
+
+	private:
+		bool          on_{ false };
+		std::uint32_t deathStart_{ 0 };
 	};
 
 	// ---- shots from ammo counters ---------------------------------------------------------------

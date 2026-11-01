@@ -154,6 +154,8 @@ namespace phantom::guest
 		buddyFollowAhead = static_cast<float>(ini.GetFloat("Buddy", "FollowAhead", buddyFollowAhead));
 		buddyFollowSide = static_cast<float>(ini.GetFloat("Buddy", "FollowSide", buddyFollowSide));
 		buddyFollowLeadSec = static_cast<float>(ini.GetFloat("Buddy", "FollowLeadSec", buddyFollowLeadSec));
+		buddyFollowLeadMin = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "FollowLeadMin", buddyFollowLeadMin)), 0.0f, 8.0f);
+		buddyFollowSettleMs = std::clamp(static_cast<int>(ini.GetInt("Buddy", "FollowSettleMs", buddyFollowSettleMs)), 0, 10000);
 		buddyFollowSteer = ini.GetBool("Buddy", "FollowSteer", buddyFollowSteer);
 		buddyFollowRespectCommands = ini.GetBool("Buddy", "FollowRespectCommands", buddyFollowRespectCommands);
 		buddyFollowSideRunning = static_cast<float>(ini.GetFloat("Buddy", "FollowSideRunning", buddyFollowSideRunning));
@@ -164,6 +166,14 @@ namespace phantom::guest
 		buddyHorseWhistleEveryMs = static_cast<int>(ini.GetInt("Buddy", "HorseWhistleEveryMs", buddyHorseWhistleEveryMs));
 		buddyHorseTreadmill = ini.GetBool("Buddy", "HorseTreadmill", buddyHorseTreadmill);
 		buddyHorseMoveRider = ini.GetBool("Buddy", "HorseMoveRider", buddyHorseMoveRider);
+		buddyWalkerLead = ini.GetBool("Buddy", "WalkerLead", buddyWalkerLead);
+		buddyWalkerLeadSide = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadSide", buddyWalkerLeadSide)), -10.0f, 10.0f);
+		buddyWalkerLeadAhead = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadAhead", buddyWalkerLeadAhead)), -10.0f, 10.0f);
+		buddyWalkerLeadTau = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadTau", buddyWalkerLeadTau)), 0.05f, 5.0f);
+		buddyWalkerLeadMaxSpeed = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadMaxSpeed", buddyWalkerLeadMaxSpeed)), 1.0f, 25.0f);
+		buddyWalkerLeadAcquire = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadAcquire", buddyWalkerLeadAcquire)), 1.0f, 30.0f);
+		buddyWalkerLeadTurnRate = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadTurnRate", buddyWalkerLeadTurnRate)), 0.0f, 30.0f);
+		buddyWalkerTreadmill = ini.GetBool("Buddy", "WalkerTreadmill", buddyWalkerTreadmill);
 
 		const auto hold = Lower(ini.Get("Motion", "Hold", "native_treadmill"));
 		holdMode = hold == "off"                ? HoldMode::kOff
@@ -203,11 +213,14 @@ namespace phantom::guest
 		}
 		climb = ini.GetBool("Climb", "Enabled", climb);
 		Floats(ini.Get("Climb", "Ladder", ""), climbLadder, 4, "[Climb] Ladder", "x, y, z, yaw");
+		climbSeamless = ini.GetBool("Climb", "Seamless", climbSeamless);
 		mantle = ini.GetBool("Mantle", "Enabled", mantle);
 		Floats(ini.Get("Mantle", "Vault", ""), mantleVault, 5, "[Mantle] Vault", "x, y, z, yaw, cm");
 		Floats(ini.Get("Mantle", "Low", ""), mantleLow, 5, "[Mantle] Low", "x, y, z, yaw, cm");
 		Floats(ini.Get("Mantle", "High", ""), mantleHigh, 5, "[Mantle] High", "x, y, z, yaw, cm");
 		mantleLowMaxCm = std::clamp(static_cast<int>(ini.GetInt("Mantle", "LowMaxCm", mantleLowMaxCm)), 0, 300);
+		Floats(ini.Get("Mantle", "Step", ""), mantleStep, 5, "[Mantle] Step", "x, y, z, yaw, cm");
+		mantleStepMaxCm = std::clamp(static_cast<int>(ini.GetInt("Mantle", "StepMaxCm", mantleStepMaxCm)), 0, 300);
 		jobSleepUs = std::clamp(static_cast<int>(ini.GetInt("Pacing", "JobSleepUs", jobSleepUs)), 0, 1000);
 		waitProbe = ini.GetBool("Pacing", "WaitProbe", waitProbe);
 
@@ -246,6 +259,7 @@ namespace phantom::guest
 		mgsvBlasts = ini.GetBool("Combat", "MgsvBlasts", mgsvBlasts);
 		c4Detonator = ini.GetBool("Combat", "C4Detonator", c4Detonator);
 		c4Backup = ini.GetBool("Combat", "C4Backup", c4Backup);
+		placedClearOnDeath = ini.GetBool("Combat", "PlacedClearOnDeath", placedClearOnDeath);
 		c4Buttons = static_cast<std::uint32_t>(ini.GetInt("Combat", "C4Buttons", c4Buttons));
 		c4GraceMs = std::clamp<std::int64_t>(ini.GetInt("Combat", "C4GraceMs", c4GraceMs), 0, 5000);
 		c4DetonateAll = ini.GetBool("Combat", "C4DetonateAll", c4DetonateAll);
@@ -261,6 +275,8 @@ namespace phantom::guest
 		ambience = ini.GetBool("Audio", "Ambience", ambience) && this->music != MusicMode::kMuteAll;
 		radio = ini.GetBool("Audio", "Radio", radio) && this->music != MusicMode::kMuteAll;
 		walkerVolume = static_cast<float>(ini.GetFloat("Audio", "WalkerVolume", walkerVolume));
+		walkerDistance = std::clamp(static_cast<float>(ini.GetFloat("Audio", "WalkerDistance", walkerDistance)), 1.0f, 50.0f);
+		audioMeter = ini.GetBool("Audio", "Meter", audioMeter);
 
 		safePauseMenu = ini.GetBool("Menu", "SafePauseMenu", safePauseMenu);
 		blockMissions = ini.GetBool("Menu", "BlockMissions", blockMissions);
