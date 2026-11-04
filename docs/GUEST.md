@@ -39,7 +39,7 @@ work, live with MGSV and fake_er only (no protocol change).
   then. `DirectInput8Create` also wraps the returned `IDirectInput8W` so that game controllers are hidden.
 - Each feature is gated by its own byte check (`mgsv/Addresses.h` + `Verify.cpp`). A mismatch logs the
   bytes it found and turns off only that feature. `python3 -I mgsv/verify_addresses.py` runs the same
-  checks against the exe on disk; all 104 sites match the local 1.0.15.4.
+  checks against the exe on disk; all 177 sites match the local 1.0.15.4 (2026-11-03).
 
 ## 2. Files
 
@@ -72,6 +72,7 @@ work, live with MGSV and fake_er only (no protocol change).
 | `Sound.*` | Wwise SetPosition/PostEvent detours, D-Walker volume experiment and `!sound` diagnostics (§18.2) |
 | `Horse.*`, `HorseLogic.*` | D-Horse treadmill (§8.1a, `[Buddy] HorseTreadmill`, off): the horse's own location object found near its skin and moved with each treadmill jump; the pure part unit-tested |
 | `Follow.*` | D-Walker follow: whistles, follow spot, steering, out-of-view catch-up (§18.3); D-Horse's whistle (§8.1); the player's buddy orders |
+| `Dog.*`, `DogLogic.*`, `BuddyLocation.*` | D-Dog in Elden Ring (§8.4, `[Dog]`, on; its attacks only while the host's layer is on): its location object moved with the treadmill jumps (Wait, the leash), its attack orders on the host's pick through one dedicated inert soldier (kGEvDogAttack), the observe-only detours of MGSV's dog and the soldier's dog-attack handler; the pure part unit-tested (`test_guest_dog`) |
 | `ActorProxy.*`, `ActorProxyGame.cpp` | ActorProxy v0 (§20, `[Proxies]`, off): disabled soldiers placed at the nearest hostile ER characters, the rest parked; the pure part unit-tested |
 | `FramePace.*` | MGSV's frame rate: its Sleep(1) job polls shortened (`[Pacing] JobSleepUs`), `!pace` timings, wait probe, present experiments (§19) |
 
@@ -439,7 +440,8 @@ Player report (session 6): "buddy CHANGING and DISMISSING supported (MGSV's own 
   `buddyFlags` Present|PosValid, the capture owns its draws (`dog_follow.prrec`: 15465 buddy draws in 859 frames, ~18 a frame).
   It follows Snake by itself (MGSV's dog AI): 20 s run with turns, median 1.9 m, max 5.8 m from him. The treadmill no longer
   sends it (or Quiet) `owarp`: SetPosition is ignored and its `position = Vector3` form put D-Walker at the world origin (18.3);
-  MGSV brings the dog back to Snake itself after a jump. Its combat (attack, mark) needs proxies (20).
+  MGSV brings the dog back to Snake itself after a jump (a 6 m jump in Elden Ring each time, measured 2026-11-03). Since then
+  `[Dog]` (8.4) moves it with the jumps through its own location object and carries out its attack orders on Elden Ring's enemies.
 - **D-Horse** the same way (live): walker -> D-HORSE from the iDroid: `the player deployed D-Horse ... following that choice`,
   whistled over (`D-Horse whistled #1 (deployed from the iDroid)`), its 69-bone skin learned beside Snake 20 s later, buddyFlags
   0x3, the mount prompt on screen; DISMISS D-HORSE -> `the player dismissed D-Horse from the iDroid`, buddy NONE (0), flags 0.
@@ -454,6 +456,183 @@ Player report (session 6): "buddy CHANGING and DISMISSING supported (MGSV's own 
   `D-Walker out again: drawn and placed`, Y mounts it. Seen: D-Dog's coat is drawn in false colours at times (orange/green,
   normal grey at others) and D-Walker right next to the camera in magenta/orange (MGSV's near-camera fade): a material the
   capture doesn't map yet.
+
+### 8.4 D-Dog in Elden Ring (`[Dog]`, `Dog.cpp`, `DogLogic.*`, `BuddyLocation.*`; protocol v17; live 2026-11-03, MGSV + fake_er on `/dev/shm/phantomring_g`)
+
+The design is docs/research/ddog.md (§3.5-3.7); what the live pass settled in MGSV is its §2.10. On by default since the live pass
+below (`[Dog] Enabled`, `Treadmill`, `Attack`, `KeepDrawsNearProxy`; `Announce` is parsed only); `!dog off` (or the switches one by
+one) gives back 0.7.0's D-Dog for a session. **The attacks are taken over only while the host's D-Dog layer is on** (HostState
+`kHostDogLayer`, v17, set while the host's `[Dog] enabled`): with it off an attack order is MGSV's own again, as in 0.7.0 (`dog: the
+player's attack command N left to MGSV (the host's D-Dog layer is off)`) -- before the 0.8.0 review the guest took it over anyway, found
+no pick and whistled the dog back with nothing on screen.
+
+**0.8.0 (review and the integration run with both games, 2026-11-04):**
+- **The style byte's 2 and 4 were swapped.** `+0xD4` is `vars.buddyDogEquipType`; with MGSV's own CHANGE EQUIPMENT (iDroid > MISSIONS >
+  BUDDY SUPPORT, a supply drop, memory only): NAKED 0 -> the call menu's command 11 "Keep 'em busy", TACTICAL (FULTON) 1 -> 15 "Get it",
+  SNEAKING (STUN) 2 -> 13 "Do it (knock out enemy)", BATTLE DRESS 3 -> 14 "Do it (wound enemy)", SNEAKING (KNIFE) 4 -> 12 "Do it (kill
+  enemy)". The knife message's `+0xA` byte is the stun knife's flag (set for 2), not "lethal": the stun knife had gone to the host as a
+  kill with the knife's 25-lives share. `StyleOf` / `AttackIdOfMessage` fixed, and an order's style is now the one its **command** names
+  (`StyleOfCommand`; the byte's is published every frame in buddyFlags bits 8-15 so the host picks for it before any order, and is what
+  `!dog go` with no number uses). Live after the fix: knife -> `knife, lethal`, kill 4420 -> dead; stun knife -> `knife, not lethal
+  (stun)`, the soldier ASLEEP.
+- **The dog system is forgotten while no dog is out** (a re-equip's supply drop, another buddy, a dismissal): MGSV frees it, and its
+  style byte had read ~400 garbage values in the 22 s of one re-deploy (the host's style flipping with them).
+- The player's **Wait** or **DD** during an order ends it without our whistle (it used to undo the Wait at once); an order with no pick
+  while the dog waits leaves it waiting; no pick (or an awake one for "Get it") at the order is looked for again for 350 ms (the host
+  re-picks a frame after the order's kGEvBuddyOrder); the dedicated soldier stays put when Snake walks up to the held enemy (it was
+  parked inside Snake's 3.5 m, which ended MGSV's bite and the host's hold); `!dog attack on` re-arms the alert guard; the job's texts
+  under one lock (a data race between the Lua, game and console threads); a fetch's Connected carries no stale attack id.
+- **D-Dog's commands (8-16) no longer pause D-Walker's following** (Follow.cpp's command detour): a walker deployed after the dog had
+  stood 36 m away until whistled (live); after the fix `!dog player 14` with D-Walker out -> `follow: the player's buddy command 14 (arg
+  0) -- D-Dog's`, and its leads went on.
+- Live with both games (docs/STATUS.md 0.8.0): deploys from the iDroid, Wait (the call menu's command 9: the dog's MGSV place unchanged
+  through two treadmill jumps while Snake ran 15 m away and back), the whistle (command 8, between Wait and the top of the menu), Bark as
+  the player's command, every suit's attack (realized in 0.83-1.03 s, connected 1.7-4.6 s after the order), Get it 12.3 s; 0 alerts and
+  0 warnings in four MGSV sessions; `recordings/ddog_kill_080.prrec` (the knife's kill on the recorder's actor).
+
+**0.8.0 polish (MGSV + the host stand-in, 2026-11-04; docs/research/ddog.md §9 "0.8.0 polish" has the table of causes and numbers):**
+what Elden Ring sees of the dog no longer steps over 0.5 m in a frame -- 10 minutes, 20 orders, ladders, climb-ups, jumps and a Wait
+against a wall: the published place at most 0.32 m a frame (was 93.9 m), the drawn dog 0.42 m (was 1.43 m). No new game address.
+- **The bitten soldier is held** (`proxy::HoldDedicated`, set by Dog.cpp from the accepted attack state to its exit): ActorProxy no
+  longer puts him back onto the Elden Ring enemy's place on its refresh -- MGSV's takedown pushes him 0.3-1 m and holds the dog on
+  him, so every refresh had snapped the dog 0.3-0.7 m -- and moves him only with Snake's treadmill jumps, by the offset's change, in
+  the frame the dog's own shift lands (the table-lag double move behind 0.8.0's one-frame 6-8 m blips is gone with it). `!proxy`:
+  `while the dog held him: N moves with the treadmill, N frames left where the bite put him`.
+- **What Elden Ring is shown never moves faster than the dog runs** (`[Dog] MaxShownSpeed = 14` m/s, `DogLogic` `DisplayLimiter`):
+  MGSV's lunge starts with a 0.56 m step and its running dog moves every other frame; the published buddyPos and the dog's draws (moved
+  by the same offset per frame, `capture::NoteBuddyOffset`) follow it at most 0.25 m a frame apart, in Elden Ring's terms (treadmill
+  jumps are no motion there). A step over 15 m (MGSV's own warp) and our own leash / staging moves are taken at once.
+- **Every placement of ours is watched** for 3 frames (45 after a staging move): MGSV undid one treadmill shift in 76 right after a
+  bite, and warps its dog when Snake is placed far; moved more than 3 m from where we put it, it is put there again (`dog: MGSV moved it
+  N m from where it was put (...) -- put there again`, at most 3 times).
+- **The dog goes along with Snake to MGSV's ladders and ledges** (`[Dog] StageAlong`): once his root shows at the site a free dog is put
+  2 m behind him there (MGSV used to run it after him and then warp it to him: the 0.8.0 run's ~77 m), and put back by the same move
+  when he is home (`dog: staged: taken along to Snake at the site (84.0 m)` / `back home with Snake`); MGSV's warp home a frame later
+  (17 m from him) is caught by the watch above. Published meanwhile relative to his home without the move, its draws with it.
+- **Wait in Elden Ring's terms** (`[Dog] WaitKeepsPlace`): the slip -- what Elden Ring's walls kept Snake from of his MGSV motion -- is
+  seen in the ActorTable (characters standing still in Elden Ring move by it in odometer space; `proxy::plan::SlipObserver`: the median
+  of their moves since the Wait began when at least two agree, never more than Snake's path) and added to what Elden Ring is shown of the
+  waiting dog, not to MGSV's dog (moving a waiting dog's location object again and again ended MGSV's Wait within 3 s live). Live
+  against a fake wall: 17.3-17.7 m of slip per run, the shown dog moved at most 0.8-1.6 m. With fewer than two characters near Snake it
+  keeps its MGSV place as before and the host's own `WaitPin` (it knows Elden Ring's slip) holds it -- the two never add up (ddog.md §9). `!proxy`: `slip (...) N m over N m of Snake's path`.
+- **MGSV's own markers during an order** (the green one over the dog, the red one with its distance over its soldier) stay out of the
+  HUD layer while the order runs and 1.5 s after: their UI draws are told by their colour (`cVSLight[1].rgb`, `DogLogic`
+  `IsMgsvMarkerColor`); `!capture`: `D-Dog's order: MGSV's markers LEFT OUT now (N draws left out)`. `!capture probe` now names each UI
+  draw's job and its vertex constants.
+- **No pick at the click**: the guest keeps the host's last `kActorDogTarget` (read every 100 ms while its layer is on) and an order with
+  none takes the one seen within 1 s before it, if he is still hostile and alive in the table (`dog: no pick at the order -- the host's
+  pick of 874 ms before it ... is taken`, live).
+- `!dog placetrace on|off`: one CSV line per frame (`PhantomRingDogTrace.csv` next to the DLL) -- the dog by every source, the published
+  place before and after the display rule, our placements, the attack state, the job and its soldier. fake_er: `--trace-draws` adds
+  each buddy draw's bone mean (`buddym=`); `pr er block 1|0` (an Elden Ring wall: the puppet stays while MGSV's Snake runs on; the
+  `--actors near` characters move by the slip in MGSV, as the real host maps them; the trace's last two columns are the slip).
+- Friendly fire (saves blocked): Snake's tranquilizer darts at the dog biting its soldier went to the soldier; the bite went on to its
+  let-go, the dog's bond (`TppBuddyService.GetFriendlyPoint`) stayed 78/81. A round landing on the dog itself was not achieved.
+
+**0.8.0 integration with both games (2026-11-04; the review fixes, then MGSV + Elden Ring 1.17.2 live; docs/STATUS.md "0.8.0 polish"):**
+- Review fixes (commit "Review fixes for the D-Dog polish"): MGSV's order markers are shown again when the Lua tick returns early (a
+  dismissal, a load or Attack turned off mid-order had left them hidden for every buddy); the slip's baseline comes only from a settled
+  table (a treadmill jump's table/k mismatch read as slip), and each change of the level is no longer than Snake's path since the
+  last level taken and never against his motion (a patrol walking together was taken for the slip); after a Wait the shown offset
+  shrinks with the dog's way to its goal (`DogLogic` `WaitFade`: the order's soldier, else Snake; none once it holds its enemy; a Wait
+  again keeps what is left) -- at a fixed 4 m/s a bite from Wait landed metres off its enemy; ActorProxy's buddy clearance uses MGSV's
+  own dog, not the shown one; while Snake is staged a rigid buddy draw is the buddy's only if its mesh was the buddy's at home
+  (StageAlong puts the dog among the site's props); `[Dog] Enabled = false` gives MGSV's place untouched (no limiter, no Wait offset).
+- Live: 40 attack orders in two 10-minute runs (22 + 18; 36 connected, every one released), every suit the save has, the published
+  place at most 0.31 m a frame (0 over 0.5 m in 73,000 frames), 0 alerts, 0 warnings. A Wait run into a wall: MGSV's Snake 12.25 m on,
+  the dog's Elden Ring place moved 1 cm (the guest's offset 12.26 m, the host's pin found nothing to add). A climb-up: `staged: taken
+  along to Snake at the site (70.5 m)`, `back home`, `MGSV moved it 14.6 m from where it was put (back home with Snake) -- put there
+  again`. The guest's own 1 s pick memory was used 0 times in both runs (the host's latch had the pick at every click).
+- Found live and fixed after (unit-tested, not yet live): Elden Ring teleporting Snake while the dog waited (`call setpos` 21 m in the
+  test) was taken for slip once his runs had made his path that long -- the waiting dog was shown 20.9 m off. `SlipObserver` now counts
+  the characters anew when they all move at once by more than Snake's MGSV motion since the last table (`Rebased()`; the level kept).
+- Open: MGSV's green marker over the dog (with its distance) still showed over a biting dog in 2 of ~15 frames looked at (session 1,
+  the knife's and the battledress's bites): the colour rule misses that draw; `!capture probe` during a bite would name it.
+
+- **Observed, never changed** (byte-checked: `Addresses.h` D-Dog block, `verify_addresses.py`): the dog system's message handler
+  `0x140C56B10` (learns the dog system -- live `0x68fb7e40`, one dog -- its style byte `+0xD4` and each order it takes, with the order
+  record `R = [this+0x28] vf 0x58(index, 0, 0x47EB44EF48E3)`: `+0x54` bits, `+0x5C` timer, `+0xC2` target), the attack state
+  `0x140C64DE0` (enter / contact / result / exit), TppSoldier2's dog-attack handler `0x141491A70` (a sentinel in the result tells an
+  accept -- result 0 -- from a refusal, which writes nothing; the soldier's id from its own local-index table). `!dog trace on` adds,
+  at run time, the dog's other 13 action states (the table MGSV builds at `0x142C3BB40`, checked live entry by entry), the attack
+  decision `0x140C64770` and the message box's send `0x140BF3A80` (messages to the order's target).
+- **The dog's place.** Its location object (the location class, as D-Horse's and D-Walker's) is found on its 94-bone skin (one scan,
+  confirmed 0.5 s later: `dog: location object 0x68f76040 confirmed (31 checks on it)`); `!dog shift 3 3` moved it, the skin and its
+  position cache (`[[sys+0x10]+0x20]`) in the same frame, and it sat where it was put.
+  - `[Dog] Treadmill`: every treadmill jump moves it by the same shift at the next frame (when Snake's own placement shows), while it is
+    within `TreadmillMaxDistance` (40 m) of him -- a waiting dog within 4x that, a dog on an order always. As Elden Ring draws it (the
+    odometer + each dog mesh's place relative to its list's anchor; props near it excluded), a 22 s run toward the camera: **off -- 5
+    jumps of 6.01-6.03 m; on -- largest step 0.22 m, none over 0.5 m**. The fake_er trace's buddyPos and rootPos jump in the same frame.
+  - **Wait** (the call menu's Wait, or `!dog order 9`): MGSV's order bit 2 of `R+0x54` (polled) keeps the dog moved with the jumps;
+    Snake ran 22 m away and back (3 jumps each way): the dog's Elden Ring place stayed at (-1.15, 0.37) to the centimetre; MGSV ended
+    the Wait itself when Snake came back within ~2 m.
+  - **The leash** (`Leash`, 30 m): a free dog farther than that, outside MGSV's camera field, is put out of view beside / behind Snake
+    (Follow.cpp's catch-up rule): `!dog shift -20 0` twice -> `dog: leash: 39.1 m behind, out of view -> 4.8 m from Snake` 17 ms later.
+- **Attack orders** (`[Dog] Attack`; the job is `DogLogic` `Job`, the player's command reaches it through Follow.cpp's command detour):
+  the call menu's attack entry (this save: hold LB, right stick right = "Do it (wound enemy)", let go, click it) -> `follow: the
+  player's buddy command 14 (arg 65535)` -> `dog: the player's attack command 14 (MGSV's own target arg 0xffff) taken over` -> the
+  host's pick (the ActorTable record with kActorDogTarget, re-checked hostile and alive) gets one soldier of its own (ActorProxy
+  `Dedicate`: enabled inert -- restrict-notice + puppet before his first update --, on the sandbox ground, never parked for the buddy's
+  clearance) -> `soldier 0x450 realized in 807-1070 ms -> command 14 arg 0x450` (MGSV's own order on him) -> kGEvDogAttack
+  **Ordered** -> MGSV's dog: the attack decision, a wind-up (state 0, 0.7-1.5 s), the run (state 2), the attack state with the
+  soldier's accept (`dog: bite connected (0x48e4ede3daed body attack accepted by soldier 0x450, local 0, from dog 0x2600) -- he stands
+  in for Elden Ring character 0xffffffff00001000`) -> **Connected** (MGSV's attack id and share) and `kBuddyEngaged` -> contact 51-59 ms
+  later, the pin (MGSV's own; the dog sends the soldier `0x93B01C23483C` every frame) -> MGSV lets go (result 14) -> **Released**, the
+  soldier given back (disabled), the dog whistled back (`WhistleBack`).
+  - Every style, once each in a row (styles other than this save's set with `!dog style N`: memory only): wound (byte 3, the
+    battledress, ATK 147) Ordered -> Connected 6.2 s, pinned 6.2 s; busy (byte 0, the bite, ATK 144) 3.3 s, 7.9 s; byte 2 (then read
+    as the knife -- it is the stun knife, see 0.8.0 above) 6.0 s, 4.4 s; byte 4 (then read as the stun knife -- it is the knife) 6.0 s,
+    4.4 s. The dog back
+    within 1.3-1.5 m of Snake 6 s after each release. Alert phase 0 throughout, 0 `alert:` lines. While Snake ran (6 jumps during an
+    order) it connected all the same.
+  - **The style byte** (live): this save's `+0xD4` is 3 = `buddyDogEquipType` 3, and the call menu says "Do it (wound enemy)": byte 3
+    is the battledress (a body attack: `0x48E4EDE3DAED`, no knife bit at the soldier). (This round also read byte 4 as the stun knife
+    from the soldier's `+0xA` byte; the 0.8.0 integration showed with MGSV's own equipment that 2 is the stun knife and 4 the knife.)
+  - **No pick** (no kActorDogTarget record): `kGEvDogAttack Refused ... on Elden Ring 0x0: no Elden Ring enemy picked`, the dog
+    whistled back. A torn read of the host's table keeps the last good one; the target counts as gone only when absent from three
+    good tables in a row (a torn read once ended a "Get it" as Lost).
+  - **Lost** when it never connects: `ReachTimeoutMs` (12 s: the knife styles took 6-7 s at 15 m), the target gone, or stuck -- no 0.5 m
+    gained for 3 s after a 2.5 s grace (MGSV's wind-up alone is up to 1.5 s: the first rule, 2 s from the order, called two good runs
+    stuck).
+  - **Why one dedicated soldier:** with plain full proxies (`!proxy on`) MGSV's dog ran at the soldier, and as it came within 5.5 m
+    ActorProxy parked him (`BuddyClearance`: disabled, out of the world) -- the soldier vanished in the frames, the run ended with
+    result 8 (the target check `0x140C64940` failed) and nothing was bitten.
+- **"Get it"** (byte 1, set with `!dog style 1`): the order on a sleeping enemy's asleep proxy (`[Fulton] Method = proxy`): the dog
+  ran 27 m to him and MGSV's own Fulton took him: `proxy: fulton of Elden Ring character 0xffffffff00001001 succeeded (MGSV's own
+  Fulton on its proxy) -- kGEvFulton a=1`, 16 s after the order (fake_er took the actor out). The job waits for that yank
+  (`fetchTimeoutMs` 30 s; a dog standing within 6 m of the sleeper is busy, not stuck).
+- **Capture** (`KeepDrawsNearProxy`): the dog's own meshes are learned from buddy draws rooted on its skin (within 1 m) with no proxy
+  within 4 m; while it bites, its draws within the proxy's capture radius are kept as the buddy's, the soldier's are dropped
+  (`!capture`: `buddy draws kept near a proxy 7371`, `proxy draws dropped 8387` after one order). A soldier who stops being a placed
+  proxy stays excluded at his place for 5 s (his knocked-down body is still drawn a moment after the Lua thread disables him): live,
+  his draws had been taken for the dog's beside it, 1.5-3.2 s after the release with a 1.5 s linger.
+- **Phase lock:** ActorProxy's lock (calm + sweep) runs once a dog soldier has been out; if MGSV's phase stays up 20 s, `dog::DisableAttack`
+  turns `Attack` off for the session (`dog: Attack OFF for this session -- ...`; `!dog attack on` tries again). Never needed live.
+- **M3: two 10-minute runs** (orders through MGSV's real call menu from the pad file, runs with treadmill jumps between them, a Wait
+  with a run away and back, the fetch, an order with no pick; `m3.py` in the session's scratch): (1) 25 orders in 11 min: 18 Released
+  (every attack style), 2 Refused (no pick, as asked), 5 Lost -- 3 fetches whose balloons went up 3-4 s after the job had called the
+  dog stuck, and 2 stalking knife runs; (2) on the build with MGSV's own "let go" as the Lost verdict: 23 orders in 10.5 min, 19
+  Released, 1 Refused, 0 attacks lost, 3 fetches called stuck as the dog ran back from a sleeper whose balloon then went up (fixed:
+  no stuck verdict once it has been at its target; the next fetch: Ordered, `kGEvFulton a=1` 15.3 s later, Connected, Released).
+  Both runs: soldier realized in 0.90 / 0.92 s median (max 1.05 s), Ordered -> Connected 2.9-7.4 s (median 4.4 / 5.0), the dog
+  back within 3 m of Snake 0-3.9 s after every end, **0 alerts, 0 warnings in the guest log** (`dog:` or any), kBuddyEngaged from
+  each Connected to its Released (6230 / 6480 frames). As drawn (the dog's 21 body meshes, mesh by mesh): no treadmill jump at all;
+  33 / 27 frames over 0.5 m (max 1.27 m), every one within 1.4 s of a Connected or a contact -- MGSV's leap and the takedown's root
+  snapping onto the soldier (the draws' root, not their skinned vertices). Then four orders and a fetch on the final build, all
+  connected. **D-Walker and D-Horse** on the same build: a lead `glided 0.00 s / 0.0 m`, D-Walker ridden 38 m and dismounted;
+  D-Horse deployed in session, its object confirmed 0.5 s later, ridden 100 m at a gallop with its treadmill, dismounted. An
+  in-session D-Dog is now active 1.3 s after `!buddy dog` (its skin looked for within 12 m of Snake: it used to take 60 s).
+- **Recordings** (`recordings/`, never committed; README.txt there): `ddog_attack.prrec` (deploy, Bark, an attack through the call
+  menu with its Ordered / Connected / Released and kBuddyEngaged, Wait with a run away and back, the whistle), `ddog_follow.prrec`
+  (runs with treadmill jumps, two jumps, a ladder; the dog as drawn never over 0.16 m a frame).
+- **Not done:** MGSV's own "D-Dog: Found enemy" (`Announce`: parsed only), the transform query sent natively (`!dog where`: the box
+  routes it but the dog's handler never sees it; not needed), whether Snake's MGSV rounds hurt the dog mid-bite.
+- Console: `!dog` (state: sites, the dog system, style byte and vars, order record, location object, attack state, accepts, the job,
+  the ATK rows, capture counts), `!dog on|off`, `!dog treadmill|attack|keep|puppet on|off`, `!dog shift <dx> <dz>`, `!dog leash <m>`,
+  `!dog scan`, `!dog where`, `!dog order <8-16> [arg]` (MGSV's command as ours), `!dog go [11-15]` (as the player's attack command),
+  `!dog dedicate <handle>|off`, `!dog style <0-7>` (test: the style byte in memory), `!dog trace on|off`, `!dog watch <id>`.
+- Offline: `tests/test_guest_dog.cpp` (style and attack ids, the job's stages and timeouts, the treadmill's choice, the leash),
+  `tests/test_guest_actorproxy.cpp` `TestDedicated` (first, on the ground, never parked for the buddy, still for Snake).
 
 ## 9. Saves
 

@@ -8,6 +8,13 @@ the host would, prints guest state / odometer / pose bone count / events / draw 
 messages / HUD frames, sends a Hurt event every 4 s, and answers host-console requests with canned data.
 
     python3 -m phantomring.fake_er [--seconds N] [--create] [--summary out.json] [--quiet]
+
+D-Dog (protocol v17, docs/research/ddog.md): `pr er actor <i> dogtarget` makes that actor the host's pick for the dog's next
+order (ActorFlags.DogTarget, at most one record; `nodogtarget` clears it); kGEvDogAttack, kGEvBuddyOrder (with D-Dog's style)
+and GuestBuddyFlags.Engaged are printed as they come. HostState carries HostFlags.DogLayer (the host's [Dog] on: the guest takes
+D-Dog's attack orders over only then); `pr er doglayer 0` clears it, as a host with `[Dog] enabled = false`.
+`pr er block 1|0`: an Elden Ring wall -- the puppet stays while MGSV's Snake runs on; --actors near characters move by that slip in
+MGSV's world, as the real host maps them (the guest's waiting D-Dog reads it there; --trace's last two columns are the slip).
 """
 
 from __future__ import annotations
@@ -129,7 +136,13 @@ class FakeHost:
 		self.placed: dict[int, tuple] = {}  # v5: kGEvPlaced ids still there (`pr er detonate <id>|all`)
 		self.dead = False  # `pr er die`: HostState kHostPlayerDead until `pr er respawn` (guest death tests)
 		self.tarnished = False  # `pr er tarnished 1`: Tarnished mode, no kHostPuppeting (the pad stays as given: the guest parks itself)
+		self.dog_layer = True  # v17 HostFlags.DogLayer: the host's D-Dog layer is on (`pr er doglayer 0|1`)
 		self.climbing = False  # `pr er climb 1`: an Elden Ring ladder climb under way (v15 kHEvClimb)
+		# `pr er block 1`: Snake pushes into an Elden Ring wall -- the puppet doesn't move while MGSV's Snake runs on (the odometer's
+		# horizontal steps go into the slip instead); the --actors near characters, standing still in Elden Ring, then move in MGSV's
+		# world by the slip, as the real host maps them (docs/research/ddog.md §9: a waiting D-Dog kept in its Elden Ring place).
+		self.blocked = False
+		self.slip = [0.0, 0.0, 0.0]
 		# --actors near (ActorProxy tests, docs/GUEST.md 20): the two actors stand still in Elden Ring at these offsets (MGSV x, z) from
 		# where Snake was at the first guest state, published the way the host maps them (rootPos + (point - odo) for a point fixed in
 		# odometer space), so treadmill jumps move them in MGSV's world exactly as they do with the real host. "fixed": the old
@@ -149,7 +162,7 @@ class FakeHost:
 			"drawMissingMesh": 0, "renderClearAll": 0, "renderMeshes": 0, "renderTextures": 0, "renderForget": 0,
 			"meshIndexOk": True, "hudFrames": 0, "hudLastSize": [0, 0], "poseBones": 0, "consoleServed": 0,
 			"hurtSent": 0, "buddyTypes": [], "vehicleIdsSeen": [], "lifeLast": 0, "buddyFlagsSeen": 0, "buddyPosValid": 0,
-			"buddyAmmoLast": 0,
+			"buddyAmmoLast": 0, "dogAttacks": [], "buddyOrders": [], "dogEngagedFrames": 0,
 		}
 
 	def elapsed(self) -> float:
@@ -178,6 +191,8 @@ class FakeHost:
 		t = self.elapsed()
 
 		flags = HostFlags.InGame | (HostFlags.PlayerDead if self.dead else (0 if self.tarnished else HostFlags.Puppeting))
+		if self.dog_layer:
+			flags |= HostFlags.DogLayer
 		hs = proto.HostState(flags=int(flags), frame=self.frame, qpc=proto.qpc_now(),
 			timeOfDayHours=(12.0 + t / 60.0) % 24.0, cameraMaxDistance=8.0, erHpFrac=1.0, erWorldId=0x3C2A2400,
 			groundY=0.0, fallSpeed=0.0)
@@ -246,6 +261,13 @@ class FakeHost:
 				self.log(f"guest: suppressor {'ON' if sup else 'off'} (kGuestSuppressorOn) -- weapon {gs.weaponId:#x} {gs.ammoInClip}/{gs.ammoStock}")
 				if self.trace:
 					self.trace.write(f"# suppressor {'on' if sup else 'off'} weapon={gs.weaponId} clip={gs.ammoInClip} t={time.monotonic() - self.t0:.4f}\n")
+			# v17: D-Dog carries out an attack (GuestBuddyFlags.Engaged, Connected .. Released), logged as it comes and goes
+			engaged = bool(gs.buddyFlags & proto.GuestBuddyFlags.Engaged)
+			if engaged:
+				st["dogEngagedFrames"] += 1
+			if self.guest_last is None or engaged != bool(self.guest_last.buddyFlags & proto.GuestBuddyFlags.Engaged):
+				self.log(f"guest: buddy {'ENGAGED' if engaged else 'not engaged'} (GuestBuddyFlags.Engaged; buddy type {gs.buddyType}, "
+					f"flags {proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags)})")
 			self.guest_last = gs
 			self.on_guest_frame(gs)
 			if self.trace:
@@ -255,7 +277,7 @@ class FakeHost:
 					f"{1 if gs.flags & proto.GuestFlags.ThrowAim else 0},{gs.aimThrowPos[0]:.3f},{gs.aimThrowPos[1]:.3f},{gs.aimThrowPos[2]:.3f},"
 					f"{gs.aimThrowVel[0]:.3f},{gs.aimThrowVel[1]:.3f},{gs.aimThrowVel[2]:.3f},{gs.aimThrowKind},"
 					f"{gs.life},{gs.lifeMax},{gs.weaponId},{gs.ammoInClip},{gs.ammoStock},{cam_yaw_deg(gs.camQuat):.3f},"
-					f"{1 if gs.flags & proto.GuestFlags.Nvg else 0}\n")
+					f"{1 if gs.flags & proto.GuestFlags.Nvg else 0},{self.slip[0]:.4f},{self.slip[2]:.4f}\n")
 			if gs.buddyFlags & proto.GuestBuddyFlags.PosValid and math.isfinite(gs.buddyPos[0]):
 				st["buddyPosValid"] += 1  # the real host maps buddyPos through the anchor and snaps it to ER ground
 			odo = list(gs.odo)
@@ -266,7 +288,10 @@ class FakeHost:
 				self.odo_last = odo
 				# The real host rotates by the session yaw offset and lets ER collision resolve it.
 				for i in range(3):
-					self.puppet[i] += d[i]
+					if self.blocked and i != 1:
+						self.slip[i] += d[i]  # a wall: Elden Ring's Snake stays, MGSV's runs on
+					else:
+						self.puppet[i] += d[i]
 				st["odoDistance"] += math.hypot(d[0], d[2])
 
 		pose = link.pose()
@@ -309,6 +334,22 @@ class FakeHost:
 				if ev.a == 1:
 					self.fultoned.add(handle)  # the real host lifts him out of Elden Ring's world: gone from the table
 				self.log(f"fulton: Elden Ring character {handle:#x} {'fultoned' if ev.a == 1 else 'NOT fultoned'} at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f})")
+			elif ev.type == GuestEventType.DogAttack:
+				# v17: a = DogPhase | DogStyle << 8 | MGSV attack id << 16, b = MGSV's share (1/10000), v0 the dog, v1 dog -> target,
+				# pad = the target's handle. The real host applies the style's effect on Connected (er/Dog.cpp, not built yet).
+				phase, style, attack = proto.dog_attack_fields(ev.a)
+				handle = ev.pad[0] | (ev.pad[1] << 32)
+				name = f"{proto.enum_name(phase, proto.DogPhase)}/{proto.enum_name(style, proto.DogStyle)}"
+				st["dogAttacks"].append(name)
+				who = next((i for i in range(2) if self.actor_handles[i] == handle), None)
+				self.log(f"dog: {name} MGSV attack {attack} share {ev.b / 10000:.3f} on ER {handle:#x}"
+					f"{f' (actor {who})' if who is not None else ' (not one of ours)' if handle else ' (no target)'} "
+					f"the dog at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f}) dir ({ev.v1[0]:.2f},{ev.v1[1]:.2f},{ev.v1[2]:.2f})")
+			elif ev.type == GuestEventType.BuddyOrder:
+				# v7 (v17: pad[0] = D-Dog's style + 1)
+				st["buddyOrders"].append([ev.a, ev.b, ev.pad[0]])
+				style = f" D-Dog style {proto.enum_name(ev.pad[0] - 1, proto.DogStyle)}" if ev.b == proto.BuddyType.DOG and ev.pad[0] else ""
+				self.log(f"buddy order {ev.a} for {proto.enum_name(ev.b, proto.BuddyType)}{style}")
 			elif ev.type == GuestEventType.TimeSkip:
 				# v13: MGSV's Phantom Cigar; the real host moves Elden Ring's clock by as much (er/TimeSkip.h)
 				self.time_skip_min = getattr(self, "time_skip_min", 0) + ev.a
@@ -349,9 +390,10 @@ class FakeHost:
 		"""--trace-draws: one '# draws' line per draw list -- where each owner's draws are, relative to the list's anchor (Snake's
 		root): the mean of their first matrices' translations (the host draws them at its puppet + this, so a jump here between
 		lists is a jump the player sees), their count, and every projectile and buddy draw's own place (mesh@x,y,z: a part
-		culled in one list moves no mean)."""
+		culled in one list moves no mean); buddym= each buddy draw's mean over all of its matrices (its bones: where its skinned
+		vertices are)."""
 		sums: dict[int, list[float]] = {}
-		proj, buddy = [], []
+		proj, buddy, bones = [], [], []
 		for d in draws:
 			if d.firstMatrix >= len(mats):
 				continue
@@ -362,11 +404,19 @@ class FakeHost:
 				proj.append(f"{d.mesh:016x}@{m[3]:.2f},{m[7]:.2f},{m[11]:.2f}")
 			elif d.owner == proto.DrawOwner.Buddy:
 				buddy.append(f"{d.mesh & 0xFFFFFFFF:08x}@{m[3]:.3f},{m[7]:.3f},{m[11]:.3f}")
+				# its skinned vertices follow all of its bone matrices: their mean is where the part is drawn (the first can be a root
+				# MGSV snaps while the bones keep the mesh in place)
+				n = max(1, min(d.matrixCount, len(mats) - d.firstMatrix))
+				bx = sum(mats[d.firstMatrix + j][3] for j in range(n)) / n
+				by = sum(mats[d.firstMatrix + j][7] for j in range(n)) / n
+				bz = sum(mats[d.firstMatrix + j][11] for j in range(n)) / n
+				bones.append(f"{d.mesh & 0xFFFFFFFF:08x}@{bx:.3f},{by:.3f},{bz:.3f}")
 		parts = []
 		for owner, (x, y, z, n) in sorted(sums.items()):
 			parts.append(f"{proto.enum_name(owner, proto.DrawOwner)}={n}@{x / n:.3f},{y / n:.3f},{z / n:.3f}")
 		return (f"# draws frame={dl.frame} anchor={dl.anchorPos[0]:.3f},{dl.anchorPos[1]:.3f},{dl.anchorPos[2]:.3f} " + " ".join(parts)
-			+ (" proj=" + ";".join(proj) if proj else "") + (" buddy=" + ";".join(buddy) if buddy else "") + f" t={time.monotonic() - self.t0:.4f}\n")
+			+ (" proj=" + ";".join(proj) if proj else "") + (" buddy=" + ";".join(buddy) if buddy else "")
+			+ (" buddym=" + ";".join(bones) if bones else "") + f" t={time.monotonic() - self.t0:.4f}\n")
 
 	# Hooks for subclasses that keep what the guest sends (recorder.py, capture_view.py); the slot data is
 	# only valid until the next acquire.
@@ -419,7 +469,8 @@ class FakeHost:
 			return None
 		if self.actor_points is None:
 			self.actor_points = [[gs.odo[0] + x, gs.odo[1], gs.odo[2] + z] for _, x, z in self.NEAR_ACTORS]
-		return [[gs.rootPos[i] + p[i] - gs.odo[i] for i in range(3)] for p in self.actor_points]
+		# Elden Ring's Snake is at odo - slip (what a wall kept him from): a character standing still in Elden Ring is mapped by it.
+		return [[gs.rootPos[i] + p[i] - gs.odo[i] + self.slip[i] for i in range(3)] for p in self.actor_points]
 
 	def publish_actors(self):
 		table = proto.ActorTable(count=0)
@@ -439,12 +490,19 @@ class FakeHost:
 
 	def actor_command(self, args: list[str]) -> tuple[int, str]:
 		if len(args) < 2 or args[0] not in ("0", "1"):
-			return 1, "usage: actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back   (at: MGSV x/z metres from Snake now; --actors near)"
+			return 1, "usage: actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|at <dx> <dz>|back   (at: MGSV x/z metres from Snake now; --actors near)"
 		i = int(args[0])
 		flag = {"asleep": int(proto.ActorFlags.Asleep), "dead": int(proto.ActorFlags.Dead)}
 		match args[1:]:
 			case ["asleep" | "dead" as what]:
 				self.actor_flags[i] |= flag[what]
+			case ["dogtarget"]:
+				# v17: the host's pick for D-Dog's next order -- at most one record carries it
+				for j in range(len(self.actor_flags)):
+					self.actor_flags[j] &= ~int(proto.ActorFlags.DogTarget)
+				self.actor_flags[i] |= int(proto.ActorFlags.DogTarget)
+			case ["nodogtarget"]:
+				self.actor_flags[i] &= ~int(proto.ActorFlags.DogTarget)
 			case ["awake"]:
 				self.actor_flags[i] &= ~flag["asleep"]
 			case ["alive"]:
@@ -459,14 +517,15 @@ class FakeHost:
 				if self.actors_mode != "near" or gs is None:
 					return 1, "actor at: needs --actors near and a guest state"
 				self.actor_positions()
-				self.actor_points[i] = [gs.odo[0] + float(dx), gs.odo[1], gs.odo[2] + float(dz)]
+				self.actor_points[i] = [gs.odo[0] - self.slip[0] + float(dx), gs.odo[1], gs.odo[2] - self.slip[2] + float(dz)]
 			case _:
-				return 1, "usage: actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew"
+				return 1, "usage: actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|at <dx> <dz>|back|renew"
 		self.publish_actors()
 		pos = self.actor_positions()
 		where = f" at {pos[i][0]:.2f},{pos[i][1]:.2f},{pos[i][2]:.2f}" if pos else ""
 		gone = " (fultoned: not published)" if self.actor_handles[i] in self.fultoned else ""
-		return 0, f"actor {i} handle {self.actor_handles[i]:#x} flags {self.actor_flags[i]:#x}{where}{gone}"
+		return 0, (f"actor {i} handle {self.actor_handles[i]:#x} flags {self.actor_flags[i]:#x} "
+			f"({proto.flag_names(int(proto.ActorFlags.Hostile) | self.actor_flags[i], proto.ActorFlags)}){where}{gone}")
 
 	def host_event(self, typ, a: int, b: int, v0: list[float] | None = None) -> tuple[int, str]:
 		ev = proto.HostEvent(type=int(typ), a=a, b=b, frame=self.frame & 0xFFFFFFFF)
@@ -483,13 +542,27 @@ class FakeHost:
 		match cmd:
 			case ["help"]:
 				return 0, ("fake_er canned commands: help, ping, status, peek player.pos, peek <addr>, hurt <er dmg>, heal <amount>, die, respawn, "
-					"rested 0|1, tarnished 0|1, placed, detonate <id>|all, actors, actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew, "
-					"climb 1|0 [down] [speed m/s], mantle <cm> [vault] [secs]")
+					"rested 0|1, tarnished 0|1, placed, detonate <id>|all, actors, actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|at <dx> <dz>|back|renew, "
+					"climb 1|0 [down] [speed m/s], mantle <cm> [vault] [secs], doglayer 0|1, block 1|0")
+			case ["block", which]:
+				# Snake against an Elden Ring wall: the puppet stays while MGSV's Snake runs on (the slip; the actors move by it in MGSV)
+				if which not in ("0", "1"):
+					return 1, "usage: block 1|0"
+				self.blocked = which == "1"
+				if self.trace:
+					self.trace.write(f"# block {which} slip={self.slip[0]:.3f},{self.slip[2]:.3f} t={time.monotonic() - self.t0:.4f}\n")
+				return 0, f"Elden Ring's Snake {'blocked (a wall)' if self.blocked else 'free'}; slip so far {self.slip[0]:.2f},{self.slip[2]:.2f} m"
+			case ["doglayer", which]:
+				# v17: HostFlags.DogLayer -- the real host sets it while [Dog] enabled; without it the guest leaves D-Dog's orders to MGSV
+				if which not in ("0", "1"):
+					return 1, "usage: doglayer 0|1"
+				self.dog_layer = which == "1"
+				return 0, f"HostFlags.DogLayer {'on' if self.dog_layer else 'off'}"
 			case ["actor", *rest]:
 				return self.actor_command(rest)
 			case ["actors"]:
 				pos = self.actor_positions() if self.actors_mode == "near" else None
-				return 0, "; ".join(f"{i}: flags {self.actor_flags[i]:#x}" + (f" at {pos[i][0]:.2f},{pos[i][1]:.2f},{pos[i][2]:.2f}" if pos else "") +
+				return 0, "; ".join(f"{i}: flags {self.actor_flags[i]:#x} ({proto.flag_names(int(proto.ActorFlags.Hostile) | self.actor_flags[i], proto.ActorFlags)})" + (f" at {pos[i][0]:.2f},{pos[i][1]:.2f},{pos[i][2]:.2f}" if pos else "") +
 					(" fultoned" if self.actor_handles[i] in self.fultoned else "") for i in range(2))
 			case ["placed"]:
 				return 0, " ".join(f"#{k}@{v[0]:.1f},{v[1]:.1f},{v[2]:.1f}" for k, v in self.placed.items()) or "none"
@@ -569,7 +642,7 @@ def main(argv=None) -> int:
 	ap.add_argument("--quiet", action="store_true")
 	ap.add_argument("--trace", help="append one CSV line per new guest frame (t,frame,flags,epoch,odo xyz,root xyz,yaw,vel xz,"
 		"buddyFlags,buddyPos xyz,vehicleId,buddyAmmo,throwAim,aimThrowPos xyz,aimThrowVel xyz,aimThrowKind,life,lifeMax,weaponId,"
-		"ammoInClip,ammoStock,camYawDeg,nvg) and one '# event' line per guest event (and '# host' per host event sent)")
+		"ammoInClip,ammoStock,camYawDeg,nvg,slip x,slip z) and one '# event' line per guest event (and '# host' per host event sent)")
 	ap.add_argument("--trace-draws", action="store_true", help="with --trace: also one '# draws frame=F anchor=x,y,z Owner=n@x,y,z ... "
 		"proj=mesh@x,y,z;... buddy=mesh@x,y,z;...' line per draw list (each owner's mean place relative to the anchor; projectile and buddy "
 		"draws one by one)")

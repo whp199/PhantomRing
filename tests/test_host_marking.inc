@@ -222,6 +222,58 @@ static void TestMarking()
 		CHECK(faded.size() == 3 && Near(faded[0].color[3], 0.5f) && Near(faded[2].color[3], 0.5f));
 		CHECK(behind.empty());
 	}
+	// (D-Dog, docs/research/ddog.md §3.1) Provisional marks: hollow, they run out (fading their last half second), a death fades
+	// them, a look through the binoculars marks for good, a marked one never becomes provisional, Clear forgets them.
+	{
+		Marks m;
+		m.Provisional(0x30, 2.0f);
+		CHECK(m.IsProvisional(0x30) && !m.Marked(0x30) && m.Provisionals() == 1 && m.Count() == 0 && m.Looking() == 0);
+		CHECK(Near(m.Opacity(0x30, r.fade), 1.0f) && m.Age(0x30) < 0.0f);
+		const Seen alive[] = { { 0x30, { 0, 0, 10 }, true } };
+		Run(m, Ahead(false), alive, 1.75f, r);
+		CHECK(m.IsProvisional(0x30) && m.Opacity(0x30, r.fade) > 0.3f && m.Opacity(0x30, r.fade) < 0.7f);  // its last half second
+		m.Provisional(0x30, 2.0f);  // the dog still smells him: renewed
+		CHECK(Near(m.Opacity(0x30, r.fade), 1.0f));
+		m.Provisional(0x30, 0.5f);  // never shortened
+		Run(m, Ahead(false), alive, 1.0f, r);
+		CHECK(m.IsProvisional(0x30));
+		Run(m, Ahead(false), alive, 1.1f, r);
+		CHECK(!m.IsProvisional(0x30) && m.Provisionals() == 0 && m.Opacity(0x30, r.fade) == 0.0f);
+		// A death fades it like a mark.
+		m.Provisional(0x31, 10.0f);
+		const Seen dead[] = { { 0x31, { 0, 0, 10 }, false } };
+		Run(m, Ahead(false), dead, 0.5f, r);
+		CHECK(m.IsProvisional(0x31) && m.Opacity(0x31, r.fade) > 0.4f && m.Opacity(0x31, r.fade) < 0.6f);
+		Run(m, Ahead(false), dead, 0.6f, r);
+		CHECK(!m.IsProvisional(0x31) && m.Opacity(0x31, r.fade) == 0.0f);
+		// The binoculars mark him for good (a provisional one is looked at like anyone).
+		m.Provisional(0x32, 10.0f);
+		const Seen ahead[] = { { 0x32, { 0, 0, 10 }, true } };
+		CHECK((Run(m, Ahead(true), ahead, 0.6f, r) == std::vector<std::uint64_t>{ 0x32 }) && m.Marked(0x32) && !m.IsProvisional(0x32));
+		m.Provisional(0x32, 10.0f);
+		CHECK(!m.IsProvisional(0x32) && m.Marked(0x32));
+		m.Provisional(0x33, std::nanf(""));
+		m.Provisional(0x33, -1.0f);
+		CHECK(!m.IsProvisional(0x33));
+		m.Provisional(0x34, 5.0f);
+		m.Clear();
+		CHECK(m.Provisionals() == 0 && m.Count() == 0);
+	}
+	{  // the hollow triangle and the paw
+		const Camera cam{ { 0, 0, 0 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, 0.8f };
+		const Style  st;
+		std::vector<Marker> solid, hollow, paw;
+		Build(solid, cam, { 0, 2, 20 }, "", true, 1.0f, 5.0f, st);
+		Build(hollow, cam, { 0, 2, 20 }, "", true, 1.0f, 5.0f, st, true);
+		CHECK(solid.size() == 1 && hollow.size() == 1 && solid[0].inner == 0.0f && Near(hollow[0].inner, kHollow) && Near(hollow[0].radius, solid[0].radius));
+		const float amber[4]{ 1.0f, 0.8f, 0.2f, 1.0f };
+		BuildPaw(paw, cam, { 0, 2, 20 }, amber, 1.0f, st);
+		CHECK(paw.size() == 1 && paw[0].shape == Marker::Shape::kGlyph && Near(paw[0].inner, 11.0f) && paw[0].pos.y > 2.0f + solid[0].radius * 2.0f &&
+		      Near(paw[0].radius, solid[0].radius * 1.6f) && paw[0].slack > 1e5f);
+		std::vector<Marker> behind;
+		BuildPaw(behind, cam, { 0, 2, -20 }, amber, 1.0f, st);
+		CHECK(behind.empty());
+	}
 	{  // (0.7.0) the mark over his own capsule's top, not a fixed 2.2 m (inside a troll or a boss)
 		using phantom::er::combat::ChrCapsule;
 		const Vec3 feet{ 10, 5, -3 };

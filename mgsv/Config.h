@@ -22,6 +22,32 @@ namespace phantom::guest
 		kMuteAll,  // the old mute_all: Music, Ambience and Radio off
 	};
 
+	// [Dog] D-Dog as a battle buddy in Elden Ring (docs/research/ddog.md §3.5-3.7, §5; protocol v17 kGEvDogAttack / kBuddyEngaged /
+	// kActorDogTarget; Dog.cpp, docs/GUEST.md 8.4).
+	struct DogConfig
+	{
+		bool          enabled{ true };              // the whole layer (off: D-Dog as in 0.7.0)
+		bool          treadmill{ true };            // move the dog with Snake's treadmill jumps through its location object
+		float         treadmillMaxDistance{ 40.0f };  // m from Snake: farther, the dog is left to MGSV (and the host hides it)
+		float         leash{ 30.0f };               // m: a free dog out of view farther than this is put beside Snake
+		bool          attack{ true };               // the call menu's 11-15 go to the host's Elden Ring target (kActorDogTarget)
+		bool          targetPuppet{ true };         // the target proxy is a puppet (false: restrict-notice only)
+		std::uint32_t realizeTimeoutMs{ 1500 };     // the target proxy realized and placed within this, or kDogRefused
+		std::uint32_t reachTimeoutMs{ 12000 };      // ordered, not connected within this: kDogLost (live: the knife styles 6-7 s at 15 m)
+		std::uint32_t busyMaxMs{ 10000 };           // connected this long: kDogReleased (MGSV's own pin lets go after 4.4-7.9 s, live)
+		bool          whistleBack{ true };          // whistle (command 8) the dog back after a release / loss
+		bool          keepDrawsNearProxy{ true };   // Capture keeps the dog's own draws (learned mesh keys) next to a proxy
+		bool          announce{ false };            // MGSV's own "D-Dog: Found enemy" (0x140C61AB0; not built: parsed only)
+		// 0.8.0 polish (docs/research/ddog.md §9): what Elden Ring is shown of the dog never moves faster than MaxShownSpeed (m/s; 0 =
+		// as MGSV has it), the dog goes along with Snake to MGSV's ladders and ledges, and a waiting dog keeps its Elden Ring place
+		// where Elden Ring's walls stopped Snake (seen in the characters around him).
+		float         maxShownSpeed{ 14.0f };
+		bool          stageAlong{ true };
+		bool          waitKeepsPlace{ true };
+
+		bool operator==(const DogConfig&) const = default;
+	};
+
 	struct Config
 	{
 		// [Guest]
@@ -286,7 +312,9 @@ namespace phantom::guest
 		std::string fultonMethod{ "proxy" };
 		[[nodiscard]] bool FultonProxies() const { return fultonAnchor && fultonMethod == "proxy"; }
 		// ActorProxy runs: for every hostile ([Proxies] Enabled) or only for sleeping ones ([Fulton] Method = proxy)
-		[[nodiscard]] bool ProxiesRun() const { return proxies || FultonProxies(); }
+		// ActorProxy runs (the pool is asked for at the sandbox setup) for full proxies, the Fulton-only proxies, or D-Dog's order
+		// targets ([Dog] Enabled + Attack: one soldier of his own per order, docs/research/ddog.md §3.5).
+		[[nodiscard]] bool ProxiesRun() const { return proxies || FultonProxies() || (dog.enabled && dog.attack); }
 		float fultonReach{ 3.0f };           // the enemy this near Snake (m, horizontal) starts it
 		float fultonLeave{ 5.0f };           // Snake this far from the enemy (m) ends it (the soldier back, Snake back to the sandbox)
 		float fultonCandidates{ 90.0f };     // anchor soldiers: standing within this of the sandbox centre (m) at its height
@@ -324,6 +352,8 @@ namespace phantom::guest
 		std::uint32_t cqcInterrogateButtons{ 0x200 }; // PlayerPad CALL / INTERROGATE
 		std::uint32_t cqcChokeButtons{ 0 };
 		float         cqcRange{ 1.4f };               // m, kGEvCqc b (the host's own [Cqc] range decides)
+
+		DogConfig dog;  // [Dog] (protocol v17, Dog.cpp)
 
 		// [Lua]
 		std::wstring luaOverride{ L"phantomring.lua" };

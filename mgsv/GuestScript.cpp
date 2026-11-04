@@ -489,13 +489,15 @@ function PR.ProxyInert(id, puppet)
 end
 
 -- A proxy into the world with no update of live AI: damage off, inert, enabled (noAssignRoute: no route handed to him), inert again.
-function PR.ProxyEnable(id, noAssignRoute)
+-- puppet == false (D-Dog's order target with [Dog] TargetPuppet = false): restrict-notice only.
+function PR.ProxyEnable(id, noAssignRoute, puppet)
+	if puppet == nil then puppet = true end
 	send(id, { id = 'SetDisableDamage', life = true, faint = true, sleep = true })
-	PR.ProxyInert(id, true)
+	PR.ProxyInert(id, puppet)
 	local cmd = { id = 'SetEnabled', enabled = true }
 	if noAssignRoute then cmd.noAssignRoute = true end
 	local ok = send(id, cmd)
-	PR.ProxyInert(id, true)
+	PR.ProxyInert(id, puppet)
 	return tostring(ok)
 end
 

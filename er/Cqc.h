@@ -19,17 +19,37 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
+
+namespace phantom::er::cqc
+{
+	struct Rules;
+}
 
 namespace phantom::er::Cqc
 {
+	cqc::Rules CurrentRules();  // [Cqc] as every CQC hit uses it (D-Dog's flinch and knockdown are CQC's: er/DogLogic.h)
 	void OnEvent(const Frame& a_frame, const proto::GuestEvent& a_event);
 	void Tick(const Frame& a_frame);  // FrameBegin, after the events: ends holds
 	void OnPuppetStop();               // lets every held enemy go
 	bool IsHeld(std::uint64_t a_handle);  // CQC holds him now (his ChrIns+0x538 hold bits are ours: Stealth leaves him be)
-	// A boss by CQC's own rule (cqc::IsBoss: [Cqc] boss_hp / boss_bigness against the Tarnished's HP; an unknown max HP counts as
-	// one). Decoys, the box poster and the Fulton leave such an enemy be: none of them may freeze or take a boss.
+	// D-Dog's "Keep 'em busy" (er/Dog.h, docs/research/ddog.md §3.6): the bitten one held a_seconds by the same bookkeeping as
+	// Snake's grab, so a dog hold and a CQC hold never stack on one enemy: one owner of his bits, put back once. False (nothing
+	// held: the bite is a flinch only) when Snake holds him, a Fulton balloon has him, he was let go less than hold_cooldown ago,
+	// he is a boss (CQC's rule), or he isn't in Elden Ring's list. No leave_distance rule (the dog has him, not Snake). Snake's grab
+	// of the one the dog holds takes the hold over (choke, interrogate, throw: he is Snake's then); a new dog hold lets the last go.
+	bool HoldFor(std::uint64_t a_handle, float a_seconds, std::string_view a_who);
+	void LetGo(std::uint64_t a_handle, const char* a_why);  // ends D-Dog's hold on him, if it has one
+	bool DogHolds(std::uint64_t a_handle);
+	// A boss by CQC's HP rule alone (cqc::IsBoss: [Cqc] boss_hp / boss_bigness against the Tarnished's HP; an unknown max HP counts
+	// as one).
 	bool IsBossHp(std::int32_t a_maxHp);
+	// A boss: the HP rule, or Elden Ring's own mark of one -- his NpcParam row's isSoulGetByBoss bit (params::kNpcBossBits); an
+	// NpcParam that can't be read counts anything bigger than an ordinary enemy (cqc::IsBoss with a_npcBoss). Every rule that must
+	// leave a boss alone asks this: CQC's grab, D-Dog's pick / bite / bark / hold, decoys, the box poster, the Fulton, the ActorTable's
+	// kActorBoss (review 0.8.0: the HP rule alone let a ~1000 HP dungeon boss be held, slept or killed).
+	bool IsBoss(std::int32_t a_npcParam, std::int32_t a_maxHp);
 
 	// Dev console: `cqc [status | grab | throw | choke | interrogate | release | on | off]` -- an action as if the guest had sent it
 	// (Snake's place and facing from the puppet), for testing without MGSV's controls.

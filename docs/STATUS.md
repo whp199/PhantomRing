@@ -1,4 +1,4 @@
-# Status (2026-11-03, 0.7.0-alpha)
+# Status (2026-11-04, 0.8.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,158 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## 0.8.0-alpha, 2026-11-04: D-Dog's polish, integration with both games -- D-Dog on by default
+
+Both real games on the default mapping (`pr launch --er-headless 3840x2160`, `pr er-continue`, the exclusive virtual pad, no controller:
+`real pad polls hidden 0`; Elden Ring 1.17.2, MGSV 1.0.15.4), the player's save at Stormveil (the lower courtyard and its Godrick
+soldiers, the Rampart Tower grace -- one rest there to bring the courtyard's soldiers back -- and its 14.6 m tower ladder), with the
+host's and the guest's D-Dog polish (commits 963ea89, 7c39be4) and the round's 14 review findings (commit "Review fixes for the D-Dog
+polish"). ~1 h 10 min: one launch, then an Elden Ring-only relaunch for the fix found in it (MGSV kept running). Elden Ring's hits on
+Snake harmless (`combat set hurt_mult 0`, 1 again at the end); positions through `call setpos`, the camera through MGSV's
+`Player.RequestToSetCameraRotation`, D-Dog's suits through MGSV's own iDroid > MISSIONS > BUDDY SUPPORT > CHANGE EQUIPMENT (GMP in memory
+only), every order through MGSV's real call menu (hold LB, right stick, let go, R3); Bark as the player's command (`!dog player 10`: the
+save has no Bark entry). Per-frame traces of both sides throughout: the guest's `!dog placetrace on` (the published place, MGSV's dog,
+every placement) and the host's new `buddy trace on` (D-Dog as drawn: the guard's raw and drawn point, its act, view, flags). The saves
+taken at the start (`backups/20261104-041719`) were put back: **ER 8 of 8 files equal by sha256** (`PhantomRing0000.sl2` and its `.bak`
+restored, the other 6 never changed), **MGSV 7 of 7 equal** (never changed: nothing reached MGSV's save; the player's buddy -- D-Walker
+-- and D-Dog's suit -- battle dress, put back in the session too -- are the save's); the copy before the restore is
+`backups/20261104-052907-pre-restore`. Both games stopped, the virtual pad off, `build/PhantomRingHost.firstrun` removed.
+
+- **Found in the run and fixed: the host's draw guard moved the real dog.** It watched the median of the dog's draws' matrix means,
+  which with the real dog jumps 1.5-6 m in a frame as it turns (skinning matrices carry the bind pose's offsets) while its published
+  place moves under 0.25 m: the guard "held" those jumps by moving the body (first 10-minute run: the guard's offset changed by more than
+  0.5 m in a frame 125 times, up to 6.4 m, all in view; the guest's place had 0 such steps). It now watches the published place
+  (docs/HOST.md "D-Dog in Elden Ring"). Elden Ring was relaunched with the fix; everything below "second run" is with it.
+- **10 minutes, second run** (fixed host; runs, turns, R3 jumps, dives, darts, binoculars, Bark x5, Wait + a run into a wall + the
+  whistle every 2 min, an order every ~15 s on the soldier the host picks, back to the courtyard every 70 s): **18 orders -- 15 Ordered ->
+  Connected -> Released, 3 refused at the click** (2 "out of sight" / "too near (CQC's)" with no paw in that LB hold, 1 with the paw
+  1.26 s before over another soldier): **none refused where the paw had shown over him**; **0 MGSV alerts, 0 warnings, 0 errors** in
+  both logs. **D-Dog as drawn, every frame (70,955 frames of the relaunched session): largest step 0.491 m per 60 Hz frame**; steps
+  over 0.5 m: only the 12 frames where `call setpos` moved Snake himself (the dog with him); the guard acted 1 x out of view (a 2.2 m
+  step after a 15-frame host hitch), 4 holds (Snake's 4 m `setpos` hops: the dog kept its place, then eased in). The guest's published
+  place: at most 0.277 m a frame (39,644 frames). First run (old guard): 22 orders, 21 connected and released, 1 refused (its soldier
+  not realized within 1.5 s), 0 refused at the click; published place at most 0.311 m a frame (33,542 frames), 0 alerts, 0 warnings.
+- **Every suit's order** (each put on through CHANGE EQUIPMENT; the save's battle dress back at the end): wound (221 -> 1 HP:
+  `hp fallback -220`), kill (`knife, lethal` -> dead), knock out (`knife, not lethal (stun)` -> `sleep +252` -> asleep), Get it twice
+  (`fulton: ... +114 runes`; once lost: the darted soldier woke while the dog ran, `MGSV let go of the sleeper and no Fulton
+  followed`), Keep 'em busy x36. One order went through on the guest's own pick memory (KO, the host's pick dropped for "no clear run
+  (a wall)"; the dog reached him) -- 0 times in both 10-minute runs.
+- **The leap**: the battledress's last bite, frame by frame as drawn -- the run at 0.20-0.21 m a frame up to 12 m from Snake, the leap
+  0.24-0.29 m a frame, no snap: largest step 0.294 m. Frames (hud shots ~0.6 s apart): the dog setting off, then on the soldier.
+- **Wait near a wall**: Wait, Snake run into the courtyard wall 4 s and back: MGSV's Snake slipped 12.25 m, the dog's Elden Ring place
+  moved **1 cm** (0.49, 0.03 -> 0.49, 0.02): the guest's offset (12.26 m) did it, the host's pin had nothing to add (largest 1.25 m
+  while the guest's lagged); the whistle brought it to Snake. Attack orders from Wait end the host's pin at `kDogOrdered` (live x3).
+- **A climb-up** (a 0.98 m ledge in the courtyard): `staged: taken along to Snake at the site (70.5 m)`, `back home with Snake`, `MGSV
+  moved it 14.6 m from where it was put -- put there again`; drawn steps through it under 0.5 m. **The 14.6 m tower ladder** (first
+  launch): up with the dog hidden on it, drawn beside Snake on the upper floor after it (once drawn 2.3 m up on the door arch's top for
+  a moment: the ground ray starts 2.5 m above). Walking into the shaft at the top dropped Snake down it (59 % fall damage: the known
+  issue). **R3 jumps** (4), dives, 93 treadmill shifts of the dog (4 undone by MGSV and given again).
+- **D-Walker**: deployed from the iDroid in the run (`D-Walker deployed (object id 0x5800)`), mounted with Y (`Snake rides D-Walker`,
+  frame: its flamethrower box), ridden, dismounted. **No D-Dog, no cost**: with D-Walker out and LB held 3.5 s -- `picks 658 (8134
+  rays)` before and after, no `dog:` line, the corner "D-Walker orders: ..." and D-Walker's call menu (frame), no paw.
+- **Regression** (README How to play): run, camera, crouch, R3 jump (`Snake jumps -- 1.20 m up`), X dive, LT + RT (`equip 7
+  SUPPRESSED (suppressor life 30 before the shot)`), B reload, D-pad (`suppressor: in hand equip 36 ... none`, back to the pistol),
+  RB binoculars (`5 marked`), LB, Start / B, View held (`MGSV menu open`), View + Start x2 (`Tarnished mode ON` / `OFF`), View + X
+  (`Flask of Crimson Tears used 911 ms after the press, 3 left`), the one-press quick item (View + D-pad down: `the quick item is now
+  slot 1: Flask of Cerulean Tears`, and back), the ladder and the climb-up above; a grace rest (`kHEvRested`: ammo refilled).
+- **Not fixed / open**: MGSV's green marker over the dog (with its distance) still showed in 2 of ~15 bite frames looked at (first
+  launch); a teleport of Snake while the dog waited was taken for 20.9 m of slip by the guest (fixed after the run, unit-tested only);
+  Snake's MGSV rounds on the dog itself, a real Elden Ring dog as the target and `bosses = stagger` live are still not tried.
+- **Defaults**: ddog.md §9's rule met with the fixed host -- **the host's `[Dog]` ships on** (`enabled`, `spot`, `indicator`, `bark`,
+  `order_text`, `step_guard`, `wait_pin`, `pick_latch_ms 500`; the ini = the built-in defaults, `test_host` checks it).
+
+## 0.8.0-alpha, 2026-11-04: D-Dog, release integration with both games
+
+Both real games on the default mapping (`pr launch --er-headless 3840x2160`, `pr er-continue`, the exclusive virtual pad, no controller:
+`real pad polls hidden 0`; Elden Ring 1.17.2, MGSV 1.0.15.4; ~1 h 50 min: a launch, a relaunch of both for two fixes found in it, an
+MGSV-only relaunch for a third, and MGSV with the recorder for `ddog_kill_080.prrec`), the player's save at Stormveil (the Rampart Tower
+grace and room, the walled lower courtyard with its Godrick soldiers and the team-30 `81100014`s lying among them, the walkway west of
+it, the 13 m ladder `AEG219_070_0500`). Elden Ring's hits on Snake set harmless (`combat set hurt_mult 0`; 1 again at the end); positions
+through `call setpos`, the camera through MGSV's `Player.RequestToSetCameraRotation`, D-Dog's equipment through MGSV's own iDroid >
+MISSIONS > BUDDY SUPPORT > CHANGE EQUIPMENT (GMP in memory only), orders through MGSV's real call menu (hold LB, right stick, let go,
+R3), Bark and the whistle also as the player's command (`!dog player 10|8`); `[Dog]` on in the host for the session (`dog all on`).
+The saves taken at the start (`backups/20261104-001214`) were put back: **15 of 15 files equal by sha256** (`PhantomRing0000.sl2` and its
+`.bak` restored; `ER0000*`, `MGS_ER0000*`, `steam_autocloud.vdf` and MGSV's 7 files never changed -- nothing reached MGSV's save); the
+copy before the restore is `backups/20261104-020226-pre-restore`. Both games stopped, the virtual pad off,
+`build/PhantomRingHost.firstrun` removed (the test's card).
+
+- **The round's code review** (16 findings, all taken; commit "Review fixes for D-Dog (0.8.0)"): v17 `kHostDogLayer` (the guest takes the
+  attack orders over only while the host's layer is on) and D-Dog's style in buddyFlags bits 8-15 (the host picks for it before any
+  order); the guest's job texts under a lock; Wait / DD during an order no longer undone by our whistle, a waiting dog left waiting by a
+  refused order; the pick looked for again 350 ms at the order; the dedicated soldier kept inside Snake's clearance; `!dog attack on`
+  re-arms the alert guard; bosses by NpcParam's `isSoulGetByBoss` bit (every boss-avoiding rule); no bite on a lifted or Snake-held
+  enemy; the second busy bite keeps the hold; nothing applied or left while D-Dog isn't live; LB not while MGSV's menu is up; no failure
+  text after the player's own whistle / Wait / DD; the floor search within 30 m; the DogStyle comments; fake_mgsv like the real guest.
+- **Found in this run and fixed** (commit "D-Dog, found live with both games"; then the guest's two below): **the stun knife and the
+  knife were swapped** -- with each of the save's five suits put on in MGSV the style byte is the equipment and the call menu's command
+  follows it (STUN 2 -> 13 "Do it (knock out enemy)", KNIFE 4 -> 12 "Do it (kill enemy)"); the stun knife's first order went to Elden
+  Ring as a kill with the knife's 25-lives share (its bullet missed). **A kill whose bullet missed** (a soldier charging Snake) left him
+  unhurt: a dog kill or wound is now dealt through the HP route when its bullet doesn't land. **The dog system read after it was
+  freed**: one re-equip's 22 s gave ~400 garbage style values (the host's style flipped with them); now forgotten while no dog is out
+  (live after: one line per re-equip, D-Dog -> D-Horse and D-Dog -> D-Walker swaps without a single style read). **D-Dog's orders paused
+  D-Walker's following**: a walker deployed after the dog stood 36 m away until whistled; dog commands no longer touch it (live: `!dog
+  player 14` with D-Walker out -> `-- D-Dog's`, the walker's leads went on).
+- **Deploy**: iDroid > MISSIONS > BUDDY SUPPORT > D-DOG -> `boot: the player deployed D-Dog from the iDroid (was D-Walker)`, `buddy: D-Dog
+  deployed (object id 0x2600)`, its location object confirmed 0.5 s after the skin; four more deploys (two launches, a re-deploy from
+  D-Horse) the same.
+- **Beside Snake** (the dog's MGSV place relative to Snake on the odometer -- what the host maps -- every guest frame): runs in six
+  directions + 2 jumps, 8 treadmill jumps: largest step 0.23 m; the 13 m ladder up (`+13.0 m up`, the dog drawn on the upper floor
+  1.5 m from Snake after it; the floor-near-Snake rule had moved it toward him on 507 frames on the way) 0.12 m; in the 10-minute run below 33 treadmill jumps and 3
+  climb-ups / vaults with the dog out. Steps over 0.5 m: see the 10 minutes.
+- **Wait / Whistle**: the call menu's Wait (command 9: `order record bits 0x20005`), Snake ran 15 m away and back through two treadmill
+  jumps: the dog's place didn't move by a centimetre in MGSV's terms (its Elden Ring spot moved 3 m: Snake had been stopped by the
+  courtyard's barricades on the way, which MGSV's world doesn't have); the call menu's whistle (command 8, between Wait and the top)
+  brought it from 11.4 m to 1.6 m in 2 s.
+- **Spotting**: `dog: smells npc 30000614 ... 9.0 m from the dog` ... -> "D-Dog: Found enemy (5 nearby)" (and up to 15); frames: hollow
+  red triangles over soldiers through the barricades, "14m" / "10m" near the centre only.
+- **Bark** (`!dog player 10`: the save has no Bark entry): MGSV's dog took it (`order bark ... taken by the dog's handler`), `npc 30000614
+  hears D-Dog bark 7.6 m away and stops to stare (5 s)`, released 5 s later; the corner "D-Dog: Bark -- enemies near him stop and stare
+  at him" (frame). 23 stares in the 10 minutes.
+- **The attack orders**, each style through MGSV's real call menu with its own suit (frames: the paw over the pick with LB held; the
+  white naked dog on a soldier's arm, MGSV's green marker over it):
+  - wound (battledress, 14): `follow: the player's buddy command 14` -> `taken over` -> soldier `0x450` realized in 860 ms -> Ordered ->
+    `bite connected (0x48e4ede3daed body attack ...)` 1.75 s later -> `wound: damage 317 (never below 1 HP)` -> **317 -> 1**; Released at
+    6.2 s, the whistle;
+  - busy (naked, 11): MGSV's bite `0x887890ebe04a`, `D-Dog holds npc 30000814 ... 6.0 s`, three flinches, let go at 6.0 s;
+  - knock out (stun knife, 13, after the fix): `knife, not lethal (stun)` -> `sleep +252 (resist 229, 2 rungs)` -> **ASLEEP**;
+  - kill (knife, 12, after the fix): `knife, lethal`, MGSV's share 252058 -> `kill: damage 4420` -> **dead**;
+  - Get it (Fulton vest, 15) on a sleeper: the asleep proxy ordered 18 ms after the command, MGSV's own Fulton 12.3 s later -> `fulton:
+    the balloon goes up on npc 30000814` -> out of the world, `+114 runes`.
+- **Never a friend**: a team-30 `81100014` lying 1.1 m from a soldier, 0.5° and 1.0° off the centre at 14.6 / 16.4 m: `not hostile
+  (never a candidate)`; the soldier behind him, 1.9° off, was the pick; with LB held the paw stood over the soldier (frame); Rogier's
+  phantom `never a candidate`; the soldier hidden by barricades: "D-Dog: he is out of sight" (frame).
+- **Bosses refused** (the pick only, never near an arena): Godrick (`47500014`, 6080 HP, NpcParam's boss bit) listed `a boss` at 147 m,
+  `cqc: ... NpcParam's boss bit (204 seen, 0 rows unread)`; Stormveil's 3148 HP `46000014` (no bit, its HP) `a boss` at 63 m; `dog test
+  boss` on a soldier dead centre: `a boss`.
+- **MGSV's alerts**: phase 0 in every guest frame sampled (~110,000), 0 `alert:` lines in all four guest sessions.
+- **10 minutes of continuous play with D-Dog** (naked: busy; runs, turns, jumps, dives, suppressed darts, binoculars, Bark, Wait and the
+  whistle, an order every 15-20 s on the soldier the host picks, back to the courtyard every 70 s): **16 orders -- 14 Ordered -> Connected
+  -> Released (14 holds), 2 Refused at the click** (`the pick ... is nobody (... out of sight)` the instant the order came; the paw had
+  shown over him); **0 alerts, 0 warnings and 0 errors** in both logs; 23 Bark stares, 30 "Found enemy" lines, 3 climb-ups / vaults, 14
+  binocular looks; `kBuddyEngaged` in 5939 frames. The dog's place as Elden Ring maps it, frame by frame (36,362 frames): 33 treadmill
+  jumps with no step; **12 steps over 0.5 m** -- 9 during a bite (0.50-0.70 m: MGSV's leap and takedown snapping onto the soldier; once a
+  5.9 m snap; twice a one-frame 6-8 m blip in its place), 1 of 0.58 m as it set off after a release; and in other runs 0.52 m at one
+  treadmill jump and, once, ~77 m for 0.33 s after a climb-up (MGSV had moved its dog toward the climbing Snake). An earlier 10-minute
+  run with the battledress made 3 orders only (the wounded soldiers, left at 1 HP, died to their own fire pots and the courtyard
+  emptied), 0 alerts, 0 warnings.
+- **Defaults** (docs/research/ddog.md §9's rule: 10 minutes, >= 10 orders, 0 alerts, 0 `dog:` warnings, every style the save allows once,
+  never a jump over 0.5 m outside a leash): all met but the last -> **the host's `[Dog]` stays opt-in** (`enabled = false`); the guest's
+  `[Dog]` stays on (the treadmill: no more ~6 m jumps; its attack orders act only with the host's layer on).
+- **D-Walker** after D-Dog: deployed from the iDroid (`D-Walker deployed (object id 0x5800)`, dropped from ~140 m, "D-Walker: Arrived at
+  drop point" (frame)), its location object confirmed, leads `glided 0.00 s`, mounted with Y (`Snake rides D-Walker`, frame: its
+  flamethrower box), ridden 6.7 m, dismounted. (It didn't follow until whistled: D-Dog's orders had paused it -- fixed above.)
+- **Regression** (README How to play, the tower room and the courtyard): run, camera, A crouch / stand, X dive (`hop #10: 0.60 m up`), LT
+  + RT (`equip 7 SUPPRESSED (suppressor life 30)`, `Snake tranquilizer ... suppressed`), B reload, D-pad up / down, RB (`binoculars up (1
+  marked)`), LB call menu, Start (Elden Ring's menu) and B, View held (`MGSV menu open`, Start closed it), View + Start x2 (`Tarnished
+  mode ON` / `OFF`), View + X (`Flask of Crimson Tears used 957 ms after the press, 3 left`), **the one-press quick item** (`View + D-pad
+  down` -> `the quick item is now slot 1: Flask of Cerulean Tears`); R3 jumped 1.20 m in the first follow test (in the courtyard
+  `no jump -- a ceiling lower than him`, under its scaffold; crouched, R3 is refused as designed); View tapped opened no map (soldiers
+  were after Snake: Elden Ring's own rule).
+- **Recording**: `recordings/ddog_kill_080.prrec` (45 s, MGSV + `pr record --actors near`: `!dog style 4`, actor 0 flagged
+  `kActorDogTarget`, `!dog go 12` -> Ordered / Connected (`knife, lethal`, 145, share 252058) / Released; 2643 states, 0 unresolved keys).
+- Not done: `[Dog] bosses = stagger`; Snake's MGSV rounds on the dog mid-bite; the dog's bite on a real Elden Ring dog; Snake walking up to
+  the enemy the dog holds and grabbing him (the guest no longer parks that soldier: unit-tested only); `Announce` (not built).
 
 ## 0.7.0-alpha, 2026-11-03: release integration with both games
 
@@ -376,7 +528,7 @@ The player's session-6 reports, item by item:
 - **View, then Start: the chord.** Start 550 ms after View: MGSV's iDroid flashes open for ~1 s and closes by itself, Tarnished
   mode 1.0 s after Start (three times); Start then View: Snake back; View held alone: the iDroid, Start closes it.
 - **Buddies from MGSV's menu.** Dismiss D-Walker, deploy D-Horse, D-Dog, D-Walker again, each with the iDroid through the pad
-  (the host's corner: "D-Walker dismissed -- no buddy now", "Buddy: D-Dog is out"); D-Dog follows (it doesn't fight or mark Elden Ring's enemies: its "Found enemy" is MGSV's about MGSV's own sandbox; D-Dog as a battle buddy is next, docs/research/ddog.md).
+  (the host's corner: "D-Walker dismissed -- no buddy now", "Buddy: D-Dog is out"); D-Dog follows (it didn't fight or mark Elden Ring's enemies then: its "Found enemy" was MGSV's about MGSV's own sandbox; since 0.8.0 it does, opt-in: the 0.8.0 section above).
 - **Fulton of a sleeping Elden Ring soldier: works.** Gatefront: two darts, walk up, MGSV's Fulton prompt and "ZZZ" marker over
   him, Y held -> 5 s later Elden Ring's balloon lifts him away, gone, +64 runes (HOST.md "Fulton"). Elden Ring's sleep lasts ~50 s.
 - **Full proxies (`!proxy on`, off by default): not ready.** With the real host MGSV went to alert phase 3 within 80 s and an MGSV

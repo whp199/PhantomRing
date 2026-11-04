@@ -81,6 +81,24 @@ Scripted runs drive Elden Ring and MGSV with `pr er "press <buttons> <ms> [lx ly
 
 Other test commands of the host console (docs/HOST.md "Dev console"): `die [snake|er]` (a test death), `ladder early on|off`
 (the climb's end told to MGSV at Elden Ring's EndTop/EndBottom, or after the settle as before 0.6.0), `mantle set <key> <m>`.
+D-Dog (docs/HOST.md "D-Dog in Elden Ring"): `dog all on|off` (the whole `[Dog]` layer for a session, not saved), `dog pick` (every
+character around with the reason he is or isn't the dog's pick: run it with the camera on an NPC to see he never is), `dog test boss`,
+`dog attack [busy|kill|knockout|wound|fetch] [0xHANDLE]` / `dog release` (as the guest's kGEvDogAttack), `dog bark`, `dog set <key> <v>`
+(0.8.0 polish: `pick_latch_ms` 0 = 0.8.0's pick with no latch, `step_guard off`, `wait_pin off` for an A/B run), `buddy` (the step guard's
+and the Wait pin's counts: steps over 0.5 m raw and drawn, holds and how they ended), `buddy guard reset` and `buddy trace on|off` (the
+0.8.0 integration's per-frame measure: one CSV line per frame D-Dog is drawn, `PhantomRingBuddyTrace.csv` next to the host DLL --
+`ms,guestFrame,odoEpoch,raw.xyz,drawn.xyz,act,rawStep,drawnStep,jump,rawIn,drawnIn,gflags,bflags,pe.xyz,wait.x,wait.z,lift,dt,fromPub,est.xyz`:
+the step guard's point (the dog's published place through its draws' anchor, `fromPub` 1) and where the dog is drawn, the guard's act
+(`buddyguard::Act`), whether each is in view, Snake's Elden Ring place and the old estimate from the draws' matrices; join it with the
+guest's `!dog placetrace on` CSV by `guestFrame`). Leave both traces off for play: they grow ~20 MB an hour.
+With fake_mgsv `--buddy dog`: `!dog attack target <style> full` takes the host's pick (kActorDogTarget); `!order 10` is Bark.
+The 0.8.0 polish's measures (docs/HOST.md "D-Dog in Elden Ring"): orders through MGSV's call menu from the virtual pad (`!callmenu on
+ordered`, then `pr er "press lb 3000 0 0 32767 0"`, `press lb 3000`, `press lb+r3 3000`, `press lb 3000`, `press none 50` -- each press
+long enough to overlap the next one's start, since `pr er` takes ~0.3 s to run), the dog's one-frame jumps (`!dog blip 7 0 1`, the
+climb-up case `!dog blip 77 0 20`), Wait with Snake run into a wall (`!order 9`, `!move 3 <yaw from combat aimat>`, `!order 8`).
+The guest's side (docs/GUEST.md 8.4) with fake_er: `pr er block 1|0` (an Elden Ring wall: the puppet stays while MGSV's Snake runs on;
+the `--actors near` characters move by the slip in MGSV, as the real host maps them) and `--trace-draws` (each buddy draw's bone mean,
+`buddym=`).
 
 Exit codes: 0 ok, 1 error (Lua or command error, launch refused), 2 usage / no mapping,
 3 the side you asked is absent, 4 console timeout.
@@ -178,6 +196,11 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 - `--actors near` + `pr er actor 0|1 asleep|awake|dead|alive|at <dx> <dz>|back|renew` and `pr er actors`: the two actors' flags,
   places (MGSV metres from Snake) and handles for ActorProxy / Fulton tests (docs/GUEST.md 20.4-20.5); a kGEvFulton a=1 takes that
   actor out of the table, as the host takes the enemy out of Elden Ring. `pr record` takes `--actors` too.
+- `pr er actor 0|1 dogtarget|nodogtarget` (v17): that actor is the host's pick for D-Dog's next order (`kActorDogTarget`, at most
+  one record). kGEvDogAttack (phase, style, MGSV attack id, share, handle), kGEvBuddyOrder (with D-Dog's style from `pad[0]`) and
+  `kBuddyEngaged` coming and going are printed (docs/research/ddog.md §4).
+- HostState carries `HostFlags.DogLayer` (v17, the host's `[Dog]` on: the real guest takes D-Dog's attack orders over only then);
+  `pr er doglayer 0|1` clears / sets it.
 
 **fake_mgsv**:
 - Waits for a host session, then publishes Snake walking a circle in a 10 m sandbox (treadmill warp kept out of the odometer), plus the pad's left stick.
@@ -194,6 +217,20 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
   Fire `b`'s bit 31) unless it says `loud`, and after `shots` suppressed shots (default 4, 0 = never) the flag drops right after
   the shot that wore it out, as MGSV's spent suppressor comes off (the host's "Suppressor worn out"). `!fire ... suppressed` marks
   one shot without the flag.
+- D-Dog (v17, docs/research/ddog.md; with `--buddy dog` or `!buddy dog`): `!dog style <busy|fetch|kill|knockout|wound|unknown>`
+  (its equipment), `!order <cmd>` (kGEvBuddyOrder with `pad[0]` = style + 1 for the dog), `!dog attack [target|nearest|none|0xHANDLE]
+  [style] [full|ordered|connect|lost|refused]` (kGEvDogAttack on the host's pick `kActorDogTarget` by default; full = Ordered,
+  Connected 0.6 s later with `kBuddyEngaged`, Released after `!dog busy <s>`, 2 s by default; a new order ends the one under way),
+  `!dog release`, `!dog status`. The host's pick is logged as it changes. As the real guest (0.8.0): wound is the body attack 147, each
+  event carries MGSV's share of its attack (the bite 1.1538 lives, the knife 25.2058, the stun knife and the body attack 0; `!share`
+  overrides), `pad[0]` only for the attack orders 11-15, and D-Dog's style is in buddyFlags bits 8-15 every frame.
+  0.8.0 polish (the host's measures): `!callmenu on|off [full|ordered|connect]` -- MGSV's call menu from the pad as the real guest takes
+  an attack order: LB held, the right stick pushed and let go, R3 clicked while LB is still held -> kGEvBuddyOrder of the dog's attack
+  command (11-15 by its style), then the host's pick taken at once or within 350 ms (`callmenu: order 11 takes the host's pick 0x... N
+  ms after the click`), else kGEvDogAttack Refused (`REFUSED -- no host pick within 350 ms`); a taken order runs `!dog attack <pick>
+  <mode>`. `!order 9` makes the dog wait where it is in Snake's odometer frame (as the real guest's treadmill keeps it; nothing moved
+  by Elden Ring's slip), `!order 8` / `16` lets it follow again. `!dog blip <dx> <dz> [frames] [dy]` puts the dog's place and its
+  draws off by that much for N frames (1 by default) and back; `!dog move <dx> <dz>` for good (it waits there).
 - `!binoculars on|off` (v13) sets `kGuestBinoculars` + `kGuestFirstPerson`: the real Elden Ring host then marks the characters
   near its camera's centre (docs/HOST.md "Marking"; `pr er 'mark binoculars on'` does the same without any guest flag).
 - Answers `pr lua` (and `!status`) through a tiny Lua subset: `return <exprs>` and `vars.x = <expr>`, with `vars.*`, `BuddyType.*`, `math.*`, `tostring`, `..`, `~=`, and/or/not.
@@ -201,9 +238,9 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 ## Tests (offline)
 
 ```
-python3 tools/phantomring/test_layout.py     # build/layout_dump.exe (110 values) + a dump generated from proto.py (489 values: every field
+python3 tools/phantomring/test_layout.py     # build/layout_dump.exe (117 values) + a dump generated from proto.py (552 values: every field
                                              # offset/size of all 22 structs, all constants, all enum values), both MinGW-built, run under wine
-python3 tools/phantomring/test_fakes.py      # fake_mgsv vs fake_er, ~14 s, 51 checks incl. host restart -> guest re-attach + resend, buddy block
+python3 tools/phantomring/test_fakes.py      # fake_mgsv vs fake_er, ~17 s, 72 checks incl. host restart -> guest re-attach + resend, buddy block, v17 D-Dog
 python3 tools/phantomring/test_launcher.py   # backup/verify/restore/prune (default keep 10, the last 24 h kept, logs/ sessions only;
                                              # only launch backups, launcher-named, .first.json, symlinks, bad env values),
                                              # seed save, guest install refusals, profile validation,

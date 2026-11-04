@@ -14,6 +14,7 @@
 #include "Cqc.h"
 #include "Config.h"
 #include "Death.h"
+#include "Dog.h"
 #include "Dive.h"
 #include "Follow.h"
 #include "FultonAnchor.h"
@@ -101,6 +102,7 @@ namespace phantom::guest
 			sound::Tick(a_ready);
 			cigar::Tick(a_nowMs, a_ready);  // the Phantom Cigar's minutes for Elden Ring's clock (Cigar.h)
 			suppressor::LuaTick();         // `!suppressor <slot> <life>` (Suppressor.h)
+			dog::LuaTick(a_nowMs, a_ready);  // D-Dog's orders on Elden Ring targets, its style and order record (Dog.h)
 		}
 
 		std::string Command(std::string_view a_line)
@@ -272,6 +274,10 @@ namespace phantom::guest
 			// D-Walker's location object: the treadmill's native move and the lead alongside Snake (Walker.h)
 			if (cmd == "walker" || cmd.starts_with("walker ")) {
 				return walker::Command(std::string(cmd.substr(std::min<std::size_t>(cmd.size(), 7)))) + "\n";
+			}
+			if (cmd == "dog" || cmd.starts_with("dog ")) {
+				// !dog [...]: D-Dog ([Dog], Dog.h, docs/research/ddog.md)
+				return dog::Command(std::string(cmd.substr(std::min<std::size_t>(cmd.size(), 4)))) + "\n";
 			}
 			if (cmd == "horse" || cmd.starts_with("horse ")) {
 				// !horse [on|off|scan|shift <dx> <dz>]: the D-Horse treadmill ([Buddy] HorseTreadmill, Horse.cpp, GUEST.md 8.1a)
@@ -568,6 +574,7 @@ namespace phantom::guest
 		}
 		follow::Install();
 		horse::Init();  // [Buddy] HorseTreadmill (Horse.cpp): logs on or off
+		dog::Install();  // D-Dog's observe-only detours ([Dog], Dog.cpp): byte-checked
 		blast::Install();
 		throwing::Install();
 		placed::Init();

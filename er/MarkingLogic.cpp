@@ -78,8 +78,13 @@ namespace phantom::er::marking
 		}
 		// Deaths (and a marked one back alive: Elden Ring's respawns at a grace keep their handles, MGSV's marks stay too).
 		for (const auto& s : a_seen) {
-			if (auto* e = Find(s.handle); e && e->marked) {
+			if (auto* e = Find(s.handle); e && (e->marked || e->provisional > 0.0f)) {
 				e->deadFor = s.alive ? -1.0f : std::max(e->deadFor, 0.0f) + dt;
+			}
+		}
+		for (auto& e : e_) {
+			if (!e.marked && e.provisional > 0.0f) {
+				e.provisional = std::max(0.0f, e.provisional - dt);
 			}
 		}
 		// Who is looked at: in the cone and range, alive, not marked yet; the nearest the centre get the rays.
@@ -136,15 +141,16 @@ namespace phantom::er::marking
 				fresh.push_back(h);
 			}
 		}
-		// Not looked at: the time looked so far ebbs away (twice as fast); a dead mark that has faded is forgotten.
+		// Not looked at: the time looked so far ebbs away (twice as fast); a dead mark that has faded is forgotten, and so is a
+		// provisional one that ran out.
 		std::erase_if(e_, [&](Entry& e) {
-			if (e.marked) {
+			if (e.marked || (e.provisional > 0.0f && e.deadFor >= 0.0f)) {
 				return e.deadFor >= std::max(a_rules.fade, 0.0f);
 			}
 			if (std::find(looked.begin(), looked.end(), e.handle) == looked.end()) {
-				e.dwell -= 2.0f * dt;
+				e.dwell = std::max(0.0f, e.dwell - 2.0f * dt);
 			}
-			return e.dwell <= 0.0f;
+			return e.dwell <= 0.0f && e.provisional <= 0.0f;
 		});
 		Trim(a_rules);
 		return fresh;
@@ -191,13 +197,41 @@ namespace phantom::er::marking
 	float Marks::Opacity(std::uint64_t a_handle, float a_fade) const
 	{
 		const auto* e = Find(a_handle);
-		if (!e || !e->marked) {
+		if (!e || (!e->marked && !(e->provisional > 0.0f))) {
 			return 0.0f;
 		}
+		const float life = e->marked ? 1.0f : std::clamp(e->provisional / kProvisionalFade, 0.0f, 1.0f);
 		if (e->deadFor < 0.0f) {
-			return 1.0f;
+			return life;
 		}
-		return a_fade > 0.0f ? std::clamp(1.0f - e->deadFor / a_fade, 0.0f, 1.0f) : 0.0f;
+		return a_fade > 0.0f ? life * std::clamp(1.0f - e->deadFor / a_fade, 0.0f, 1.0f) : 0.0f;
+	}
+
+	void Marks::Provisional(std::uint64_t a_handle, float a_seconds)
+	{
+		if (!(a_seconds > 0.0f) || !std::isfinite(a_seconds)) {
+			return;
+		}
+		auto* e = Find(a_handle);
+		if (e && e->marked) {
+			return;
+		}
+		if (!e) {
+			e_.push_back({ a_handle });
+			e = &e_.back();
+		}
+		e->provisional = std::max(e->provisional, a_seconds);
+	}
+
+	bool Marks::IsProvisional(std::uint64_t a_handle) const
+	{
+		const auto* e = Find(a_handle);
+		return e && !e->marked && e->provisional > 0.0f;
+	}
+
+	std::size_t Marks::Provisionals() const
+	{
+		return static_cast<std::size_t>(std::count_if(e_.begin(), e_.end(), [](const Entry& e) { return !e.marked && e.provisional > 0.0f; }));
 	}
 
 	float Marks::Age(std::uint64_t a_handle) const
@@ -242,7 +276,10 @@ namespace phantom::er::marking
 		return static_cast<std::size_t>(std::count_if(e_.begin(), e_.end(), [](const Entry& e) { return e.marked; }));
 	}
 
-	std::size_t Marks::Looking() const { return e_.size() - Count(); }
+	std::size_t Marks::Looking() const
+	{
+		return static_cast<std::size_t>(std::count_if(e_.begin(), e_.end(), [](const Entry& e) { return !e.marked && e.dwell > 0.0f; }));
+	}
 
 	std::string DistanceText(float a_metres)
 	{
@@ -267,7 +304,7 @@ namespace phantom::er::marking
 	}
 
 	void Build(std::vector<Marker>& a_out, const Camera& a_cam, const Vec3& a_at, std::string_view a_text, bool a_hostile, float a_opacity, float a_age,
-		const Style& a_style)
+		const Style& a_style, bool a_hollow)
 	{
 		const float viewZ = Dot(a_at - a_cam.pos, a_cam.fwd);
 		if (!Finite(a_at) || !(viewZ > 0.1f) || !(a_opacity > 0.0f)) {
@@ -284,6 +321,7 @@ namespace phantom::er::marking
 		t.pos = a_at + a_cam.up * tri;  // its tip on a_at
 		t.radius = tri;
 		t.slack = kThroughWalls;
+		t.inner = a_hollow ? kHollow : 0.0f;
 		const float* c = a_hostile ? a_style.hostile : a_style.other;
 		std::copy_n(c, 4, t.color);
 		t.color[3] *= std::clamp(a_opacity, 0.0f, 1.0f);
@@ -309,6 +347,26 @@ namespace phantom::er::marking
 			m.color[3] *= std::clamp(a_opacity, 0.0f, 1.0f);
 			a_out.push_back(m);
 		}
+	}
+
+	void BuildPaw(std::vector<Marker>& a_out, const Camera& a_cam, const Vec3& a_at, const float (&a_color)[4], float a_opacity, const Style& a_style,
+		float a_scale, float a_lift)
+	{
+		const float viewZ = Dot(a_at - a_cam.pos, a_cam.fwd);
+		if (!Finite(a_at) || !(viewZ > 0.1f) || !(a_opacity > 0.0f)) {
+			return;
+		}
+		const float fov = std::isfinite(a_cam.fovY) && a_cam.fovY > 0.01f ? a_cam.fovY : 0.8f;
+		const float base = a_style.size * 2.0f * viewZ * std::tan(fov * 0.5f);  // the triangle's half height there
+		Marker p;
+		p.shape = Marker::Shape::kGlyph;
+		p.inner = 11.0f;  // the paw
+		p.radius = base * std::max(0.1f, a_scale);
+		p.pos = a_at + a_cam.up * (base * std::max(0.0f, a_lift) + p.radius);
+		p.slack = kThroughWalls;
+		std::copy_n(a_color, 4, p.color);
+		p.color[3] *= std::clamp(a_opacity, 0.0f, 1.0f);
+		a_out.push_back(p);
 	}
 
 	namespace

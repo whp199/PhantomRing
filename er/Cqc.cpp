@@ -8,6 +8,7 @@
 #include "Hud.h"
 #include "Log.h"
 #include "Mem.h"
+#include "Params.h"
 #include "Puppet.h"
 
 #include <array>
@@ -44,12 +45,35 @@ namespace phantom::er::Cqc
 			std::string       what;
 		};
 
-		std::optional<Held>                                                        g_held;
+		std::optional<Held>                                                        g_held;     // Snake's grab
+		std::optional<Held>                                                        g_dogHeld;  // D-Dog's bite ("Keep 'em busy", HoldFor)
 		std::deque<Queued>                                                         g_queue;
 		cqc::Cooldowns                                                             g_cooldown;  // no new hold before
 		std::array<std::uint64_t, static_cast<std::size_t>(cqc::Response::kCount)> g_responses{};
 		std::uint64_t g_events{ 0 }, g_missed{ 0 }, g_gags{ 0 }, g_noHold{ 0 }, g_late{ 0 }, g_lost{ 0 };
+		std::uint64_t g_dogHolds{ 0 }, g_dogRefused{ 0 }, g_dogTakenOver{ 0 };
 		std::string   g_last;
+		params::Table g_npcRows{ params::kNpcParam };  // the boss bit (IsBoss); read only
+		std::uint64_t g_bossByNpc{ 0 }, g_npcUnread{ 0 };
+		bool          g_npcWarned{ false };
+
+		// His NpcParam row's isSoulGetByBoss bit; nullopt when the row can't be read (logged once).
+		std::optional<bool> NpcBossBit(std::int32_t a_npc)
+		{
+			auto*      row = a_npc > 0 ? g_npcRows.Row(static_cast<std::uint32_t>(a_npc)) : nullptr;
+			const auto bits = row ? SafeRead<std::uint8_t>(row + params::kNpcBossBits) : std::nullopt;
+			if (!bits) {
+				++g_npcUnread;
+				if (!g_npcWarned && a_npc > 0) {
+					g_npcWarned = true;
+					Log::Warn("cqc: NpcParam {} not readable ({}) -- bosses told by HP and size only, and anything bigger than an ordinary enemy counts "
+					          "as one",
+						a_npc, g_npcRows.Describe());
+				}
+				return std::nullopt;
+			}
+			return (*bits & params::kNpcIsSoulGetByBoss) != 0;
+		}
 
 		Vec3 V(const float* a_v) { return { a_v[0], a_v[1], a_v[2] }; }
 
@@ -96,22 +120,26 @@ namespace phantom::er::Cqc
 			return true;
 		}
 
-		void Release(const char* a_why, const game::Character* a_c = nullptr)
+		// Ends the hold in a_slot (Snake's g_held or the dog's g_dogHeld): his bits back, the hold cooldown on him.
+		void ReleaseSlot(std::optional<Held>& a_slot, const char* a_who, const char* a_why, const game::Character* a_c = nullptr)
 		{
-			if (!g_held) {
+			if (!a_slot) {
 				return;
 			}
 			std::vector<game::Character> chars;
 			if (!a_c) {
 				chars = game::Characters(256, true);
-				a_c = Find(chars, *g_held);
+				a_c = Find(chars, *a_slot);
 			}
-			const bool back = PutBack(a_c, *g_held);
+			const bool back = PutBack(a_c, *a_slot);
 			// Any end of a hold: no new one on him for a while (release + re-grab kept him frozen ~6 s of every ~7).
-			g_cooldown.Start(g_held->handle, ::GetTickCount64(), Cfg().cqcHoldCooldown);
-			Log::Info("cqc: {} let go ({}){}", g_held->name, a_why, back ? "" : " -- his bits left alone (gone, disabled or a Fulton's)");
-			g_held.reset();
+			g_cooldown.Start(a_slot->handle, ::GetTickCount64(), Cfg().cqcHoldCooldown);
+			Log::Info("cqc: {}{} let go ({}){}", a_who, a_slot->name, a_why, back ? "" : " -- his bits left alone (gone, disabled or a Fulton's)");
+			a_slot.reset();
 		}
+
+		void Release(const char* a_why, const game::Character* a_c = nullptr) { ReleaseSlot(g_held, "", a_why, a_c); }
+		void ReleaseDog(const char* a_why, const game::Character* a_c = nullptr) { ReleaseSlot(g_dogHeld, "D-Dog's ", a_why, a_c); }
 
 		Vec3 SnakeChest() { return Puppet::CurrentAnchor().pe + Vec3{ 0, 1.0f, 0 }; }  // as a strike's arc (Combat::OnMelee)
 
@@ -167,11 +195,55 @@ namespace phantom::er::Cqc
 			h.chr = a_foe.chr;
 			h.handle = a_foe.handle;
 			h.name = a_foe.name;
-			// A second grab of the one we hold keeps what we set the first time (his own bits stay his).
+			// A second grab of the one we hold keeps what we set the first time (his own bits stay his); so does Snake's grab of
+			// the one D-Dog holds: the hold is Snake's from now on (never two owners of his bits).
 			h.setBits = g_held && g_held->handle == a_foe.handle ? g_held->setBits : static_cast<std::uint8_t>(kHoldBits & ~*v);
+			if (g_dogHeld && g_dogHeld->handle == a_foe.handle) {
+				h.setBits = g_dogHeld->setBits;
+				++g_dogTakenOver;
+				Log::Info("cqc: Snake takes {} over from D-Dog's hold", a_foe.name);
+				g_dogHeld.reset();
+			}
 			h.until = ::GetTickCount64() + static_cast<ULONGLONG>(std::max(0.0f, a_r.holdSeconds) * 1000.0f);
 			SafeWrite<std::uint8_t>(flags, static_cast<std::uint8_t>(*v | kHoldBits));
 			g_held = h;
+		}
+	}
+
+	namespace
+	{
+		// The re-assertion every hold gets: someone else cleared his bits under us (a poster stare that ended, the console's flags).
+		void Reassert(Held& a_h)
+		{
+			auto* flags = a_h.chr + game::kChrDebugFlags;
+			if (const auto v = SafeRead<std::uint8_t>(flags); v && (*v & kHoldBits) != kHoldBits) {
+				a_h.setBits |= static_cast<std::uint8_t>(kHoldBits & ~*v);
+				SafeWrite<std::uint8_t>(flags, static_cast<std::uint8_t>(*v | kHoldBits));
+			}
+		}
+
+		// D-Dog's hold: ends at its time, his death, his leaving the world or a Fulton balloon; Snake walking off doesn't end it.
+		void TickDog(ULONGLONG a_now)
+		{
+			if (!g_dogHeld) {
+				return;
+			}
+			if (Fulton::IsLifting(g_dogHeld->handle)) {
+				Log::Info("cqc: {} (D-Dog's hold) goes up on a Fulton balloon -- the lift holds him now", g_dogHeld->name);
+				g_dogHeld.reset();
+				return;
+			}
+			const auto  chars = game::Characters(256, true);
+			const auto* h = Find(chars, *g_dogHeld);
+			if (!h || h->dead || h->disabled) {
+				ReleaseDog(!h ? "gone" : h->dead ? "dead" : "disabled", h);
+				return;
+			}
+			if (a_now >= g_dogHeld->until) {
+				ReleaseDog("busy_hold over", h);
+				return;
+			}
+			Reassert(*g_dogHeld);
 		}
 	}
 
@@ -228,7 +300,7 @@ namespace phantom::er::Cqc
 		}
 		const auto&    foe = foes[*pick];
 		const auto     hit = Combat::CurrentRules();
-		const bool     boss = cqc::IsBoss(foe.maxHp, hit.scaling, rules);
+		const bool     boss = IsBoss(foe.npcParam, foe.maxHp);
 		cqc::Situation sit;
 		sit.boss = boss;
 		sit.held = g_held && g_held->handle == foe.handle;
@@ -276,9 +348,11 @@ namespace phantom::er::Cqc
 		if (!Puppet::Active() || !a_f.player) {
 			g_queue.clear();
 			Release("the puppet stopped");
+			ReleaseDog("the puppet stopped");
 			return;
 		}
 		FireQueued(a_f);
+		TickDog(now);
 		if (!g_held) {
 			return;
 		}
@@ -305,35 +379,105 @@ namespace phantom::er::Cqc
 			return;
 		}
 		// Someone else cleared them under us (a poster stare that ended, the console's flags): ours again, and ours to put back.
-		auto* flags = g_held->chr + game::kChrDebugFlags;
-		if (const auto v = SafeRead<std::uint8_t>(flags); v && (*v & kHoldBits) != kHoldBits) {
-			g_held->setBits |= static_cast<std::uint8_t>(kHoldBits & ~*v);
-			SafeWrite<std::uint8_t>(flags, static_cast<std::uint8_t>(*v | kHoldBits));
-		}
+		Reassert(*g_held);
 	}
 
 	void OnPuppetStop()
 	{
 		g_queue.clear();
 		Release("the puppet stopped");
+		ReleaseDog("the puppet stopped");
 	}
 
-	bool IsHeld(std::uint64_t a_handle) { return g_held && g_held->handle == a_handle; }
+	bool IsHeld(std::uint64_t a_handle) { return (g_held && g_held->handle == a_handle) || (g_dogHeld && g_dogHeld->handle == a_handle); }
+
+	bool DogHolds(std::uint64_t a_handle) { return g_dogHeld && g_dogHeld->handle == a_handle; }
+
+	bool HoldFor(std::uint64_t a_handle, float a_seconds, std::string_view a_who)
+	{
+		const auto now = ::GetTickCount64();
+		const char* why = nullptr;
+		const auto  chars = game::Characters(256);
+		const game::Character* c = nullptr;
+		for (const auto& x : chars) {
+			if (x.handle == a_handle) {
+				c = &x;
+				break;
+			}
+		}
+		if (g_held && g_held->handle == a_handle) {
+			why = "Snake holds him";
+		} else if (Fulton::IsLifting(a_handle)) {
+			why = "a Fulton balloon has him";
+		} else if (!c || c->dead || c->hp <= 0) {
+			why = "not in Elden Ring's list (or dead)";
+		} else if (IsBoss(c->npcParam, c->maxHp)) {
+			why = "a boss";
+		} else if (g_cooldown.Cooling(a_handle, now) && !(g_dogHeld && g_dogHeld->handle == a_handle)) {
+			why = "let go less than hold_cooldown ago";
+		}
+		if (why) {
+			++g_dogRefused;
+			Log::Info("cqc: D-Dog's hold on {} refused -- {}", a_who, why);
+			return false;
+		}
+		if (g_dogHeld && g_dogHeld->handle != a_handle) {
+			ReleaseDog("D-Dog took another one");
+		}
+		auto*      flags = c->chr + game::kChrDebugFlags;
+		const auto v = SafeRead<std::uint8_t>(flags);
+		if (!v) {
+			return false;
+		}
+		Held h;
+		h.chr = c->chr;
+		h.handle = a_handle;
+		h.name = std::string(a_who);
+		h.setBits = g_dogHeld && g_dogHeld->handle == a_handle ? g_dogHeld->setBits : static_cast<std::uint8_t>(kHoldBits & ~*v);
+		h.until = now + static_cast<ULONGLONG>(std::max(0.0f, a_seconds) * 1000.0f);
+		SafeWrite<std::uint8_t>(flags, static_cast<std::uint8_t>(*v | kHoldBits));
+		g_dogHeld = h;
+		++g_dogHolds;
+		Log::Info("cqc: D-Dog holds {} for {:.1f} s (no attack / no move; bits {:#x} ours)", h.name, a_seconds, h.setBits);
+		return true;
+	}
+
+	void LetGo(std::uint64_t a_handle, const char* a_why)
+	{
+		if (g_dogHeld && g_dogHeld->handle == a_handle) {
+			ReleaseDog(a_why);
+		}
+	}
 
 	bool IsBossHp(std::int32_t a_maxHp) { return cqc::IsBoss(a_maxHp, Combat::CurrentRules().scaling, MakeRules()); }
+
+	bool IsBoss(std::int32_t a_npcParam, std::int32_t a_maxHp)
+	{
+		const auto bit = NpcBossBit(a_npcParam);
+		if (bit.value_or(false)) {
+			++g_bossByNpc;
+		}
+		return cqc::IsBoss(a_maxHp, bit, Combat::CurrentRules().scaling, MakeRules());
+	}
+
+	cqc::Rules CurrentRules() { return MakeRules(); }
 
 	std::string Describe()
 	{
 		using R = cqc::Response;
 		const auto n = [](R a_r) { return g_responses[static_cast<std::size_t>(a_r)]; };
-		return std::format("cqc: {} (range {:.1f} m, arc {:.0f} deg, boss from bigness {:.2f} or {} hp, hit correction {}%); {} events: hold {}, "
+		return std::format("cqc: {} (range {:.1f} m, arc {:.0f} deg, boss from bigness {:.2f} or {} hp or NpcParam's boss bit ({} seen, {} rows "
+		                   "unread), hit correction {}%); {} events: hold {}, "
 		                   "knockdown {}, sleep {}, interrogation {}, release {}, boss stagger {}, cooldown flinch {}, nobody in reach {}, no hold {}; "
-		                   "hits waiting {}, fired late {}, lost {}; cooling {}; holding: {}; last: {}",
+		                   "hits waiting {}, fired late {}, lost {}; cooling {}; holding: {}; D-Dog's holds {} ({} refused, {} taken over by Snake), holding: {}; last: {}",
 			Cfg().cqc ? "on" : "OFF ([Cqc] enabled = false: events only logged)", Cfg().cqcRange, Cfg().cqcArcDeg, Cfg().cqcBossBigness, Cfg().cqcBossHp,
-			Cfg().cqcHitCorrection, g_events, n(R::kHold), n(R::kKnockdown), n(R::kSleep), n(R::kGag), n(R::kRelease), n(R::kStagger), n(R::kFlinch), g_missed,
+			g_bossByNpc, g_npcUnread, Cfg().cqcHitCorrection, g_events, n(R::kHold), n(R::kKnockdown), n(R::kSleep), n(R::kGag), n(R::kRelease), n(R::kStagger), n(R::kFlinch), g_missed,
 			g_noHold, g_queue.size(), g_late, g_lost, g_cooldown.Size(),
 			g_held ? std::format("{} ({:.1f} s left)", g_held->name, (static_cast<double>(g_held->until) - static_cast<double>(::GetTickCount64())) / 1000.0)
 			       : std::string("nobody"),
+			g_dogHolds, g_dogRefused, g_dogTakenOver,
+			g_dogHeld ? std::format("{} ({:.1f} s left)", g_dogHeld->name, (static_cast<double>(g_dogHeld->until) - static_cast<double>(::GetTickCount64())) / 1000.0)
+			          : std::string("nobody"),
 			g_last.empty() ? "none" : g_last);
 	}
 

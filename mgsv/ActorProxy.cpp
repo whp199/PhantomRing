@@ -73,6 +73,19 @@ namespace phantom::guest::proxy::plan
 		return out;
 	}
 
+	void PutDedicatedFirst(std::vector<Target>& a_targets, std::uint64_t a_handle)
+	{
+		if (!a_handle) {
+			return;
+		}
+		const auto it = std::find_if(a_targets.begin(), a_targets.end(), [&](const Target& a_t) { return a_t.handle == a_handle; });
+		if (it == a_targets.end()) {
+			return;
+		}
+		it->dedicated = true;
+		std::rotate(a_targets.begin(), it, it + 1);
+	}
+
 	Vec3 ParkPosition(const Vec3& a_centre, std::size_t a_index, const Settings& a_s)
 	{
 		return { a_centre.x + a_s.parkSpacing * static_cast<float>(a_index), a_centre.y - a_s.parkDepth, a_centre.z };
@@ -121,12 +134,14 @@ namespace phantom::guest::proxy::plan
 			const Target* t = s.handle ? chosen(s.handle) : nullptr;
 			bool          clear = t != nullptr;
 			if (t) {
-				clear = t->asleep ||
+				// Asleep (MGSV's Fulton wants him beside Snake) and D-Dog's dedicated target (the dog has to reach him, and Snake may walk
+				// up to the one it holds) stay put whoever is near; any other proxy is parked near Snake or the buddy.
+				clear = t->asleep || t->dedicated ||
 				        ((t->pos - a_snakeRoot).LengthXZ() >= a_s.snakeClearance && (!a_buddy || (t->pos - *a_buddy).LengthXZ() >= a_s.buddyClearance));
 			}
 			if (clear) {
 				s.proxy = true;
-				s.pos = ProxyFeet(t->pos, a_centre.y, a_s.height);
+				s.pos = ProxyFeet(t->pos, a_centre.y, t->dedicated ? Height::kGround : a_s.height);
 				s.real = t->pos;
 				s.yaw = t->yaw;
 			} else {
@@ -344,6 +359,110 @@ namespace phantom::guest::proxy::plan
 		}
 		return st;
 	}
+
+	bool SlipObserver::Update(const std::vector<SlipSample>& a_samples, const Vec3& a_odo, bool a_settled, float a_agree)
+	{
+		if (m_pending) {
+			// The baseline only from a settled table: right after a treadmill jump the table and k can disagree by the jump for a frame
+			// or two, and a baseline taken then read every later table as all characters "moved" by it (review 0.8.0).
+			if (!a_settled) {
+				return false;
+			}
+			m_pending = false;
+			m_begun = true;
+			m_base = a_samples;
+			m_level = {};
+			m_path = 0.0f;
+			m_lastOdo = a_odo;
+			m_levelPath = 0.0f;
+			m_levelOdo = a_odo;
+			m_prevPath = 0.0f;
+			m_prevM = {};
+			m_havePrev = true;
+			return false;
+		}
+		if (!m_begun) {
+			return false;
+		}
+		m_path += Vec3{ a_odo.x - m_lastOdo.x, 0.0f, a_odo.z - m_lastOdo.z }.LengthXZ();
+		m_lastOdo = a_odo;
+		if (!a_settled) {
+			return false;
+		}
+		std::vector<Vec3>  moves;
+		std::vector<float> xs, zs;
+		for (const auto& s : a_samples) {
+			if (!s.handle || !s.q.Finite()) {
+				continue;
+			}
+			const auto it = std::find_if(m_base.begin(), m_base.end(), [&](const SlipSample& a_b) { return a_b.handle == s.handle; });
+			if (it == m_base.end()) {
+				m_base.push_back({ s.handle, s.q - m_level });  // first seen now: as if he had stood there all along
+				continue;
+			}
+			const Vec3 d{ s.q.x - it->q.x, 0.0f, s.q.z - it->q.z };
+			moves.push_back(d);
+			xs.push_back(d.x);
+			zs.push_back(d.z);
+		}
+		if (moves.size() < 2) {
+			return false;
+		}
+		const auto median = [](std::vector<float>& v) {
+			std::sort(v.begin(), v.end());
+			const auto n = v.size();
+			return n % 2 ? v[n / 2] : 0.5f * (v[n / 2 - 1] + v[n / 2]);
+		};
+		const Vec3  m{ median(xs), 0.0f, median(zs) };
+		// Everyone moved at once by more than Snake's MGSV motion since the last table explains: Elden Ring put Snake somewhere else (a
+		// teleport, a grace, `call setpos`) -- no wall. The characters count from where they are now, the level as it is (integration
+		// 2026-11-04: Snake teleported 21 m while the dog waited, and once his runs had made the path long enough the teleport was taken
+		// for 20.9 m of slip and the waiting dog shown that far off).
+		const float tablePath = m_path - m_prevPath;
+		m_prevPath = m_path;
+		if (m_havePrev && Vec3{ m.x - m_prevM.x, 0.0f, m.z - m_prevM.z }.LengthXZ() > tablePath + 1.0f) {
+			for (const auto& s : a_samples) {
+				if (!s.handle || !s.q.Finite()) {
+					continue;
+				}
+				const auto it = std::find_if(m_base.begin(), m_base.end(), [&](const SlipSample& a_b) { return a_b.handle == s.handle; });
+				const SlipSample b{ s.handle, s.q - m_level };
+				if (it == m_base.end()) {
+					m_base.push_back(b);
+				} else {
+					*it = b;
+				}
+			}
+			m_prevM = m_level;
+			++m_rebased;
+			return false;
+		}
+		m_prevM = m;
+		m_havePrev = true;
+		std::size_t agree = 0;
+		for (const auto& d : moves) {
+			agree += (d - m).LengthXZ() <= a_agree ? 1u : 0u;
+		}
+		if (agree < 2 || static_cast<float>(agree) < 0.6f * static_cast<float>(moves.size()) || m.LengthXZ() > m_path + 0.1f) {
+			++m_refused;
+			return false;
+		}
+		// A wall only takes back what Snake ran meanwhile, in the direction he ran: the level's change since the last level taken is
+		// no longer than his path since then and doesn't point against his motion. Characters walking together (a patrol, a herd)
+		// while Snake stands or runs elsewhere were taken for the slip, and the waiting dog walked along with them (review 0.8.0).
+		const Vec3  dm{ m.x - m_level.x, 0.0f, m.z - m_level.z };
+		const Vec3  dodo{ a_odo.x - m_levelOdo.x, 0.0f, a_odo.z - m_levelOdo.z };
+		const float dmLen = dm.LengthXZ();
+		if (dmLen > (m_path - m_levelPath) + 0.1f || (dmLen > 0.2f && dm.x * dodo.x + dm.z * dodo.z < 0.0f)) {
+			++m_refused;
+			return false;
+		}
+		m_levelPath = m_path;
+		m_levelOdo = a_odo;
+		m_level = m;
+		++m_taken;
+		return true;
+	}
 }
 
 // Fulton anchor's pure half (FultonAnchor.h, docs/GUEST.md 20.4): here so tests/test_guest_actorproxy.cpp links it without the game glue.
@@ -408,5 +527,6 @@ namespace phantom::guest::fulton
 			return out;
 		}
 	}
+
 
 }

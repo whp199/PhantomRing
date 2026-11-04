@@ -7,6 +7,7 @@
 #include "CaptureRing.h"
 #include "Climb.h"
 #include "Config.h"
+#include "Dog.h"
 #include "FultonAnchor.h"
 #include "D3D11Hooks.h"
 #include "Hud.h"
@@ -59,6 +60,7 @@ namespace phantom::guest::capture
 			float         root[3]{};
 			float         yaw{ 0 };
 			float         cam[3]{};
+			float         buddyOffset[3]{};  // D-Dog's draws of this frame are published moved by this (NoteBuddyOffset)
 		};
 		constexpr std::size_t kHistory = 64;
 		FrameRec              g_history[kHistory];
@@ -127,13 +129,14 @@ namespace phantom::guest::capture
 		};
 		std::unordered_map<std::uint64_t, MeshEntry>   g_meshes;    // by MeshSource::Hash (session-local identity)
 		std::unordered_map<ID3D11Texture2D*, TexEntry> g_textures;  // by the game's texture (AddRef'd by assets)
-		std::atomic<std::uint64_t>                      g_published{ 0 }, g_lastDraws{ 0 }, g_skipped{ 0 }, g_meshesSent{ 0 }, g_texturesSent{ 0 }, g_proxyDrops{ 0 };
+		std::atomic<std::uint64_t>                      g_published{ 0 }, g_lastDraws{ 0 }, g_skipped{ 0 }, g_meshesSent{ 0 }, g_texturesSent{ 0 }, g_proxyDrops{ 0 }, g_dogKept{ 0 };
 		// Staged for a climb (Climb.h: Snake placed at one of the airport's wall ladders or its jersey barrier), what stands there is
 		// within 2.5 m of his root and read as his: live 2026-10-31 the barrier he vaulted over was drawn in Elden Ring with him.
 		// While staged a rigid draw is his only if its mesh was his on the sandbox before (his weapons, his gear); his skinned body
 		// always is.
 		std::mutex                                      g_ownLock;
 		std::unordered_set<std::uint64_t>               g_ownRigid;
+		std::unordered_set<std::uint64_t>               g_buddyRigid;  // the buddy's rigid meshes, learned while Snake is home (g_ownLock)
 		std::atomic<std::uint64_t>                      g_stagedDrops{ 0 };
 		std::atomic<std::uint64_t>                      g_restarted{ 0 }, g_pruned{ 0 };  // pointer-keyed entries dropped as stale (Stale())
 		std::uint64_t                                   g_presentCount{ 0 };
@@ -225,16 +228,27 @@ namespace phantom::guest::capture
 			// ActorProxy ([Proxies]): a pool soldier standing in for an Elden Ring enemy near Snake or the buddy is never theirs.
 			// The Fulton anchor's sleeping soldier lies right beside Snake (FultonAnchor.cpp): never his either. A projectile tag too:
 			// a proxy's rifle can sit on a rocket's line; a grenade passing a proxy only loses that frame's tag (the host needs two).
-			if (proxy::ExcludesDraw(origin, root) || fulton::ExcludesDraw(origin, root)) {
+			// D-Dog bites right at its target's proxy ([Dog] KeepDrawsNearProxy, Dog.h): a buddy draw whose mesh is one of the dog's
+			// (learned while no proxy was within 4 m) stays the buddy's; the soldier's own draws are still dropped.
+			const bool nearProxy = proxy::ExcludesDraw(origin, root);
+			const bool nearAnchor = fulton::ExcludesDraw(origin, root);
+			Captured   c;
+			const bool described = !nearAnchor && (!nearProxy || owner == proto::kOwnerBuddy) && DescribeMesh(a_s, a_a, c.src);
+			if (described) {
+				c.srcHash = c.src.Hash();
+			}
+			const bool dogMesh = described && owner == proto::kOwnerBuddy && dog::KeepBuddyDraw(c.srcHash, nearProxy || proxy::NearAnyProxy(origin, 4.0f), origin);
+			if (nearAnchor || (nearProxy && !dogMesh)) {
 				g_proxyDrops.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
-			Captured c;
-			if (!DescribeMesh(a_s, a_a, c.src)) {
+			if (nearProxy) {
+				g_dogKept.fetch_add(1, std::memory_order_relaxed);  // the dog's own draw beside its target's soldier
+			}
+			if (!described) {
 				g_skipped.fetch_add(1, std::memory_order_relaxed);
 				return;
 			}
-			c.srcHash = c.src.Hash();
 			c.frame = rec ? rec->frame : in.frame;
 			std::copy_n(root, 3, c.anchor);
 			c.yaw = rec ? rec->yaw : in.yaw;
@@ -244,14 +258,17 @@ namespace phantom::guest::capture
 			c.params[0] = object[32];  // m_useWeightCount.x
 			const auto* bonesCb = a_s.vsInfo->CBufferNamed("VSBones");
 			const bool  skinned = bonesCb && object[32] > 0.0f && a_s.vsInfo->Reads("BLENDINDICES");
-			if (owner == proto::kOwnerPlayer && !skinned) {
+			if ((owner == proto::kOwnerPlayer || owner == proto::kOwnerBuddy) && !skinned) {
 				std::scoped_lock lock(g_ownLock);
 				// Not staged, but still far from where he stood after a move (its way home failed): the staging site's props are near him.
+				// The buddy's too: D-Dog goes along to the site ([Dog] StageAlong, 2 m behind Snake), and a site prop within 4 m of it
+				// would be published as the dog's and drawn at its Elden Ring place (review 0.8.0; the same as Snake's, live 2026-10-31).
+				auto& set = owner == proto::kOwnerPlayer ? g_ownRigid : g_buddyRigid;
 				if (!state::Staged() && !climb::AwayFromHome(root)) {
-					if (g_ownRigid.size() < 4096) {
-						g_ownRigid.insert(c.srcHash);
+					if (set.size() < 4096) {
+						set.insert(c.srcHash);
 					}
-				} else if (!g_ownRigid.contains(c.srcHash)) {
+				} else if (!set.contains(c.srcHash)) {
 					g_stagedDrops.fetch_add(1, std::memory_order_relaxed);  // a prop of the staging site (the barrier, the ladder, the wall)
 					return;
 				}
@@ -449,6 +466,17 @@ namespace phantom::guest::capture
 			}
 			const auto gen = ring::Generation() ? ring::Generation() : link::AttachGeneration();
 			int        texBudget = 2;
+			// D-Dog's draws where the guest publishes it (Dog.h Display): this frame's offset from where MGSV has it.
+			float buddyOffset[3]{};
+			{
+				std::scoped_lock lock(g_frameLock);
+				for (const auto& h : g_history) {
+					if (h.frame == oldest) {
+						std::copy_n(h.buddyOffset, 3, buddyOffset);
+						break;
+					}
+				}
+			}
 			std::vector<proto::DrawRecord> records;
 			std::vector<float>             matrices;
 			const auto&                    first = now.front();
@@ -481,6 +509,11 @@ namespace phantom::guest::capture
 					m[3] -= first.anchor[0];
 					m[7] -= first.anchor[1];
 					m[11] -= first.anchor[2];
+					if (c.owner == proto::kOwnerBuddy) {
+						m[3] += buddyOffset[0];
+						m[7] += buddyOffset[1];
+						m[11] += buddyOffset[2];
+					}
 					matrices.insert(matrices.end(), m, m + 12);
 				}
 				r.matrixCount = n;
@@ -772,8 +805,9 @@ namespace phantom::guest::capture
 			return std::format("capture: describing the next {} frame(s) into PhantomRingCapture.txt (present hooked: {})", n, d3d::PresentHooked());
 		}
 		const auto st = d3d::Counters();
-		return std::format("capture: lists published {} (last {} draws), meshes sent {} ({} known), textures sent {} ({} known), skipped {}, proxy draws dropped {}, staging-site props dropped {}, stale entries restarted {} / pruned {}, ring pending {} KB; {}\n",
+		return std::format("capture: lists published {} (last {} draws), meshes sent {} ({} known), textures sent {} ({} known), skipped {}, proxy draws dropped {}, buddy draws kept near a proxy {}, staging-site props dropped {}, stale entries restarted {} / pruned {}, ring pending {} KB; {}\n",
 			g_published.load(), g_lastDraws.load(), g_meshesSent.load(), g_meshes.size(), g_texturesSent.load(), g_textures.size(), g_skipped.load(), g_proxyDrops.load(),
+			g_dogKept.load(),
 			g_stagedDrops.load(),
 			g_restarted.load(), g_pruned.load(),
 			ring::Pending() / 1024,
@@ -796,6 +830,18 @@ namespace phantom::guest::capture
 		std::copy_n(a_root, 3, r.root);
 		r.yaw = a_yaw;
 		std::copy_n(a_camPos, 3, r.cam);
+		std::fill_n(r.buddyOffset, 3, 0.0f);
+	}
+
+	void NoteBuddyOffset(std::uint64_t a_frame, const float a_offset[3])
+	{
+		std::scoped_lock lock(g_frameLock);
+		for (auto& r : g_history) {
+			if (r.frame == a_frame) {
+				std::copy_n(a_offset, 3, r.buddyOffset);
+				return;
+			}
+		}
 	}
 
 	void NoteBuddy(bool a_present, const float a_pos[3])

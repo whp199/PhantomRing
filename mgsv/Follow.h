@@ -42,6 +42,10 @@ namespace phantom::guest::follow
 	// D-Walker's AI state byte (05 idle, 06 settling, 09 turning, 0A walking, 0C stopping) as read in the last 0.5 s, else -1: whether
 	// its legs walk (the lead's leg gate, Walker.cpp).
 	int WalkerLegs();
+	// MGSV's Lua thread: one buddy command of ours (not the player's: no hold, no kGEvBuddyOrder) -- D-Dog's orders (Dog.cpp). False
+	// if the buddy system's checks failed.
+	// a_asPlayer (tests, `!dog player`): through the command detour, as if the call menu gave it.
+	bool SendCommand(int a_command, std::uint16_t a_arg, const char* a_why, bool a_asPlayer = false);
 	// MGSV's Lua thread: D-Horse's whistle at once (boot, before the sandbox is ready); false if its checks failed.
 	bool WhistleHorseNow(const char* a_why);
 	void SetEnabled(bool a_on);

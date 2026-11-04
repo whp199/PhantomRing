@@ -24,6 +24,8 @@
 #include <utility>
 #include <vector>
 
+#include <windows.h>
+
 namespace phantom::er::Marking
 {
 	namespace
@@ -50,6 +52,7 @@ namespace phantom::er::Marking
 		// later without the binoculars; forgotten with the marks (a new world). <= 0: none (the fixed height).
 		std::unordered_map<std::uint64_t, std::optional<combat::Capsule>> g_bodies;
 		std::uint64_t  g_fromCapsule{ 0 }, g_fixed{ 0 };  // marks drawn at their capsule's top / at [Marking] height
+		std::uint64_t  g_provisionalDrawn{ 0 }, g_provisionalSet{ 0 };  // D-Dog's provisional marks: drawn (per frame), given
 
 		marking::Rules Rules()
 		{
@@ -205,7 +208,7 @@ namespace phantom::er::Marking
 			Log::Info("marking: binoculars {} ({} marked)", looking ? "up" : "down", g_marks.Count());
 			g_wasLooking = looking;
 		}
-		if (!looking && g_marks.Count() == 0 && g_marks.Looking() == 0) {
+		if (!looking && g_marks.Count() == 0 && g_marks.Looking() == 0 && g_marks.Provisionals() == 0) {
 			Hide();
 			return;
 		}
@@ -278,11 +281,15 @@ namespace phantom::er::Marking
 			const float height = marking::MarkHeight(body, x.c.pos, c.height, c.above);
 			++(body ? g_fromCapsule : g_fixed);
 			const Vec3  at = x.c.pos + Vec3{ 0, height, 0 };
+			// D-Dog's provisional marks: hollow, the distance only near the centre (whatever [Marking] distance says).
+			const bool  hollow = g_marks.IsProvisional(x.c.handle);
+			const bool  nearCentre = marking::OffAxis(view, at, marking::Rules{ .bodyRadius = 0.0f }) <= centre;
 			std::string text;
-			if (c.distance == "always" || (c.distance == "centre" && marking::OffAxis(view, at, marking::Rules{ .bodyRadius = 0.0f }) <= centre)) {
+			if (hollow ? (c.distance != "off" && nearCentre) : (c.distance == "always" || (c.distance == "centre" && nearCentre))) {
 				text = marking::DistanceText(Length(x.c.pos - snake));
 			}
-			marking::Build(out, cam, at, text, x.hostile, op, g_marks.Age(x.c.handle), style);
+			g_provisionalDrawn += hollow ? 1 : 0;
+			marking::Build(out, cam, at, text, x.hostile, op, g_marks.Age(x.c.handle), style, hollow);
 		}
 		if (out.empty()) {
 			Hide();
@@ -291,6 +298,18 @@ namespace phantom::er::Marking
 		RenderMarkers::Set(RenderMarkers::Owner::kMarking, std::move(out));
 		g_drawn = true;
 	}
+
+	void Provisional(std::uint64_t a_handle, std::uint64_t a_untilMs)
+	{
+		const auto now = ::GetTickCount64();
+		if (a_untilMs <= now || !Cfg().marking.enabled) {
+			return;
+		}
+		++g_provisionalSet;
+		g_marks.Provisional(a_handle, static_cast<float>(a_untilMs - now) / 1000.0f);
+	}
+
+	bool IsMarked(std::uint64_t a_handle) { return g_marks.Marked(a_handle) || g_marks.IsProvisional(a_handle); }
 
 	namespace
 	{
@@ -312,10 +331,10 @@ namespace phantom::er::Marking
 
 	std::string Describe()
 	{
-		return std::format("marking: {} | binoculars {} | {} marked, {} being looked at | {} marked this session, {} rays ({} blocked), {} frames, "
-		                   "{} unrendered skipped | marks drawn over the capsule {}, at the fixed {:.1f} m {}{}",
-			Cfg().marking.enabled ? "on" : "off", g_force, g_marks.Count(), g_marks.Looking(), g_marked, g_marks.Rays(), g_blocked, g_frames, g_unrendered,
-			g_fromCapsule, Cfg().marking.height, g_fixed, Heights());
+		return std::format("marking: {} | binoculars {} | {} marked, {} being looked at, {} provisional (D-Dog; {} given, {} drawn) | {} marked this "
+		                   "session, {} rays ({} blocked), {} frames, {} unrendered skipped | marks drawn over the capsule {}, at the fixed {:.1f} m {}{}",
+			Cfg().marking.enabled ? "on" : "off", g_force, g_marks.Count(), g_marks.Looking(), g_marks.Provisionals(), g_provisionalSet, g_provisionalDrawn,
+			g_marked, g_marks.Rays(), g_blocked, g_frames, g_unrendered, g_fromCapsule, Cfg().marking.height, g_fixed, Heights());
 	}
 
 	std::string Command(const Frame& a_f, std::string_view a_args)

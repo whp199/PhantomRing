@@ -54,7 +54,7 @@ def main() -> int:
 	try:
 		print(f"mapping {path}, logs in {work}")
 		# Guest first: it must wait for a host session without publishing anything.
-		guest = spawn("fake_mgsv", path, 14.0, work / "mgsv.json", work / "mgsv.log")
+		guest = spawn("fake_mgsv", path, 17.0, work / "mgsv.json", work / "mgsv.log")
 		procs.append(guest)
 		time.sleep(0.7)
 		link = proto.Link(path)
@@ -118,11 +118,57 @@ def main() -> int:
 		check(r.returncode == 3 and "not running" in r.stderr, "`pr er` with no host says so", r.stderr.strip())
 		nonce1 = link.header.sessionNonce
 
-		host2 = spawn("fake_er", path, 7.5, work / "er2.json", work / "er2.log")
+		host2 = spawn("fake_er", path, 10.0, work / "er2.json", work / "er2.log")
 		procs.append(host2)
 		time.sleep(1.0)
 		check(link.header.sessionNonce != nonce1 and link.header.guestNonce == link.header.sessionNonce,
 			"guest re-attached to the restarted host's new session")
+
+		# v17 D-Dog: the host's pick (ActorFlags.DogTarget), the attack phases, GuestBuddyFlags.Engaged, BuddyOrder pad[0]
+		r = pr(path, "er", "actor 1 dogtarget")
+		check(r.returncode == 0 and "DogTarget" in r.stdout, "`pr er actor 1 dogtarget` sets ActorFlags.DogTarget", (r.stdout + r.stderr).strip())
+		r = pr(path, "lua", "!dog attack")
+		check(r.returncode == 1 and "!buddy dog" in r.stdout + r.stderr, "`!dog attack` needs D-Dog out", (r.stdout + r.stderr).strip())
+		pr(path, "lua", "!buddy dog")
+		pr(path, "lua", "!dog style kill")
+		r = pr(path, "lua", "!order 12")
+		check(r.returncode == 0 and "pad0=3" in r.stdout, "`!order 12` with D-Dog: BuddyOrder pad[0] = style + 1", r.stdout.strip())
+		r = pr(path, "lua", "!order 9")
+		check(r.returncode == 0 and "pad0=0" in r.stdout, "`!order 9` (Wait): no style in pad[0] (only 11-15 carry it)", r.stdout.strip())
+		time.sleep(0.2)
+		gs = link.guest_state()
+		check(gs is not None and proto.buddy_dog_style(gs.buddyFlags) == proto.DogStyle.Kill,
+			"buddyFlags bits 8-15: D-Dog's style published every frame (Kill)", hex(gs.buddyFlags) if gs else "-")
+		hs = link.host_state()
+		check(hs is not None and hs.flags & proto.HostFlags.DogLayer, "HostFlags.DogLayer from the host stand-in (its [Dog] on)",
+			proto.flag_names(hs.flags, proto.HostFlags) if hs else "-")
+		r = pr(path, "er", "doglayer 0")
+		time.sleep(0.1)
+		hs = link.host_state()
+		check(r.returncode == 0 and hs is not None and not hs.flags & proto.HostFlags.DogLayer, "`pr er doglayer 0` clears HostFlags.DogLayer",
+			(r.stdout + r.stderr).strip())
+		pr(path, "er", "doglayer 1")
+		r = pr(path, "lua", "!dog attack target connect")
+		check(r.returncode == 0 and "Ordered/Kill" in r.stdout and "Connected/Kill" in r.stdout and "0xffffffff00001001" in r.stdout,
+			"`!dog attack target connect`: Ordered + Connected on the host's pick", (r.stdout + r.stderr).strip())
+		time.sleep(0.2)
+		gs = link.guest_state()
+		check(gs is not None and gs.buddyFlags & proto.GuestBuddyFlags.Engaged and gs.buddyType == proto.BuddyType.DOG,
+			"GuestBuddyFlags.Engaged while the dog bites", proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags) if gs else "-")
+		r = pr(path, "lua", "!dog release")
+		time.sleep(0.2)
+		gs = link.guest_state()
+		check(r.returncode == 0 and "Released" in r.stdout and gs is not None and not gs.buddyFlags & proto.GuestBuddyFlags.Engaged,
+			"`!dog release`: Released, Engaged off", (r.stdout + r.stderr).strip())
+		r = pr(path, "lua", "!dog attack nearest wound lost")
+		check(r.returncode == 0 and "Ordered/Wound" in r.stdout, "`!dog attack nearest wound lost`", (r.stdout + r.stderr).strip())
+		r = pr(path, "lua", "!dog attack none busy")
+		check(r.returncode == 0 and "Refused/Busy" in r.stdout and "0x0" in r.stdout, "`!dog attack none`: Refused, handle 0", (r.stdout + r.stderr).strip())
+		pr(path, "lua", "!dog busy 0.5")
+		r = pr(path, "lua", "!dog attack target knockout")
+		check(r.returncode == 0 and "Ordered/KnockOut" in r.stdout, "`!dog attack target knockout` (a full run)", (r.stdout + r.stderr).strip())
+		time.sleep(1.6)
+		pr(path, "lua", "!buddy walker")
 		host2.wait(timeout=15)
 		guest.wait(timeout=15)
 		link.close()
@@ -164,6 +210,16 @@ def main() -> int:
 		check(e2["buddyFlagsSeen"] & (bf.Present | bf.PosValid | bf.Ridden) == (bf.Present | bf.PosValid | bf.Ridden) and e2["buddyPosValid"] > 100,
 			"v2 buddy block: present, positioned, ridden", proto.flag_names(e2["buddyFlagsSeen"], bf))
 		check(0 < e2["buddyAmmoLast"] < 500, "D-Walker ammo counts down with BuddyFire", e2["buddyAmmoLast"])
+		# v17 D-Dog, as host#2 saw it
+		want = ["Ordered/Kill", "Connected/Kill", "Released/Kill", "Ordered/Wound", "Lost/Wound", "Refused/Busy", "Ordered/KnockOut",
+			"Connected/KnockOut", "Released/KnockOut"]
+		check(e2["dogAttacks"] == want, "host#2: kGEvDogAttack phases and styles in order", e2["dogAttacks"])
+		check([12, int(proto.BuddyType.DOG), int(proto.DogStyle.Kill) + 1] in e2["buddyOrders"], "host#2: BuddyOrder 12 for D-Dog, style Kill",
+			e2["buddyOrders"])
+		check(e2["dogEngagedFrames"] > 10 and e2["buddyFlagsSeen"] & proto.GuestBuddyFlags.Engaged, "host#2: GuestBuddyFlags.Engaged seen",
+			e2["dogEngagedFrames"])
+		check(g["dogTargetsSeen"] == ["0xffffffff00001001"] and g["dogTargetFrames"] > 10, "guest saw ActorFlags.DogTarget on actor 1 only",
+			g["dogTargetsSeen"])
 		check(e2["guestFlagsSeen"] & proto.GuestFlags.OnVehicle and 0x402 in e2["vehicleIdsSeen"], "riding D-Walker: OnVehicle + vehicleId",
 			e2["vehicleIdsSeen"])
 	except Exception as ex:  # report, then clean up

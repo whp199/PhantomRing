@@ -26,12 +26,13 @@ from ctypes import c_char, c_double, c_float, c_int16, c_int32, c_int64, c_uint8
 
 # ---- constants (namespace phantom::proto) ---------------------------------------------------------
 MAGIC = 0x47524850  # "PHRG"
-VERSION = 16  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
+VERSION = 17  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
 				# v6: GuestState aimThrowPos/Vel/Kind (0xA8..0xC4) + GuestFlags.ThrowAim; v7: GuestEventType.BuddyOrder; v8: GuestFlags.InBox/BoxPoster, Fire pad[1] = damage share;
 				# v9: PLACED_AGAIN (Placed pad[0]: an announcement repeated); v10: GuestFlags.Nvg, HostEventType.Rested/Tarnished;
 				# v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100: plugin versions, readable on a mismatch); v12: GuestEventType.Fulton
 				# v13: GuestFlags.Binoculars/Diving, GuestEventType.TimeSkip/Cqc, CqcAction, AmmoKind.Decoy, DrawOwner.Projectile; v14: GuestFlags.Jumping
 				# v15: GuestFlags.Climbing/Mantling, HostEventType.Climb/Mantle; v16: GuestFlags.SuppressorOn, FIRE_SUPPRESSED (Fire b)
+				# v17: ActorFlags.DogTarget, GuestBuddyFlags.Engaged, GuestEventType.DogAttack + DogPhase/DogStyle, BuddyOrder pad[0] = dog style + 1
 DEFAULT_PATH = "/dev/shm/phantomring_v1"
 DEFAULT_MAPPING_WIN = "file:Z:\\dev\\shm\\phantomring_v1"
 
@@ -115,6 +116,7 @@ class HostFlags(enum.IntFlag):
 	Puppeting = 1 << 3
 	PlayerDead = 1 << 4
 	Cutscene = 1 << 5
+	DogLayer = 1 << 6  # v17: the host's D-Dog layer is on: the guest takes D-Dog's attack orders (11-15) over only while it is set
 
 
 class GuestFlags(enum.IntFlag):
@@ -149,6 +151,23 @@ class GuestBuddyFlags(enum.IntFlag):
 	Ridden = 1 << 2
 	Loading = 1 << 3
 	Missing = 1 << 4
+	Engaged = 1 << 5  # v17: the buddy carries out an attack/fetch order on an ER target (DogAttack Connected .. Released)
+
+
+# v17: GuestState buddyFlags bits 8-15 while D-Dog is out = its DogStyle + 1 (0 = unknown / another buddy)
+BUDDY_DOG_STYLE_SHIFT = 8
+BUDDY_DOG_STYLE_MASK = 0xFF << BUDDY_DOG_STYLE_SHIFT
+
+
+def buddy_dog_style_bits(style: int) -> int:
+	"""v17 buddyFlags bits for D-Dog's style (0 for an unknown one)."""
+	return (int(style) + 1) << BUDDY_DOG_STYLE_SHIFT if 0 <= int(style) <= 4 else 0
+
+
+def buddy_dog_style(buddy_flags: int) -> int:
+	"""v17 D-Dog's style from buddyFlags (DogStyle.StyleUnknown when none is published)."""
+	v = (int(buddy_flags) & BUDDY_DOG_STYLE_MASK) >> BUDDY_DOG_STYLE_SHIFT
+	return v - 1 if 1 <= v <= 5 else 0xFF
 
 
 class PadFlags(enum.IntFlag):
@@ -171,6 +190,38 @@ class GuestEventType(enum.IntEnum):
 	Fulton = 12  # v12: pad[0]|pad[1]<<32 ER character handle the proxy stood for, v0 proxy position, a 1 success / 0 failed
 	TimeSkip = 13  # v13: a = MGSV game minutes advanced (Phantom Cigar)
 	Cqc = 14  # v13: a CqcAction, v0 Snake, v1 facing, b range mm, pad[0] raw id, pad[1] proxy ER handle low
+	# v17: D-Dog and an ER target: a = DogPhase | DogStyle << 8 | MGSV attack id << 16, b = MGSV damage share (1/10000), v0 the dog's
+	# feet, v1 unit dog -> target (MGSV world), pad[0]|pad[1]<<32 the target's ActorRecord handle (0 = none)
+	DogAttack = 15
+
+
+class DogPhase(enum.IntEnum):  # v17: GuestEventType.DogAttack a & 0xFF
+	Ordered = 0
+	Connected = 1
+	Released = 2
+	Refused = 3
+	Lost = 4
+
+
+class DogStyle(enum.IntEnum):  # v17: GuestEventType.DogAttack (a >> 8) & 0xFF; BuddyOrder pad[0] - 1; buddyFlags bits 8-15 - 1.
+	# Semantic values, not MGSV's style byte (= vars.buddyDogEquipType): raw 0 naked = Busy, 1 Fulton vest = Fetch, 2 stun knife =
+	# KnockOut, 3 battledress = Wound, 4 knife = Kill, 5-7 Busy (live 2026-11-04)
+	Busy = 0
+	Fetch = 1
+	Kill = 2
+	KnockOut = 3
+	Wound = 4
+	StyleUnknown = 0xFF
+
+
+def dog_attack_a(phase: int, style: int, attack_id: int = 0) -> int:
+	"""v17 GuestEventType.DogAttack a."""
+	return (int(phase) & 0xFF) | (int(style) & 0xFF) << 8 | (int(attack_id) & 0xFFFF) << 16
+
+
+def dog_attack_fields(a: int) -> tuple[int, int, int]:
+	"""v17 GuestEventType.DogAttack a -> (phase, style, MGSV attack id)."""
+	return a & 0xFF, (a >> 8) & 0xFF, a >> 16
 
 
 class CqcAction(enum.IntEnum):  # v13: GuestEventType.Cqc a
@@ -224,6 +275,7 @@ class ActorFlags(enum.IntFlag):
 	Boss = 1 << 2
 	InCombat = 1 << 3
 	Asleep = 1 << 4
+	DogTarget = 1 << 5  # v17: the host's pick for D-Dog's next attack/fetch order (at most one record)
 
 
 class DrawFlags(enum.IntFlag):
@@ -593,6 +645,7 @@ ALL_CONSTANTS = {
 	"OFF_DRAW_SLOTS": "kOffDrawSlots", "DRAW_SLOT_BYTES": "kDrawSlotBytes", "OFF_HUD_SLOTS": "kOffHudSlots",
 	"MAX_HUD_W": "kMaxHudW", "MAX_HUD_H": "kMaxHudH", "HUD_SLOT_BYTES": "kHudSlotBytes",
 	"MAPPING_BYTES": "kMappingBytes", "HEARTBEAT_TIMEOUT_MS": "kHeartbeatTimeoutMs", "PLACED_AGAIN": "kPlacedAgain", "FIRE_SUPPRESSED": "kFireSuppressed",
+	"BUDDY_DOG_STYLE_SHIFT": "kBuddyDogStyleShift", "BUDDY_DOG_STYLE_MASK": "kBuddyDogStyleMask",
 	"MAX_POSE_BONES": "kMaxPoseBones", "EVENT_RING_ENTRIES": "kEventRingEntries", "MAX_ACTORS": "kMaxActors",
 	"CONSOLE_TEXT_BYTES": "kConsoleTextBytes", "DRAW_TEXTURES": "kDrawTextures",
 	"REN_RING_HEAD_OFF": "kRenRingHeadOff", "REN_RING_TAIL_OFF": "kRenRingTailOff",
@@ -611,6 +664,8 @@ ALL_ENUMS = {
 	AmmoKind: ("", "kAmmo"),
 	MeleeKind: ("", "kMelee"),
 	CqcAction: ("", "kCqc"),
+	DogPhase: ("", "kDog"),
+	DogStyle: ("", "kDog"),
 	HostEventType: ("", "kHEv"),
 	HurtKind: ("", "kHurt"),
 	ActorFlags: ("", "kActor"),

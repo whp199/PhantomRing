@@ -234,6 +234,19 @@ namespace phantom::guest::combat
 		return true;
 	}
 
+	bool AttackRow(std::uint32_t a_attack, std::uint16_t& a_lethal, std::uint16_t& a_nonLethal, std::uint32_t& a_share)
+	{
+		const auto row = Row(a_attack);
+		if (!row) {
+			return false;
+		}
+		a_lethal = row->lethal;
+		a_nonLethal = row->nonLethal;
+		const auto life = SoldierLife();
+		a_share = life ? logic::DamageShare(row->lethal, life) : 0;
+		return true;
+	}
+
 	std::string DescribeDamage()
 	{
 		return std::format("damage share: {} ({} rounds with a share, {} without; last attack {} share {}; soldier life {}); suppressed shots {}, not {} (last "

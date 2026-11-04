@@ -956,6 +956,24 @@ static void TestParams(const std::string& a_dir)
 	if (!atk || !bullet || !sp) {
 		return;
 	}
+	// NpcParam's boss bit (params::kNpcBossBits, Cqc::IsBoss; review 0.8.0): set on Godrick (47500014) and a catacomb boss row
+	// (33500920), clear on Stormveil's soldiers and on its big ordinary enemy 46000014 (3148 HP live, 1210 runes); get_soul's offset too.
+	if (auto npcFile = ReadFile(a_dir + "/NpcParam.param"); !npcFile.empty()) {
+		const auto npc = params::Parse(npcFile.data(), npcFile.size());
+		CHECK(npc && npc->structName == params::kNpcParam.structName && npc->rowStride == params::kNpcParam.rowSize);
+		if (npc) {
+			const auto bossBit = [&](std::uint32_t a_id) -> int {
+				const auto* r = RowOf(npcFile, *npc, a_id);
+				return r ? (At<std::uint8_t>(r, params::kNpcBossBits) & params::kNpcIsSoulGetByBoss) != 0 : -1;
+			};
+			CHECK(bossBit(47500014) == 1 && bossBit(33500920) == 1);
+			CHECK(bossBit(30003214) == 0 && bossBit(30001014) == 0 && bossBit(30200014) == 0 && bossBit(42101014) == 0 && bossBit(46000014) == 0);
+			const auto* soldier = RowOf(npcFile, *npc, 30003214);
+			CHECK(soldier && At<std::uint32_t>(soldier, params::kNpcGetSoul) == 114);
+		}
+	} else {
+		std::printf("note: no NpcParam.param in %s: the boss bit check skipped\n", a_dir.c_str());
+	}
 	// The default bullet row (Throwing Dagger) and its attack row, at the offsets we patch.
 	const Config d;
 	const auto*  b = RowOf(bulletFile, *bullet, d.bulletId);
@@ -1238,6 +1256,8 @@ static void TestProgression(const std::string& a_dir)
 }
 
 #include "test_host_cqc.inc"  // CQC holds and throws (er/CqcLogic.h)
+#include "Buddy.h"
+#include "test_host_dog.inc"  // D-Dog in Elden Ring (er/DogLogic.h)
 #include "test_host_projectiles.inc"
 
 int main(int argc, char** argv)
@@ -1253,6 +1273,18 @@ int main(int argc, char** argv)
 	TestStealthAndRounds();
 	TestCqcSelection();
 	TestCqcResponses();
+	TestDogPick();
+	TestDogRun();
+	TestDogSpotting();
+	TestDogEffects();
+	TestDogBark();
+	TestDogFloor();
+	TestDogQuietEnd();
+	TestDogBossRule();
+	TestDogLatch();
+	TestBuddyGuard();
+	TestDogWaitPin();
+	TestDogBossStagger();
 	TestDamageLadder();
 	TestNativeDamage();
 	TestProjectiles();

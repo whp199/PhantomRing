@@ -9,6 +9,7 @@
 #include "Cqc.h"
 #include "Config.h"
 #include "Death.h"
+#include "Dog.h"
 #include "Dive.h"
 #include "Follow.h"
 #include "FultonAnchor.h"
@@ -83,6 +84,7 @@ namespace phantom::guest::frame
 		bool              g_nativeHoldWarned{ false };
 		bool              g_wasReady{ false };
 		Vec3              g_buddyLast;        // buddy heading from its motion (no per-frame GetRotationY)
+		Vec3              g_dogDrawOffset;    // D-Dog's draws: published place - MGSV's (Dog.h Display), the last frame it was known
 		bool              g_buddyLastValid{ false };
 		float             g_buddyYaw{ 0 };
 		// A ridden vehicle no warp of ours could move (D-Horse answers no Lua SetPosition: live 2026-10-13, 15 warps in 45 s
@@ -546,6 +548,8 @@ namespace phantom::guest::frame
 							!horse::Shift({ shift.x, 0.0f, shift.z }, g_buddyYaw, "fulton anchor")) {
 							follow::OnShift({ shift.x, 0.0f, shift.z });
 						}
+					} else if (a_lua.buddyActive == state::kBuddyTypeDog) {
+						dog::Shift({ shift.x, 0.0f, shift.z }, "fulton anchor");  // [Dog] Treadmill (Dog.cpp); else MGSV brings it back
 					}
 				}
 				Log::Info("fulton: Snake {} {:.2f},{:.2f},{:.2f} ({}; {:.1f} m)", ok ? "placed at" : "NOT placed at", p->pos.x, p->pos.y, p->pos.z, p->why,
@@ -689,6 +693,10 @@ namespace phantom::guest::frame
 				if (horseAct != horse::plan::Action::kMoveAlong || !horse::Shift(d.shift, a_lua.buddyYawValid ? a_lua.buddyYaw : g_buddyYaw, "treadmill")) {
 					follow::OnShift(d.shift);
 				}
+			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.buddyActive == state::kBuddyTypeDog) {
+				// D-Dog ignores SetPosition (live 2026-10-14): moved by its own location object at the next frame ([Dog] Treadmill, Dog.cpp),
+				// the one Snake's own placement shows in; else left to MGSV, which brings it back to Snake by itself (a ~6 m jump in Elden Ring).
+				dog::Shift(d.shift, "treadmill");
 			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId &&
 			           a_lua.buddyActive != state::kBuddyTypeDog && a_lua.buddyActive != state::kBuddyTypeQuiet) {
 				// (D-Dog and Quiet ignore SetPosition -- live 2026-10-14, D-Dog stayed put -- and its Vector3 form sends D-Walker to the
@@ -877,6 +885,20 @@ namespace phantom::guest::frame
 				.camPos = { a_sample.pos[0], a_sample.pos[1], a_sample.pos[2] },
 				.yaw = yaw });
 		}
+		{
+			// D-Dog's location object: found, moved with the treadmill, leashed when far behind out of view (Dog.h)
+			const bool onFoot = !((lua.flags & state::kLVehicle) || v.vehicleId != kNullId || lua.ridden != kNullId);
+			dog::Update(lua, { .ready = ready && onFoot && !state::Staged() && !state::Parked() && !fulton::Anchored(),
+				.dt = static_cast<float>(std::clamp(dt, 0.0, 0.1)),
+				.nowMs = ::GetTickCount64(),
+				.root = root,
+				.velocity = g_odo.Velocity(),
+				.camPos = { a_sample.pos[0], a_sample.pos[1], a_sample.pos[2] },
+				.staged = ready && state::Staged(),
+				.onFoot = onFoot,
+				.home = climb::Home(),
+				.yaw = yaw });
+		}
 		// v15: Elden Ring's ladders and ledges with MGSV's own moves (Climb.h): staged at real MGSV geometry, the odometer still
 		const auto moves = climb::Update(a_sample, root, yaw, lua, ready, dt);
 		if (moves.placed) {
@@ -1043,13 +1065,30 @@ namespace phantom::guest::frame
 		}
 		// D-Walker's own location object when it is known (this frame's: GetPosition is Lua's, up to a tick late -- led alongside
 		// Snake, that is a few dozen centimetres), else GetPosition.
-		const auto walkerFeet = walker::Position();
+		const bool dogOut = lua.buddyActive == state::kBuddyTypeDog;
+		const auto walkerFeet = dogOut ? dog::Position() : walker::Position();
 		const Vec3 buddyAt = walkerFeet && lua.buddyPosValid ? *walkerFeet : lua.buddyPos;
+		Vec3       buddyRaw = buddyAt;
 		if (lua.buddyPosValid && luaFresh) {
 			bf |= proto::kBuddyPosValid;
 			// Staged for a climb (Climb.h) Snake is far from the buddy in MGSV: it is published where it stands relative to where he
-			// stood on the sandbox, which is where the host had it (the host keeps it on Elden Ring's ground).
-			SetV(s.buddyPos, state::Staged() ? buddyAt + (root - climb::Home()) : buddyAt);
+			// stood on the sandbox, which is where the host had it (the host keeps it on Elden Ring's ground). D-Dog is taken along to
+			// the site (Dog.cpp): without that move.
+			Vec3 place = state::Staged() ? buddyAt - (dogOut ? dog::StagedMove() : Vec3{}) + (root - climb::Home()) : buddyAt;
+			buddyRaw = place;
+			if (dogOut) {
+				// What Elden Ring is shown of D-Dog: never faster than the dog runs (MGSV's lunge, its every-other-frame updates); its
+				// draws are moved to the same place (Capture.cpp), the staged move undone with it.
+				place = dog::Display(place, root, s.odo, g_odo.Epoch(), static_cast<float>(std::clamp(dt, 0.0, 0.1)));
+				g_dogDrawOffset = place - buddyAt;
+				const float o[3]{ g_dogDrawOffset.x, g_dogDrawOffset.y, g_dogDrawOffset.z };
+				capture::NoteBuddyOffset(g_frame, o);
+			}
+			SetV(s.buddyPos, place);
+		} else if (dogOut) {
+			// A frame without its place (the skin not seen, a stale Lua view): its draws keep the last offset (a waiting dog's can be metres).
+			const float o[3]{ g_dogDrawOffset.x, g_dogDrawOffset.y, g_dogDrawOffset.z };
+			capture::NoteBuddyOffset(g_frame, o);
 		}
 		if (lua.buddyId != kNullId && (lua.ridden == lua.buddyId || (riding && v.vehicleId == lua.buddyId))) {
 			bf |= proto::kBuddyRidden;
@@ -1059,6 +1098,12 @@ namespace phantom::guest::frame
 		}
 		if (state::BuddyMissing()) {
 			bf |= proto::kBuddyMissing;
+		}
+		if (lua.buddyActive == state::kBuddyTypeDog && dog::Engaged()) {
+			bf |= proto::kBuddyEngaged;  // (v17) D-Dog carries out an attack order on an Elden Ring target (Connected .. Released)
+		}
+		if (lua.buddyActive == state::kBuddyTypeDog) {
+			bf |= dog::BuddyStyleBits();  // (v17) its style, every frame: the host picks for it before any order (review 0.8.0)
 		}
 		if (lua.buddyPosValid) {
 			const Vec3 d = lua.buddyPos - g_buddyLast;
@@ -1076,6 +1121,9 @@ namespace phantom::guest::frame
 			g_buddyYaw = yaw;  // ridden: it faces where Snake's root faces
 		}
 		s.buddyFlags = bf;
+		if (lua.buddyActive == state::kBuddyTypeDog) {
+			dog::TraceFrame(g_frame, root, s.odo, s.buddyPos, buddyRaw, walkerFeet && lua.buddyPosValid, s.flags, bf);
+		}
 		// Where the buddy really is in MGSV (its draws are told apart by it), not the place published while Snake is staged for a climb.
 		capture::NoteBuddy((bf & proto::kBuddyPosValid) != 0, lua.buddyPosValid ? &buddyAt.x : s.buddyPos);
 		s.buddyObjectId = lua.buddyId;
@@ -1092,7 +1140,10 @@ namespace phantom::guest::frame
 		if (c.ProxiesRun()) {
 			const auto centre = ready && !state::Staged() ? state::Centre() : std::nullopt;
 			if (centre) {
-				const Vec3 buddy{ s.buddyPos[0], s.buddyPos[1], s.buddyPos[2] };
+				// MGSV's own place of the buddy (the capture's owner is told by it too), not what Elden Ring is shown of D-Dog: with a
+				// Wait's slip the two are metres apart, and a soldier could stand on the real waiting dog (review 0.8.0). Not staged
+				// here (no centre then), so this is buddyAt.
+				const Vec3 buddy = buddyRaw;
 				proxy::OnFrame(root, s.odo, (bf & proto::kBuddyPosValid) ? &buddy : nullptr, *centre, ::GetTickCount64());
 			} else {
 				proxy::Suspend();  // no OnFrame: nothing may act on the last placements (review 2026-10-14)

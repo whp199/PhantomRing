@@ -70,6 +70,13 @@ namespace phantom::er
 	namespace RenderScene
 	{
 		void Capture(const Frame& a_frame);  // task Draw_Pre (144)
+		// (0.8.0 polish) D-Dog's drawn body guarded (er/BuddyGuard.h StepGuard): what it measured and did (`pr er buddy`); `buddy guard
+		// reset` zeroes the counts.
+		std::string BuddyGuardDescribe();
+		void        BuddyGuardReset();
+		// `buddy trace on|off`: D-Dog as drawn, one CSV line per frame (raw / drawn place, the guard's act, view, flags) into
+		// PhantomRingBuddyTrace.csv next to the DLL -- the integration's per-frame measure (a test tool; nothing for players).
+		void        BuddyTrace(bool a_on);
 		// The snapshot for the frame being presented (shared: stays valid while held).
 		std::shared_ptr<const RenderSnapshot> ForPresent();
 		// Cheap (no lock): the newest snapshot carries world markers (er/RenderMarkers.h). The renderer splits Elden

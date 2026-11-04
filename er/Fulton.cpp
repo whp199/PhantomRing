@@ -273,7 +273,7 @@ namespace phantom::er::Fulton
 				c.handle);
 			return;
 		}
-		if (Cqc::IsBossHp(c.maxHp)) {
+		if (Cqc::IsBoss(c.npcParam, c.maxHp)) {
 			++g_refused;
 			Log::Info("fulton: npc {} (handle {:#x}, max hp {}) is a boss -- not taken (bosses can't be fultoned)", c.npcParam, c.handle, c.maxHp);
 			return;

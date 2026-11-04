@@ -45,7 +45,7 @@ namespace phantom::er
 		// Pure (tests): which character the event means -- with a handle, exactly that one while he lives, else nobody (review
 		// 2026-10-31: a dead or unloaded one used to pass the balloon to the nearest living hostile, awake or a boss); with no
 		// handle (0), the nearest living, not disabled one within a_radius of where the proxy stood; -1 = none. OnEvent then
-		// takes him only while he sleeps and is no boss (Cqc::IsBossHp).
+		// takes him only while he sleeps and is no boss (Cqc::IsBoss).
 		struct Candidate
 		{
 			std::uint64_t handle{ 0 };

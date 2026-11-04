@@ -48,6 +48,9 @@ namespace phantom::guest::capture::hud
 	// A climb or climb-up is staged at real MGSV geometry (Climb.h): the layer keeps its last frame (MGSV's "Y" prompt and ladder
 	// icon there are no Elden Ring business).
 	void SetFrozen(bool a_frozen);
+	// D-Dog carries out an order (Dog.cpp): MGSV's own markers of its target soldier and of the dog (DogLogic.h IsMgsvMarkerColor) stay
+	// out of the layer meanwhile -- the host marks the Elden Ring enemy itself.
+	void SetHideDogMarkers(bool a_hide);
 
 	// "!capture hud [on|off|every N|skip <ps hash>]" (Capture.cpp forwards).
 	std::string Command(std::string_view a_args);

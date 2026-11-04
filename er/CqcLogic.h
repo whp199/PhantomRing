@@ -61,6 +61,11 @@ namespace phantom::er::cqc
 	// A boss: big against the Tarnished (Bigness), big outright (bossHp), or unknown (the Tarnished's max HP or his own not read
 	// yet: stagger only is the safe answer).
 	bool IsBoss(std::int32_t a_maxHp, const combat::Scaling& a_scaling, const Rules& a_rules);
+	// The same with Elden Ring's own mark of a boss (review 0.8.0: the HP rule alone let a dungeon or field boss of ~700-1500 HP be
+	// held, slept, killed by D-Dog): a_npcBoss = his NpcParam row's isSoulGetByBoss bit (true for every boss row -- Godrick 47500014,
+	// the catacombs' and evergaols' 9xx rows -- and for no soldier), nullopt when the row can't be read: then anything bigger than an
+	// ordinary enemy (combat::Bigness > 0, i.e. more than bigFrom x the Tarnished's HP) counts as one too -- the safe answer.
+	bool IsBoss(std::int32_t a_maxHp, std::optional<bool> a_npcBoss, const combat::Scaling& a_scaling, const Rules& a_rules);
 
 	enum class Response : std::uint8_t
 	{

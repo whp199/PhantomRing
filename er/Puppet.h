@@ -42,6 +42,13 @@ namespace phantom::er
 
 		[[nodiscard]] bool          Active();
 		[[nodiscard]] const Anchor& CurrentAnchor();  // valid while Active()
+		// (0.8.0 polish) Bumped whenever the anchor is made anew (the puppet starts, or Elden Ring put the player somewhere else): what
+		// is mapped through it may jump then (D-Dog's step guard starts over, er/BuddyGuard.h).
+		[[nodiscard]] std::uint32_t AnchorEpoch();
+		// Bumped only when the puppet starts (Start). A re-anchor of 1.5-5 m (Elden Ring shoving the player, a grab, the climb-up's
+		// abort) is not a new start: D-Dog's guards keep going through it, so the mapped dog's jump with the anchor is held / eased
+		// like any other (review 0.8.0: they started over and drew it at once); over 5 m they start over by distance.
+		[[nodiscard]] std::uint32_t StartEpoch();
 		// While MGSV plays a staged move (kGuestClimbing / kGuestMantling: Snake at one of the airport's ladders or obstacles) and the
 		// puppet runs: the anchor his draw list is drawn with, turned so that his body there faces Elden Ring's move (er/StagedFacing.h)
 		// -- a_listYaw: the list's anchorYaw. nullopt: CurrentAnchor() as it is. Only for his drawn body: the camera, the buddy and

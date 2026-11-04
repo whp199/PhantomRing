@@ -170,6 +170,42 @@ static void TestAssign()
 	CHECK(none.empty());
 }
 
+// D-Dog's order target (Dedicate, docs/research/ddog.md §3.5): first to get a soldier, on the ground, never parked for the buddy's
+// clearance (the dog has to reach him), still parked inside Snake's.
+static void TestDedicated()
+{
+	Settings s;
+	s.maxProxies = 2;
+	s.height = Height::kEnemy;  // the Fulton-only path's height: the dog's target still stands on the ground
+	const Vec3 snake{ 0, 0, 0 }, centre{ 0, -1, 0 };
+	auto       slots = Slots(3);
+	std::vector<Target> targets{ { 11, { 10, 2, 0 }, 0, 10 }, { 12, { 15, 0, 0 }, 0, 15 }, { 13, { 20, 3, 0 }, 0, 20 } };
+	PutDedicatedFirst(targets, 13);
+	CHECK(targets[0].handle == 13 && targets[0].dedicated && targets[1].handle == 11 && targets[2].handle == 12 && !targets[1].dedicated);
+	PutDedicatedFirst(targets, 99);  // absent: nothing changes
+	CHECK(targets[0].handle == 13 && targets[1].handle == 11);
+	// The dog stands right at its target (0.8 m): a dedicated target keeps its proxy; it stands on the sandbox ground.
+	const Vec3 dog{ 20.5f, 0, 0.6f };
+	Assign(slots, targets, snake, &dog, centre, s);
+	const auto* d = &slots[0];
+	CHECK(d->handle == 13 && d->proxy && Near(d->pos, { 20, -1, 0 }) && Near(d->real, { 20, 3, 0 }));
+	CHECK(slots[1].handle == 11 && slots[1].proxy && Near(slots[1].pos, { 10, 2, 0 }));  // the others keep the enemy's height
+	CHECK(!slots[2].proxy);  // 12: beyond Max 2 once the dog's target came first
+	// Not dedicated, the same target beside the buddy is parked (5.5 m clearance).
+	targets = { { 13, { 20, 3, 0 }, 0, 20 }, { 11, { 10, 2, 0 }, 0, 10 } };
+	Assign(slots, targets, snake, &dog, centre, s);
+	CHECK(slots[0].handle == 13 && !slots[0].proxy);
+	// Dedicated and inside Snake's clearance (Snake walked up to the enemy the dog holds): he keeps his soldier (review 0.8.0: parked,
+	// MGSV's bite ended and the host's hold with it); not dedicated, the same target is parked.
+	targets = { { 13, { 2, 0, 0 }, 0, 2 } };
+	PutDedicatedFirst(targets, 13);
+	Assign(slots, targets, snake, &dog, centre, s);
+	CHECK(slots[0].handle == 13 && slots[0].proxy && Near(slots[0].pos, { 2, -1, 0 }));
+	targets = { { 13, { 2, 0, 0 }, 0, 2 } };
+	Assign(slots, targets, snake, &dog, centre, s);
+	CHECK(slots[0].handle == 13 && !slots[0].proxy);
+}
+
 static void TestNeedsPlace()
 {
 	Settings s;
@@ -397,8 +433,78 @@ static void TestFultonAnchor()
 	CHECK(fp::ParseCandidates("").empty());
 }
 
+// Elden Ring's walls in the characters around Snake (SlipObserver): from Begin on, characters standing still in Elden Ring move in
+// odometer space by what a wall kept Snake from; one character, a crowd walking its own way, more than Snake's own path or a table
+// around a treadmill jump change nothing.
+static void TestSlip()
+{
+	SlipObserver o;
+	const auto   at = [](std::uint64_t h, float x, float z) { return SlipSample{ h, Vec3{ x, 0.0f, z } }; };
+	CHECK(!o.Update({ at(1, 10, 0), at(2, -5, 8) }, { 0, 0, 0 }, true) && !o.Active());  // nothing before Begin
+	o.Begin();
+	CHECK(!o.Update({ at(1, 10, 0), at(2, -5, 8), at(3, 0, 20) }, { 0, 0, 0 }, true) && o.Active());  // the baseline
+	// Snake runs 1 m along +z into a wall: Elden Ring moved him by nothing, the three still ones are 1 m on in odometer space.
+	CHECK(o.Update({ at(1, 10, 1), at(2, -5, 9), at(3, 0, 21) }, { 0, 0, 1 }, true));
+	CHECK(Near(o.Level(), { 0, 0, 1 }));
+	// Free running: they stay where they were; the level holds.
+	CHECK(o.Update({ at(1, 10, 1), at(2, -5, 9), at(3, 0, 21) }, { 0, 0, 3 }, true));
+	CHECK(Near(o.Level(), { 0, 0, 1 }));
+	// One of three walking off (a soldier on patrol): the two still ones decide.
+	CHECK(o.Update({ at(1, 10, 1.5f), at(2, -5, 9.5f), at(3, 4, 25) }, { 0, 0, 3.5f }, true));
+	CHECK(Near(o.Level(), { 0, 0, 1.5f }));
+	// A character first seen now counts from here on as still.
+	CHECK(o.Update({ at(1, 10, 1.5f), at(2, -5, 9.5f), at(4, 30, 30) }, { 0, 0, 3.5f }, true));
+	CHECK(o.Update({ at(1, 10, 2), at(2, -5, 10), at(4, 30, 30.5f) }, { 0, 0, 4 }, true) && Near(o.Level(), { 0, 0, 2 }));
+	// They disagree (no majority): the level holds.
+	CHECK(!o.Update({ at(1, 10, 3), at(2, -3, 10), at(4, 30, 33) }, { 0, 0, 5 }, true) && Near(o.Level(), { 0, 0, 2 }));
+	// Around a treadmill jump (not settled): the level holds, whatever the table says.
+	CHECK(!o.Update({ at(1, 4, 2), at(2, -11, 10), at(4, 24, 30.5f) }, { 0, 0, 5 }, false) && Near(o.Level(), { 0, 0, 2 }));
+	// Everyone 6 m on at once with no MGSV motion since the last table (more than Snake's path, too): no slip -- counted anew.
+	CHECK(!o.Update({ at(1, 10, 9), at(2, -5, 17), at(4, 30, 37.5f) }, { 0, 0, 5 }, true) && Near(o.Level(), { 0, 0, 2 }) && o.Rebased() == 1);
+	// Review 0.8.0: a baseline is never taken from an unsettled table (right after a treadmill jump the table can be off by it).
+	SlipObserver jump;
+	jump.Begin();
+	CHECK(!jump.Update({ at(1, 4, 0), at(2, 1, 8), at(3, -6, 20) }, { 0, 0, 0 }, false) && !jump.Active());  // 6 m off: not taken
+	CHECK(!jump.Update({ at(1, 10, 0), at(2, 7, 8), at(3, 0, 20) }, { 0, 0, 0 }, true) && jump.Active());   // settled: the baseline
+	CHECK(!jump.Update({ at(1, 10, 0), at(2, 7, 8), at(3, 0, 20) }, { 0, 0, 7 }, true) || Near(jump.Level(), {}));
+	CHECK(Near(jump.Level(), {}));  // Snake ran 7 m freely: no slip (not the jump's 6 m)
+	// Review 0.8.0: a patrol walking together (2 of 3, the 60 % rule met) is not the slip: Snake standing still (no path since)...
+	SlipObserver patrol;
+	patrol.Begin();
+	patrol.Update({ at(1, 0, 0), at(2, 2, 0), at(3, 20, 20) }, { 0, 0, 0 }, true);
+	CHECK(patrol.Update({ at(1, 0, 0), at(2, 2, 0), at(3, 20, 20) }, { 0, 0, 4 }, true) && Near(patrol.Level(), {}));  // ran 4 m freely
+	CHECK(!patrol.Update({ at(1, 0.5f, 0), at(2, 2.5f, 0), at(3, 20, 20) }, { 0, 0, 4 }, true) && Near(patrol.Level(), {}));  // stood: refused
+	// ...or Snake running one way and the patrol walking another (its move points against his): refused too.
+	CHECK(!patrol.Update({ at(1, 0.5f, -0.5f), at(2, 2.5f, -0.5f), at(3, 20, 20) }, { 0, 0, 5 }, true) && Near(patrol.Level(), {}));
+	// A real wall again: along his run and no longer than it -- taken.
+	CHECK(patrol.Update({ at(1, 0, 1), at(2, 2, 1), at(3, 20, 21) }, { 0, 0, 6 }, true) && Near(patrol.Level(), { 0, 0, 1 }));
+	// Integration 2026-11-04: Elden Ring teleports Snake 21 m while the dog waits (setpos, a grace): every character moves at once by
+	// it with no MGSV motion -- no slip, even once Snake's runs have made his path that long; the wall slip after it still counts.
+	SlipObserver tp;
+	tp.Begin();
+	tp.Update({ at(1, 0, 0), at(2, 3, 0), at(3, 0, 6) }, { 0, 0, 0 }, true);
+	CHECK(tp.Update({ at(1, 0, 1), at(2, 3, 1), at(3, 0, 7) }, { 0, 0, 1 }, true) && Near(tp.Level(), { 0, 0, 1 }));  // a wall: 1 m
+	CHECK(tp.Update({ at(1, 0, 1), at(2, 3, 1), at(3, 0, 7) }, { 0, 0, 31 }, true) && Near(tp.Level(), { 0, 0, 1 }));  // runs freely 30 m
+	CHECK(!tp.Update({ at(1, 17, -11), at(2, 20, -11), at(3, 17, -5) }, { 0, 0, 31 }, true) && Near(tp.Level(), { 0, 0, 1 }) && tp.Rebased() == 1);
+	CHECK(tp.Update({ at(1, 17, -11), at(2, 20, -11), at(3, 17, -5) }, { 0, 0, 35 }, true) && Near(tp.Level(), { 0, 0, 1 }));  // stays put
+	CHECK(tp.Update({ at(1, 17, -10), at(2, 20, -10), at(3, 17, -4) }, { 0, 0, 36 }, true) && Near(tp.Level(), { 0, 0, 2 }));  // a wall again
+	// One character only: nothing to go on.
+	SlipObserver one;
+	one.Begin();
+	one.Update({ at(1, 0, 0) }, { 0, 0, 0 }, true);
+	CHECK(!one.Update({ at(1, 0, 1) }, { 0, 0, 1 }, true) && Near(one.Level(), {}));
+	// Stop: nothing until the next Begin, which starts from zero.
+	o.Stop();
+	CHECK(!o.Update({ at(1, 10, 9) }, { 0, 0, 9 }, true) && !o.Active());
+	o.Begin();
+	o.Update({ at(1, 0, 0), at(2, 1, 1) }, { 0, 0, 0 }, true);
+	CHECK(Near(o.Level(), {}) && o.Taken() >= 4 && o.Refused() >= 1);
+}
+
 int main()
 {
+	TestSlip();
+	TestDedicated();
 	TestFultonAnchor();
 	TestOffsetHistory();
 	TestTreadmillOffset();

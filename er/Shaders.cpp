@@ -164,6 +164,16 @@ float MarkerGlyph(float2 p, uint g)
 	if (m & 128u) d = min(d, MarkerBox(p, float2(0, -h * 0.5), float2(t, h * 0.5)));
 	return d;
 }
+// D-Dog's paw (glyph 11, er/Dog.h): a pad and four toes.
+float MarkerPaw(float2 p)
+{
+	float d = length((p - float2(0.0, -0.30)) * float2(1.0, 1.3)) - 0.34;
+	d = min(d, length(p - float2(-0.50, 0.12)) - 0.15);
+	d = min(d, length(p - float2(-0.19, 0.40)) - 0.16);
+	d = min(d, length(p - float2(0.19, 0.40)) - 0.16);
+	d = min(d, length(p - float2(0.50, 0.12)) - 0.15);
+	return d;
+}
 float4 PSMarker(MarkerOut i) : SV_Target
 {
 	// Corner units per pixel, taken before any discard (the edges of the triangle and glyphs are a pixel soft).
@@ -207,8 +217,12 @@ float4 PSMarker(MarkerOut i) : SV_Target
 		if (r > 1.0 || t < 0.0) discard;
 		a *= saturate(t * 4.0) * saturate((1.0 - r) * 12.0);
 	} else {
-		// Triangle (3) or glyph (4): the colour inside a dark edge, readable over sky and snow alike.
-		float d = i.shape.x < 3.5 ? MarkerTriangleDown(i.corner, 0.78) : MarkerGlyph(i.corner, (uint)(i.shape.y + 0.5));
+		// Triangle (3) or glyph (4): the colour inside a dark edge, readable over sky and snow alike. A triangle with an inner
+		// share is hollow: only a band that wide inside its edge (D-Dog's provisional marks); glyph 11 is D-Dog's paw.
+		float d = i.shape.x < 3.5 ? MarkerTriangleDown(i.corner, 0.78) : (i.shape.y > 10.5 ? MarkerPaw(i.corner) : MarkerGlyph(i.corner, (uint)(i.shape.y + 0.5)));
+		if (i.shape.x < 3.5 && i.shape.y > 0.01) {
+			d = max(d, -(d + i.shape.y));
+		}
 		float fill = saturate(0.5 - d / aa);
 		float edge = saturate(0.5 - (d - 0.13) / aa);
 		if (edge <= 0.0) discard;

@@ -19,6 +19,10 @@ namespace phantom::guest::combat
 	bool InstallShots();
 	[[nodiscard]] bool NativeShots();
 	[[nodiscard]] std::uint64_t BuddyRounds();  // rounds the hook attributed to the buddy so far
+	// The damage table's row of any attack id (lethal u16 [0], non-lethal u16 [1]) and its lethal share of a standard soldier's life
+	// (1/10000, as kGEvFire pad[1]; 0 = not lethal or the life unknown): D-Dog's ATK 144-147 (Dog.cpp). False = no row (the table
+	// unverified, not loaded, or the id out of range).
+	bool AttackRow(std::uint32_t a_attack, std::uint16_t& a_lethal, std::uint16_t& a_nonLethal, std::uint32_t& a_share);
 	// `!shots`: the v8 damage share (kGEvFire pad[1]) state.
 	[[nodiscard]] std::string DescribeDamage();
 	// Snake's character and player index as ObserveOwner saw them last (0 / 0xFFFFFFFF before): his weapon in hand (Suppressor.h).

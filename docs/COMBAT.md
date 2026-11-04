@@ -621,6 +621,76 @@ stays unexplained, and nothing of ours was seen to cause it.
    120 lv 4` (never `nothing applied`, never `waited ... fired into a busy one`), and he falls. Same for a grab: the punch,
    then ~0.5 s later `CQC hold -> ... poise 15`.
 
+## 7b. D-Dog's bite on Elden Ring enemies (`er/Dog.cpp`, `er/DogLogic.*` `EffectOf`, `[Dog]`; protocol v17 `kGEvDogAttack`; 2026-11-03)
+
+MGSV's dog runs, leaps and bites a stand-in soldier at the Elden Ring enemy's place (the guest, docs/research/ddog.md §3.5); on
+`kGEvDogAttack` **Connected** the host applies the dog's style on that enemy (docs/HOST.md "D-Dog in Elden Ring" for the pick and
+the checks: only a living hostile non-boss one, re-checked when it lands). Every hit rides the usual route (`Combat::HitCharacter`: a
+bullet of the Tarnished's with this hit's numbers, the top-up, the sleep ladder), from 0.8 m on the dog's side of him, and waits for
+the bullet row like CQC's (`cqc::WhenToFire`). The knockdown is CQC's throw (`[Cqc] throw_poise` 120, `throw_dmg_level` 4), the
+flinch CQC's grab (`grab_poise` 15, lv 1, a token 1 HP at `hit_correction` 10%).
+
+| style (MGSV's equipment) | `dog::Act` | what Elden Ring gets |
+|---|---|---|
+| busy (naked: "Keep 'em busy") | hold | `Cqc::HoldFor(busy_hold` 6 s): ChrIns+0x538 no attack / no move, CQC's own bookkeeping (never two holds on him); the grab's flinch now and every `busy_flinch_every` 1.5 s while held. Refused (Snake holds him, `hold_cooldown`): the flinch only |
+| kill (knife) | kill | MGSV's lethal share of the knife (`b` / 10000, x `kill_share_mult`; `kill_share_fallback` 1.2 lives when 0) x his reference HP (big ones: a share of a soldier's life of theirs, as rounds), + the knockdown; lethal. A hit bullet that misses is dealt through the HP route (`landOrHp`, 0.8.0) |
+| knock out (stun knife) | knock out | the sleep darts' route: `knockout_sleep` 1.1 x his sleep resistance in sleep-ladder rungs (the choke's 200 when unreadable), + the knockdown with a token 1 HP; never lethal |
+| wound (battledress) | wound | `wound_share` (1.0) x his reference HP, never below 1 HP (`nonLethal`: an ordinary enemy is left at 1 HP), + the knockdown; a missed bullet through the HP route too |
+| fetch (Fulton vest: "Get it") | fetch | nothing: MGSV's Fulton of his asleep proxy arrives as `kGEvFulton` (HOST.md "Fulton") |
+| any, on a boss | refused / stagger | `bosses = off` (default): nothing at all; `stagger`: CQC's stagger once, then nothing for 20 s. A boss (0.8.0) is CQC's HP rule or his NpcParam row's `isSoulGetByBoss` bit (HOST.md "D-Dog in Elden Ring") |
+| any, on one a Fulton balloon lifts or Snake's CQC holds | nothing | (0.8.0) the bite isn't applied; a queued hit on one going up is dropped |
+
+**Live 2026-11-03** (Elden Ring 1.17.2 alone, fake MGSV `--buddy dog`, Stormveil; `hurt_mult 0`):
+- busy on a Stormveil soldier (`30200014`, 317 HP; `!dog attack 0x... busy full`, 7 s engaged): `cqc: D-Dog holds npc 30200014 ... for
+  6.0 s (no attack / no move; bits 0x30 ours)`, the hit `bullet 1 poise 15 lv 1` 0.17 s after Connected, flinches at +1.67, +3.17, +4.69
+  s (HP 317 -> 314), `let go (busy_hold over)` at +6.0 s; frame: his halberd lowered, held. On a warhawk (`42101114`, 256 HP): the same
+  (256 -> 253, three flinches, let go at 6.0 s); frame: the bird flinching (blood).
+- wound on the same soldier (313 HP): `wound: damage 317 (never below 1 HP), poise 120 lv 4` -> **1/317**; frame: knocked back.
+- kill through the pick (`!order 12` -> "D-Dog: Do it (kill enemy) -- the enemy you look at", style kill learned from pad[0], then
+  `!dog attack target kill full`: `... on ER 0xa0000001000004c -- the host's pick`): `kill: damage 265` (1.2 lives of 221 HP),
+  `hp 221 -> 178 ... +222 topped up` -> dead (0/221), knocked 4 m back; the pick moved on to his neighbour.
+- knock out through the pick (`!order 13`): `bullet 1 poise 120 lv 4 sleep +252 (resist 229, 2 rungs)` -> `combat targets`: **HOSTILE
+  ASLEEP** (220/221; not yet 1.7 s after the hit, asleep a few seconds later); frame: down in Elden Ring's sleep mist.
+- Get it through the pick (`!order 15`, style fetch): the pick took only the sleeper (`30000814 ... awake (Get it takes sleepers)`),
+  `fetch -> Get it on npc 30000114 -- MGSV's Fulton follows`, then `!fulton`: the balloon, `out of Elden Ring's world`, `+114 runes`.
+- Bark (`!order 10`, the dog at the courtyard's middle): `npc 30000614 hears D-Dog bark 15.0 m away and stops to stare (5 s)`, `npc
+  30000814 ... 16.4 m`; both ChrIns+0x538 = 0x30 during it and 0x00 after (`2 bark starer(s) go on`), a second Bark 5 s later `0 of 2`
+  (cooldown); the team-30 neighbours and one 33 m away never stared.
+- a boss: never bitten (`dog test boss`: `refused (a boss)`); a simulated Connected on a far boss's handle: `isn't in Elden Ring's list`.
+- Not live: `bosses = stagger`, MGSV's real shares for ATK 144-146 (the guest reads them: until then `kill_share_fallback`).
+
+**Live with both games, 0.8.0 (2026-11-04,** real MGSV and Elden Ring 1.17.2, Stormveil, each suit put on through MGSV's own CHANGE
+EQUIPMENT, the order through MGSV's call menu; `hurt_mult 0`):
+- wound (battledress, command 14): `30200014` 317 -> `hp 317 -> 274 (wanted -316), +273 topped up` -> **1/317**; `30000814` 221 -> 1.
+- busy (naked, 11): MGSV's bite `0x887890ebe04a` with its share 11538 (1.15 lives) -> `D-Dog holds npc 30000814 ... for 6.0 s`, flinches
+  at +1.65, +3.17, +4.69 s, `let go (busy_hold over)` at +6.0 s; MGSV let go at +7.9 s (frames: the white dog on the soldier's arm).
+- knock out (stun knife, 13; after the style fix): `sleep +252 (resist 229, 2 rungs)` -> `HOSTILE ASLEEP` (221 -> 220).
+- kill (knife, 12; after the fix): MGSV's share 252058 (25.2 lives) -> `kill: damage 4420`, `hp 221 -> 195 ... +4394 topped up` -> dead,
+  `Released: the target is dead or gone` 0.2 s later. Before the fix the stun knife had been sent as this kill: its bullet missed a
+  soldier charging Snake and he was left unhurt (hence `landOrHp`).
+- Get it (Fulton vest, 15) on a sleeper: MGSV's own Fulton 12.3 s after the order, `+114 runes`.
+
+**0.8.0 polish (2026-11-04, Elden Ring 1.17.2 alone, fake MGSV `--buddy dog`, Stormveil's lower courtyard; `hurt_mult 0`, 1 after):**
+- **Snake's CQC grab on the enemy the dog holds** (one hold, released cleanly): busy on a soldier 1.4 m from Snake -> `cqc: D-Dog holds
+  npc 30000114 ... for 6.0 s (no attack / no move; bits 0x30 ours)`, the bite's flinch `hp 221 -> 220`; `!grab grab` 0.7 s later ->
+  `cqc: Snake takes npc 30000114 ... over from D-Dog's hold` (CQC's grab flinch `220 -> 219`), `dog: done with ... (the hold ended)`;
+  ChrIns+0x538 0x00 -> 0x30 (the dog's) -> 0x30 (Snake's: the same bits, one owner) -> `!grab release`: `let go (Snake let go)`, 0x00,
+  still 0x00 6 s later.
+- kill on two soldiers next to Snake: `kill: damage 265` -> one bullet landed (`hp 221 -> 195 ... topped up`), one didn't (`did not land
+  within 300 ms; hp fallback -265`) -> both dead.
+- **`bosses = stagger`**: unit-tested only (`TestDogBossStagger`; never fought live, no boss approached): a boss is the pick then, the
+  bite (any style) is one stagger -- CQC's stagger poise, at most 1 HP, non-lethal, no hold, no sleep -- then nothing on that boss for
+  20 s, then one stagger again; with `off` (the default) he is never picked and a Connected on him does nothing.
+- A real Elden Ring dog or wolf: not tried (none around the Rampart Tower or the lower courtyard; the pack there, `44910014` / `44907014`, are pot-shaped walkers).
+
+**0.8.0 integration with both games (2026-11-04, real MGSV + Elden Ring 1.17.2, Stormveil's lower courtyard; `hurt_mult 0`, 1 after;
+docs/STATUS.md "0.8.0 polish"):** each suit's bite through MGSV's real call menu, put on through CHANGE EQUIPMENT -- wound (battle dress)
+`wound: damage 221 (never below 1 HP)` -> the bullet missed, `hp fallback -220` -> 1 HP; kill (knife) `knife, lethal`, MGSV's share
+25.206 -> `kill: damage 4420` -> dead; knock out (stun knife) `knife, not lethal (stun)` -> `sleep +252 (resist 229, 2 rungs)` -> asleep;
+Get it (Fulton vest) on a darted sleeper x2 -> `fulton: +114 runes` (a third lost: the sleeper woke while the dog ran); Keep 'em busy x36
+(held 6 s, flinches). Every hit of the session on a team-6 soldier; the team-30 `81100014` / `1000000` lying among them listed `not
+hostile (never a candidate)` in every `dog pick`.
+
 ## 8. Verified live, both games (2026-10-12, Gatefront / Agheel Lake, Limgrave)
 
 | What | Result |

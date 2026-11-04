@@ -356,6 +356,28 @@ namespace phantom::guest
 		proxyHeightTolerance = std::clamp(static_cast<float>(ini.GetFloat("Proxies", "HeightTolerance", proxyHeightTolerance)), 0.5f, 20.0f);
 		proxyAimHeightFix = ini.GetBool("Proxies", "AimHeightFix", proxyAimHeightFix);
 
+		// [Dog] (protocol v17, docs/research/ddog.md §5; Dog.cpp)
+		dog.enabled = ini.GetBool("Dog", "Enabled", dog.enabled);
+		dog.treadmill = ini.GetBool("Dog", "Treadmill", dog.treadmill);
+		dog.treadmillMaxDistance = std::clamp(static_cast<float>(ini.GetFloat("Dog", "TreadmillMaxDistance", dog.treadmillMaxDistance)), 1.0f, 500.0f);
+		dog.leash = std::clamp(static_cast<float>(ini.GetFloat("Dog", "Leash", dog.leash)), 1.0f, 500.0f);
+		dog.attack = ini.GetBool("Dog", "Attack", dog.attack);
+		dog.targetPuppet = ini.GetBool("Dog", "TargetPuppet", dog.targetPuppet);
+		{
+			const auto ms = [&](const char* a_key, std::uint32_t& a_value) {
+				a_value = static_cast<std::uint32_t>(std::clamp<std::int64_t>(ini.GetInt("Dog", a_key, a_value), 100, 120000));
+			};
+			ms("RealizeTimeoutMs", dog.realizeTimeoutMs);
+			ms("ReachTimeoutMs", dog.reachTimeoutMs);
+			ms("BusyMaxMs", dog.busyMaxMs);
+		}
+		dog.whistleBack = ini.GetBool("Dog", "WhistleBack", dog.whistleBack);
+		dog.keepDrawsNearProxy = ini.GetBool("Dog", "KeepDrawsNearProxy", dog.keepDrawsNearProxy);
+		dog.announce = ini.GetBool("Dog", "Announce", dog.announce);
+		dog.maxShownSpeed = std::clamp(static_cast<float>(ini.GetFloat("Dog", "MaxShownSpeed", dog.maxShownSpeed)), 0.0f, 100.0f);
+		dog.stageAlong = ini.GetBool("Dog", "StageAlong", dog.stageAlong);
+		dog.waitKeepsPlace = ini.GetBool("Dog", "WaitKeepsPlace", dog.waitKeepsPlace);
+
 		luaOverride = Widen(ini.Get("Lua", "OverrideFile", Narrow(luaOverride)));
 		dumpDefaultLua = ini.GetBool("Lua", "DumpDefault", dumpDefaultLua);
 	}

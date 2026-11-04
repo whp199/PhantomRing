@@ -7,6 +7,7 @@
 #include "CameraDriver.h"
 #include "Combat.h"
 #include "Cqc.h"
+#include "Dog.h"
 #include "Config.h"
 #include "ConsoleExpr.h"
 #include "DebugDraw.h"
@@ -30,6 +31,7 @@
 #include "Pacing.h"
 #include "PacingProbe.h"
 #include "Puppet.h"
+#include "RenderScene.h"
 #include "QuickItem.h"
 #include "GeomProbe.h"
 #include "Progression.h"
@@ -646,6 +648,7 @@ namespace phantom::er::Console
 			"noise [status | emit [r] [ahead] | mode sound|heard|off|ini | set <key> <v> | who [r]]   shots heard by Elden Ring's enemies (er/Noise.h)\n"
 			"stealth [hide on|off | speffect <id>]   Snake in MGSV's cardboard box (er/Stealth.h)\n"
 			"cqc [status | grab | throw | choke | interrogate | release | on | off | set <key> <v>]   CQC holds and throws on Elden Ring enemies (er/Cqc.h)\n"
+			"dog [status | on | off | all on|off | pick | test boss | style <s> | attack [style] [0x..] | release | bark | set <key> <v>]   D-Dog (er/Dog.h)\n"
 			"fulton [status | nearest [fail] | 0x<handle> [fail] | forget]   MGSV's Fulton on an Elden Ring enemy, as kGEvFulton (er/Fulton.h)\n"
 			"mark [status | binoculars on|off|auto | nearest | handle <0x..> | clear]   binocular marks over Elden Ring characters (er/Marking.h)\n"
 			"timeskip [status | <minutes> | clear]   MGSV's Phantom Cigar on Elden Ring's clock, as kGEvTimeSkip (er/TimeSkip.h)\n"
@@ -751,7 +754,14 @@ namespace phantom::er::Console
 			return Calibration::Describe();
 		}
 		if (cmd == "buddy") {
-			return Buddy::Describe() + "\n" + BuddyOrders::Describe();
+			if (w.size() > 2 && w[1] == "guard" && w[2] == "reset") {
+				RenderScene::BuddyGuardReset();
+			}
+			if (w.size() > 2 && w[1] == "trace" && (w[2] == "on" || w[2] == "off")) {
+				RenderScene::BuddyTrace(w[2] == "on");
+				return std::format("D-Dog's draw trace {} (PhantomRingBuddyTrace.csv next to the DLL; the next frame it is drawn)", w[2]);
+			}
+			return Buddy::Describe() + "\n" + RenderScene::BuddyGuardDescribe() + "\n" + BuddyOrders::Describe();
 		}
 		if (cmd == "combat") {
 			return Combat::Console(w, a_f);
@@ -776,6 +786,9 @@ namespace phantom::er::Console
 		}
 		if (cmd == "cqc") {
 			return Cqc::Console(w, a_f);
+		}
+		if (cmd == "dog") {
+			return Dog::Console(w, a_f);
 		}
 		if (cmd == "fulton") {
 			std::string rest;

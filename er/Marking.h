@@ -16,6 +16,7 @@
 // Elden Ring itself is only read (its character list, the camera) and ray cast; nothing is written. The pure rules are
 // er/MarkingLogic.h. UNVERIFIED live: the guest's BINOCLE flag in real play, the look of the marks over Elden Ring's frame.
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -26,6 +27,11 @@ namespace phantom::er
 	namespace Marking
 	{
 		void Tick(const Frame& a_frame);  // FrameBegin, after the events (er/Events.cpp)
+		// (D-Dog, docs/research/ddog.md §3.1; er/Dog.h) A provisional mark on that character until a_untilMs (GetTickCount64): a
+		// hollow triangle, his distance only near the view's centre; the binoculars still mark him for good. Never extends one
+		// past what it is given (each call sets at least that much). Cleared with the marks at a new world.
+		void Provisional(std::uint64_t a_handle, std::uint64_t a_untilMs);
+		bool IsMarked(std::uint64_t a_handle);  // marked for good or provisionally (D-Dog's pick: marked ones first)
 		std::string Describe();
 		// `mark [status | binoculars on|off|auto | nearest | clear]`: binoculars on = as if Snake looked through them (tests without
 		// MGSV's flag); nearest = mark the nearest character now; clear = forget every mark.

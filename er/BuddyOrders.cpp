@@ -1,5 +1,6 @@
 #include "BuddyOrders.h"
 
+#include "Config.h"
 #include "Host.h"
 #include "Hud.h"
 #include "InputBridge.h"
@@ -16,16 +17,44 @@ namespace phantom::er::BuddyOrders
 	{
 		constexpr std::uint16_t kLb = 0x0100;  // XINPUT_GAMEPAD_LEFT_SHOULDER: MGSV's call menu while held
 		constexpr std::uint32_t kWalker = 4;   // BuddyType WALKER_GEAR
+		constexpr std::uint32_t kDog = 2;      // BuddyType DOG
 
 		Hint          g_hint;
 		std::uint32_t g_orders{ 0 };       // D-Walker orders MGSV took this session
+		std::uint32_t g_dogOrders{ 0 };    // D-Dog's
 		std::uint32_t g_otherOrders{ 0 };  // other buddies' (not this mod's buddy, but shown)
 		std::uint32_t g_howTos{ 0 }, g_noOrders{ 0 };
 		std::uint32_t g_lastCommand{ 0 };
 	}
 
-	std::string OrderText(std::uint32_t a_command, std::uint32_t a_buddyType)
+	std::string OrderText(std::uint32_t a_command, std::uint32_t a_buddyType, bool a_dogTexts)
 	{
+		// D-Dog's (docs/research/ddog.md §2.1, §3.2): the call menu's labels, with what each does in Elden Ring. 11-15 are one
+		// order in MGSV (the dog's equipment decides what it does); the label the player clicked names it.
+		if (a_buddyType == kDog && a_dogTexts) {
+			switch (a_command) {
+			case 8:
+				return "D-Dog: Whistle -- he comes to you";
+			case 9:
+				return "D-Dog: Wait -- he stays where he is";
+			case 10:
+				return "D-Dog: Bark -- enemies near him stop and stare at him";
+			case 11:
+				return "D-Dog: Keep 'em busy -- he pins the enemy you look at";
+			case 12:
+				return "D-Dog: Do it (kill enemy) -- the enemy you look at";
+			case 13:
+				return "D-Dog: Do it (knock out enemy) -- he puts the enemy you look at to sleep";
+			case 14:
+				return "D-Dog: Do it (wound enemy) -- he cuts the enemy you look at down";
+			case 15:
+				return "D-Dog: Get it -- he fultons the sleeping enemy you look at";
+			case 16:
+				return "D-Dog: DD -- he comes over";
+			default:
+				return std::format("D-Dog: order {}", a_command);
+			}
+		}
 		// The call menu's own labels (docs/GUEST.md 18.3), with what each does for a player who never read MGSV's manual.
 		switch (a_command) {
 		case 20:
@@ -40,6 +69,20 @@ namespace phantom::er::BuddyOrders
 			return "D-Walker: Intercept Mode -- it attacks enemies nearby";
 		default:
 			return a_buddyType == kWalker ? std::format("D-Walker: order {}", a_command) : std::format("Buddy order {}", a_command);
+		}
+	}
+
+	std::string HowToText(std::uint32_t a_buddyType)
+	{
+		// MGSV takes the click only with the stick back at the centre (VERIFIED live: 2 of 2 clicks with the stick still
+		// pushed did nothing, 4 of 4 after letting it go gave the order); the entry stays selected meanwhile.
+		switch (a_buddyType) {
+		case kWalker:
+			return "D-Walker orders: keep LB held, point the right stick at one, let the stick go, then click it in";
+		case kDog:
+			return "D-Dog orders: keep LB held, point the right stick at one, let the stick go, then click it in -- look at the enemy first";
+		default:
+			return {};
 		}
 	}
 
@@ -83,26 +126,26 @@ namespace phantom::er::BuddyOrders
 	void OnOrder(const proto::GuestEvent& a_e)
 	{
 		g_lastCommand = a_e.a;
-		(a_e.b == kWalker ? g_orders : g_otherOrders) += 1;
-		const auto text = OrderText(a_e.a, a_e.b);
-		Log::Info("buddy: the player's order {} -- \"{}\"", a_e.a, text);
+		(a_e.b == kWalker ? g_orders : a_e.b == kDog ? g_dogOrders : g_otherOrders) += 1;
+		const auto text = OrderText(a_e.a, a_e.b, Cfg().dog.orderText);
+		// (v17) pad[0] = D-Dog's style + 1 (its equipment: what its commands 11-15 do), 0 = unknown / another buddy
+		Log::Info("buddy: the player's order {} -- \"{}\"{}", a_e.a, text, a_e.b == 2 && a_e.pad[0] ? std::format(" (D-Dog style {})", a_e.pad[0] - 1) : std::string());
 		Hud::Notify(text, Hud::Tone::kGood);
 	}
 
 	void Tick(const Frame& a_f)
 	{
 		const auto& g = a_f.guest;
-		// The walker is out and Snake on foot, playing: LB is MGSV's call menu then.
+		// The walker (or D-Dog, with [Dog] order_text) is out and Snake on foot, playing: LB is MGSV's call menu then.
+		const bool buddy = g.buddyType == kWalker || (g.buddyType == kDog && Cfg().dog.orderText);
 		const bool eligible = Puppet::Active() && a_f.guestReady && !a_f.menuOpen && !a_f.cutscene && !a_f.dead && !a_f.dying &&
-		                      !(g.flags & (proto::kGuestInMenu | proto::kGuestOnVehicle)) && g.buddyType == kWalker && (g.buddyFlags & proto::kBuddyPresent);
+		                      !(g.flags & (proto::kGuestInMenu | proto::kGuestOnVehicle)) && buddy && (g.buddyFlags & proto::kBuddyPresent);
 		const bool lb = (InputBridge::LastButtons() & kLb) != 0;
 		const float rx = static_cast<float>(InputBridge::LastRightStickX()) / 32767.0f;
-		switch (g_hint.Update(::GetTickCount64(), eligible, lb, rx, g_orders)) {
+		switch (g_hint.Update(::GetTickCount64(), eligible, lb, rx, g.buddyType == kDog ? g_dogOrders : g_orders)) {
 		case Hint::Say::kHowTo:
 			++g_howTos;
-			// MGSV takes the click only with the stick back at the centre (VERIFIED live: 2 of 2 clicks with the stick still
-			// pushed did nothing, 4 of 4 after letting it go gave the order); the entry stays selected meanwhile.
-			Hud::Notify("D-Walker orders: keep LB held, point the right stick at one, let the stick go, then click it in", Hud::Tone::kInfo);
+			Hud::Notify(HowToText(g.buddyType), Hud::Tone::kInfo);
 			break;
 		case Hint::Say::kNoOrder:
 			++g_noOrders;
@@ -116,7 +159,7 @@ namespace phantom::er::BuddyOrders
 
 	std::string Describe()
 	{
-		return std::format("orders: {} D-Walker ({} other buddies), last command {}; hints: {} how-to, {} without an order", g_orders, g_otherOrders, g_lastCommand,
-			g_howTos, g_noOrders);
+		return std::format("orders: {} D-Walker, {} D-Dog ({} other buddies), last command {}; hints: {} how-to, {} without an order", g_orders, g_dogOrders,
+			g_otherOrders, g_lastCommand, g_howTos, g_noOrders);
 	}
 }

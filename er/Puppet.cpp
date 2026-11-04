@@ -24,6 +24,7 @@
 #include "StagedFacing.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <format>
 #include <numbers>
@@ -361,8 +362,13 @@ namespace phantom::er::Puppet
 			SafeWrite<std::uint8_t>(flags, v);
 		}
 
+		std::atomic<std::uint32_t> g_anchorEpoch{ 0 };  // (0.8.0 polish) a new anchor: the puppet started, or Elden Ring put the player somewhere
+		std::atomic<std::uint32_t> g_startEpoch{ 0 };   // the puppet started (only): D-Dog's guards start over (review 0.8.0)
+
 		void Start(const Frame& a_f)
 		{
+			g_anchorEpoch.fetch_add(1, std::memory_order_relaxed);
+			g_startEpoch.fetch_add(1, std::memory_order_relaxed);
 			const auto& p = a_f.player;
 			const auto& g = a_f.guest;
 			g_chr = p.chr;
@@ -1106,6 +1112,7 @@ namespace phantom::er::Puppet
 		const Vec3 now = game::Position(p);
 		if (Length(now - g_lastSet) > cfg.resyncDistance) {
 			Log::Info("puppet: ER moved the player {:.2f} m by itself; re-anchoring{}", Length(now - g_lastSet), g_mantle.Active() ? " (the climb up ends)" : "");
+			g_anchorEpoch.fetch_add(1, std::memory_order_relaxed);
 			g_mantle.Abort();
 			g_kin.pos = now;
 			g_kin.ceilingEscape = false;  // a new place: the ceiling check's way out (Kinematic.h) ends
@@ -1741,6 +1748,8 @@ namespace phantom::er::Puppet
 
 	bool          Active() { return g_active; }
 	const Anchor& CurrentAnchor() { return g_anchor; }
+	std::uint32_t AnchorEpoch() { return g_anchorEpoch.load(std::memory_order_relaxed); }
+	std::uint32_t StartEpoch() { return g_startEpoch.load(std::memory_order_relaxed); }
 	bool          Riding() { return g_active && g_riding; }
 	bool          RidingHorse() { return g_active && g_riding && g_horse; }
 	float         GroundY() { return g_active ? g_kin.groundY : NAN; }

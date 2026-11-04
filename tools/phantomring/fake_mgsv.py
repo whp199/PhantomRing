@@ -46,6 +46,27 @@ Combat by hand (docs/COMBAT.md), through the guest console (`tools/pr lua '!<cmd
     !flame [seconds]                         D-Walker's flamethrower: kGEvBuddyFire with no bullet (pad[1] = 12000 mm reach) ~8/s
     !fpv on|off                              kGuestFirstPerson
     !cam <phase_rad> [dist] [height] [look_y]   a fixed camera (no orbit) looking along -(cos phase, sin phase)
+    !order <cmd>                             (v7) kGEvBuddyOrder: the player's call-menu command for the buddy out (b = its
+                                             BuddyType); (v17) with D-Dog pad[0] = its style + 1 (!dog style)
+
+D-Dog's attacks (protocol v17, docs/research/ddog.md; needs `!buddy dog`):
+    !dog [status]                            the dog's style, kBuddyEngaged, the job under way, the host's pick (kActorDogTarget)
+    !dog style <busy|fetch|kill|knockout|wound|unknown>   its equipment (the style the real guest reads from MGSV)
+    !dog attack [target|nearest|none|0xHANDLE] [style] [full|ordered|connect|lost|refused]
+                                             kGEvDogAttack on an Elden Ring character of the ActorTable: target = the host's pick
+                                             (ActorFlags.DogTarget, the default), nearest = the nearest hostile living non-boss one
+                                             (fetch: a sleeping one), none = no target (Refused, handle 0). full (default): Ordered,
+                                             Connected 0.6 s later (GuestBuddyFlags.Engaged on), Released after the busy time (off);
+                                             ordered: only Ordered; connect: Ordered + Connected, engaged until !dog release; lost:
+                                             Ordered, Lost 0.5 s later; refused: Refused. b = the !share value, the attack id by
+                                             style (bite 144, knife 145, stun knife 146)
+    !dog release                             Released for the engaged target (Engaged off)
+    !dog busy <seconds>                      Connected -> Released time of a full run (default 2)
+    !dog blip <dx> <dz> [frames] [dy]        (0.8.0 polish) the dog's place and draws off by dx, dz m for N frames (default 1)
+    !dog move <dx> <dz>                      ...moved for good (it waits there; !order 8 to follow again)
+    !callmenu on|off [full|ordered|connect]  MGSV's call menu from the pad: hold LB, push the right stick, let it go, click R3 ->
+                                             the dog's attack command; the host's pick taken at once or within 350 ms, else Refused
+    !order 9 / !order 8                      with D-Dog: Wait keeps it where it is in Snake's odometer frame; the whistle ends it
 
 Thrown and placed explosives (protocol v5/v6, er/Throw.h, er/Mines.h), simulated MGSV-style over the fake's flat
 ground (y = 0, gravity 9.8 m/s^2, no bounce):
@@ -118,6 +139,15 @@ BUDDIES = {
 	"quiet": (proto.BuddyType.QUIET, 0x0405, 1.0, 5.0, "Quiet deployed"),
 	"none": (proto.BuddyType.NONE, 0xFFFF, 1.0, 5.0, "no buddy"),
 }
+# v17 D-Dog: !dog style words -> DogStyle, and the MGSV attack id each one's kGEvDogAttack carries (TppDamage ATK_DDogBite 144,
+# ATK_DDogKnife 145, ATK_DDogStunKnife 146; docs/research/ddog.md §2.5; fetch: none)
+DOG_STYLES = {"busy": proto.DogStyle.Busy, "fetch": proto.DogStyle.Fetch, "kill": proto.DogStyle.Kill, "knockout": proto.DogStyle.KnockOut,
+	"wound": proto.DogStyle.Wound, "unknown": proto.DogStyle.StyleUnknown}
+# As the real guest (mgsv/DogLogic AttackIdOf, Dog.cpp ShareOf with MGSV's ATK rows, live 2026-11-03): busy = the bite 144, kill = the
+# knife 145, knock out = the stun knife 146, wound = the body attack 147; MGSV's lethal share of each in soldier lives (b / 10000):
+# the bite 1.1538, the knife 25.2058, the two non-lethal ones 0. `!share` overrides the share for every event.
+DOG_ATTACK_IDS = {proto.DogStyle.Busy: 144, proto.DogStyle.Kill: 145, proto.DogStyle.KnockOut: 146, proto.DogStyle.Wound: 147}
+DOG_SHARES = {proto.DogStyle.Busy: 1.1538, proto.DogStyle.Kill: 25.2058, proto.DogStyle.KnockOut: 0.0, proto.DogStyle.Wound: 0.0}
 RIDEABLE = ("walker", "horse")
 MESH_SNAKE, MESH_DWALKER = 0x5A4B000000000001, 0x5A4B000000000002
 TEX_SNAKE, TEX_DWALKER = 0x7E57000000000001, 0x7E57000000000002
@@ -235,6 +265,7 @@ class FakeGuest:
 			"actorsSeen": 0, "fireSent": 0, "buddyFireSent": 0, "diedSent": 0, "drawFramesPublished": 0,
 			"hudFramesPublished": 0, "renderMessages": 0, "renderDropped": 0, "consoleServed": 0, "warps": 0,
 			"rideFrames": 0, "lifeMin": LIFE_MAX, "healed": 0, "backPresses": 0, "startPresses": 0, "menuButtons": 0, "pressCounts": {},
+			"buddyOrdersSent": 0, "dogAttacksSent": [], "dogTargetFrames": 0, "dogTargetsSeen": [], "dogEngagedFrames": 0,
 		}
 		self.last_packet = None
 		self.grenades = []        # thrown, flying over the fake's flat ground (v5)
@@ -265,6 +296,21 @@ class FakeGuest:
 		self.stick_mode = "world"  # !stick world|camera: the left stick along MGSV x/z (+3 m/s), or relative to the camera like MGSV
 		self.stick_speed = 5.0     # !stick camera <m/s>: full stick on foot (MGSV's run ~4.7 m/s)
 		self.last_cam = None
+		# v17 D-Dog (!dog): its style (equipment), the attack job under way, kBuddyEngaged, the host's pick last seen
+		self.dog_style = proto.DogStyle.Busy
+		self.dog_job = None       # {"handle", "style", "pos", "steps": [(t, DogPhase), ...]}
+		self.dog_engaged = None   # handle of the target while GuestBuddyFlags.Engaged
+		self.dog_engaged_style = proto.DogStyle.Busy
+		self.dog_busy_s = 2.0
+		self.dog_target = 0       # ActorFlags.DogTarget handle in the last ActorTable (0 = none)
+		self.buddy_pos = None
+		# (0.8.0 polish) test hooks: MGSV's call menu from the pad as the real guest takes an attack order (!callmenu), Wait (the dog keeps
+		# its place in Snake's odometer frame, as the real guest's treadmill keeps it), one-frame jumps of the dog (!dog blip)
+		self.callmenu = False     # !callmenu on|off
+		self.cm = {"lb": False, "pointed": False, "let_go": False, "pending": None}
+		self.dog_wait = None      # (x, z) in the odometer frame while D-Dog waits
+		self.dog_blip = None      # {"dx", "dy", "dz", "frames"}
+		self.buddy_rel = (1.5, 0.0, -0.5)  # the buddy relative to Snake's root this frame (MGSV world axes)
 
 	def elapsed(self) -> float:
 		return time.monotonic() - self.t0
@@ -368,6 +414,8 @@ class FakeGuest:
 				if self.in_menu and pressed:
 					st["menuButtons"] += 1
 					self.log(f"pad: {pressed:#06x} pressed in the menu")
+			if self.callmenu and self.buddy == "dog" and not neutral:
+				self.call_menu(t, pad)
 			self.last_buttons = 0 if neutral else pad.buttons
 
 		while (ev := link.host_events.pop()) is not None:
@@ -431,6 +479,18 @@ class FakeGuest:
 		actors = link.actors()
 		if actors:
 			st["actorsSeen"] = actors.count
+			# v17: the host's pick for D-Dog (at most one record), logged as it changes
+			pick = next((actors.actors[i].handle for i in range(min(actors.count, proto.MAX_ACTORS))
+				if actors.actors[i].flags & proto.ActorFlags.DogTarget), 0)
+			if pick:
+				st["dogTargetFrames"] += 1
+				if hex(pick) not in st["dogTargetsSeen"]:
+					st["dogTargetsSeen"].append(hex(pick))
+			if pick != self.dog_target:
+				self.log(f"dog: the host's pick (ActorFlags.DogTarget) {pick:#x}" if pick else "dog: the host has no pick (no ActorFlags.DogTarget)")
+				self.dog_target = pick
+		self.tick_call_menu(t)
+		self.tick_dog(t)
 
 		# Motion: a slow circle plus the left stick (MGSV would turn the stick into locomotion itself).
 		riding = ((6.0 <= (t % 12.0) < 10.0) if self.ride == "auto" else self.ride == "on") and self.buddy in RIDEABLE
@@ -552,11 +612,27 @@ class FakeGuest:
 		bflags = proto.GuestBuddyFlags.Present | proto.GuestBuddyFlags.PosValid if self.buddy != "none" else proto.GuestBuddyFlags(0)
 		if riding:
 			bflags |= proto.GuestBuddyFlags.Ridden
+		if self.dog_engaged is not None and self.buddy == "dog":
+			bflags |= proto.GuestBuddyFlags.Engaged  # v17: D-Dog carries out an attack (Connected .. Released)
+			st["dogEngagedFrames"] += 1
+		if self.buddy == "dog":
+			bflags |= proto.buddy_dog_style_bits(self.dog_style)  # v17: its style every frame (buddyFlags bits 8-15)
 		off = (0.0, 0.0) if riding else (1.5 * math.cos(self.yaw) - 0.5 * math.sin(self.yaw), -1.5 * math.sin(self.yaw) - 0.5 * math.cos(self.yaw))
+		dy = 0.0
+		if self.buddy == "dog" and not riding:
+			if self.dog_wait is not None:
+				off = (self.dog_wait[0] - self.odo[0], self.dog_wait[1] - self.odo[2])  # Wait: its place in the odometer frame
+			if self.dog_blip and self.dog_blip["frames"] > 0:
+				off = (off[0] + self.dog_blip["dx"], off[1] + self.dog_blip["dz"])
+				dy = self.dog_blip["dy"]
+				self.dog_blip["frames"] -= 1
+				st["dogBlipFrames"] = st.get("dogBlipFrames", 0) + 1
+		self.buddy_rel = (off[0], dy, off[1])
 		gs.buddyFlags = int(bflags)
 		gs.buddyObjectId = bobject
 		gs.buddyAmmo = self.buddy_ammo
-		gs.buddyPos[:] = [self.root[0] + off[0], 0.0, self.root[2] + off[1]]
+		gs.buddyPos[:] = [self.root[0] + off[0], dy, self.root[2] + off[1]]
+		self.buddy_pos = list(gs.buddyPos)
 		gs.buddyYaw = self.yaw
 		link.seq_write(proto.OFF_GUEST_STATE, gs)
 		self.vars.update(playerPosX=self.root[0], playerPosY=self.root[1], playerPosZ=self.root[2],
@@ -631,7 +707,7 @@ class FakeGuest:
 			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !grab <action> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
 			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off !binoculars on|off "
-			"!climbplay on|off !climbhome <ms> !mantleplay on|off")
+			"!climbplay on|off !climbhome <ms> !mantleplay on|off !order <cmd> !dog [status|style <s>|attack [target|nearest|none|0xH] [style] [full|ordered|connect|lost|refused]|release|busy <s>]")
 		if not w:
 			return 0, usage
 		if w[0] == "projmesh" and len(w) > 1 and w[1] in ("on", "off"):
@@ -646,6 +722,15 @@ class FakeGuest:
 		if w[0] == "mantleplay" and len(w) > 1:
 			self.mantle_play = w[1] == "on"
 			return 0, f"climb-up / vault {'played' if self.mantle_play else 'NOT played'} on kHEvMantle (GuestFlags.Mantling)"
+		if w[0] == "order" and len(w) > 1:
+			return self.buddy_order(int(w[1], 0))
+		if w[0] == "dog":
+			return self.dog_command(w[1:])
+		if w[0] == "callmenu" and len(w) > 1:
+			self.callmenu = w[1] == "on"
+			self.callmenu_mode = w[2] if len(w) > 2 and w[2] in ("full", "ordered", "connect") else "full"
+			return 0, (f"call menu from the pad {'on' if self.callmenu else 'off'} (D-Dog: LB, right stick, let go, R3 -> its attack command; "
+				f"a taken order runs `!dog attack <pick> {self.callmenu_mode}`)")
 		if w[0] == "binoculars" and len(w) > 1:
 			self.binoculars = w[1] == "on"
 			return 0, f"binoculars {'on' if self.binoculars else 'off'} (GuestFlags.Binoculars)"
@@ -846,6 +931,191 @@ class FakeGuest:
 			return 0, "Snake died (life 1, kGEvDied sent)"
 		return 1, usage
 
+	# ---- v17 D-Dog -------------------------------------------------------------------------------------------
+	def buddy_order(self, cmd: int) -> tuple[int, str]:
+		"""kGEvBuddyOrder as the real guest's CommandDetour sends it: b = the buddy's type; D-Dog: pad[0] = its style + 1."""
+		btype = BUDDIES[self.buddy][0]
+		if self.buddy == "dog":
+			# (0.8.0 polish) Wait keeps the dog where it is in Snake's odometer frame (the real guest moves it with the treadmill's
+			# jumps); the whistle / DD / an attack order let it follow again.
+			if cmd == 9:
+				self.dog_wait = (self.buddy_rel[0] + self.odo[0], self.buddy_rel[2] + self.odo[2])
+				self.log(f"dog: waits at ({self.dog_wait[0]:.2f}, {self.dog_wait[1]:.2f}) in the odometer frame")
+			elif cmd in (8, 16) and self.dog_wait is not None:
+				self.dog_wait = None
+				self.log("dog: called back: follows Snake again")
+		# pad[0] only for the attack orders 11-15, as the real guest's OrderStylePad (the style reaches the host every frame in
+		# buddyFlags anyway).
+		style = self.dog_style + 1 if btype == proto.BuddyType.DOG and 11 <= cmd <= 15 and self.dog_style != proto.DogStyle.StyleUnknown else 0
+		self.push_event(GuestEventType.BuddyOrder, a=cmd, b=int(btype), pad0=style)
+		self.stats["buddyOrdersSent"] += 1
+		return 0, f"kGEvBuddyOrder a={cmd} b={int(btype)} ({btype.name}) pad0={style}" + (f" (D-Dog style {self.dog_style.name})" if style else "")
+
+	def dog_records(self) -> list:
+		actors = self.link.actors()
+		return [actors.actors[i] for i in range(min(actors.count, proto.MAX_ACTORS))] if actors else []
+
+	def dog_send(self, phase, style, handle: int, pos) -> str:
+		dog = self.buddy_pos or list(self.root)
+		d = (0.0, 0.0, 0.0)
+		if pos is not None:
+			dx, dy, dz = pos[0] - dog[0], pos[1] - dog[1], pos[2] - dog[2]
+			n = math.sqrt(dx * dx + dy * dy + dz * dz)
+			d = (dx / n, dy / n, dz / n) if n > 1e-3 else d
+		a = proto.dog_attack_a(phase, style, DOG_ATTACK_IDS.get(style, 0))
+		share = self.share if self.share > 0 else DOG_SHARES.get(style, 0.0)
+		self.push_event(GuestEventType.DogAttack, a=a, b=int(round(share * 10000)), v0=tuple(dog), v1=d,
+			pad0=handle & 0xFFFFFFFF, pad1=handle >> 32)
+		if phase == proto.DogPhase.Ordered and self.dog_wait is not None:
+			# (review 0.8.0) as the real guest: an attack order MGSV takes ends the Wait (a refused one leaves the dog waiting)
+			self.dog_wait = None
+			self.log("dog: ordered from its Wait: follows its order (Snake) again")
+		if phase == proto.DogPhase.Connected:
+			self.dog_engaged, self.dog_engaged_style = handle, style
+		elif phase in (proto.DogPhase.Released, proto.DogPhase.Lost, proto.DogPhase.Refused) and self.dog_engaged == handle:
+			self.dog_engaged = None
+		name = f"{proto.DogPhase(phase).name}/{proto.enum_name(style, proto.DogStyle)}"
+		self.stats["dogAttacksSent"].append(name)
+		text = f"kGEvDogAttack {name} (MGSV attack {DOG_ATTACK_IDS.get(style, 0)}, share {share:.3f}) on ER {handle:#x}"
+		self.log(f"dog: {text}{' -- GuestBuddyFlags.Engaged' if self.dog_engaged is not None else ''}")
+		return text
+
+	# (0.8.0 polish) MGSV's call menu as the real guest sees it (!callmenu on): hold LB, push the right stick, let it go, click it (R3)
+	# while LB is held -> the attack command of the dog's style (kGEvBuddyOrder); like the real guest's job the host's pick
+	# (ActorFlags.DogTarget) is taken at once or within 350 ms, else Refused.
+	CM_COMMANDS = {proto.DogStyle.Busy: 11, proto.DogStyle.Kill: 12, proto.DogStyle.KnockOut: 13, proto.DogStyle.Wound: 14, proto.DogStyle.Fetch: 15}
+
+	def call_menu(self, t: float, pad):
+		lb = bool(pad.buttons & 0x0100)
+		cm = self.cm
+		if not lb:
+			cm["lb"] = cm["pointed"] = cm["let_go"] = False
+			return
+		cm["lb"] = True
+		rmag = math.hypot(pad.thumbRX, pad.thumbRY) / 32767.0
+		if rmag > 0.5:
+			cm["pointed"], cm["let_go"] = True, False
+		elif cm["pointed"] and rmag < 0.3:
+			cm["let_go"] = True
+		if (pad.buttons & ~self.last_buttons & 0x0080) and cm["let_go"]:
+			cmd = self.CM_COMMANDS.get(self.dog_style, 11)
+			st = self.stats
+			st["callMenuOrders"] = st.get("callMenuOrders", 0) + 1
+			self.buddy_order(cmd)
+			pick = self.dog_target
+			self.log(f"callmenu: the player's attack command {cmd} at t={t:.3f} -- the host's pick now {pick:#x}")
+			cm["pending"] = {"cmd": cmd, "at": t, "until": t + 0.35}
+			cm["pointed"] = cm["let_go"] = False
+
+	def tick_call_menu(self, t: float):
+		p = self.cm["pending"]
+		if p is None:
+			return
+		st = self.stats
+		if self.dog_target:
+			self.cm["pending"] = None
+			st["callMenuOrdered"] = st.get("callMenuOrdered", 0) + 1
+			self.log(f"callmenu: order {p['cmd']} takes the host's pick {self.dog_target:#x} {1000 * (t - p['at']):.0f} ms after the click")
+			self.dog_command(["attack", hex(self.dog_target), getattr(self, "callmenu_mode", "full")])
+		elif t >= p["until"]:
+			self.cm["pending"] = None
+			st["callMenuRefused"] = st.get("callMenuRefused", 0) + 1
+			self.log(f"callmenu: order {p['cmd']} REFUSED -- no host pick within 350 ms of the click")
+			self.dog_send(proto.DogPhase.Refused, self.dog_style, 0, None)
+
+	def tick_dog(self, t: float):
+		job = self.dog_job
+		if job is None:
+			return
+		while job["steps"] and t >= job["steps"][0][0]:
+			_, phase = job["steps"].pop(0)
+			self.dog_send(phase, job["style"], job["handle"], job["pos"])
+		if not job["steps"]:
+			self.dog_job = None
+
+	def dog_command(self, w: list[str]) -> tuple[int, str]:
+		if not w or w[0] == "status":
+			job = self.dog_job
+			return 0, (f"D-Dog: buddy {self.buddy}, style {self.dog_style.name}, engaged {'%#x' % self.dog_engaged if self.dog_engaged is not None else 'no'}, "
+				f"job {('%#x %s, %d steps left' % (job['handle'], job['style'].name, len(job['steps']))) if job else 'none'}, "
+				f"the host's pick {self.dog_target:#x}, busy {self.dog_busy_s:.1f} s")
+		if w[0] == "style" and len(w) > 1 and w[1] in DOG_STYLES:
+			self.dog_style = DOG_STYLES[w[1]]
+			return 0, f"D-Dog style {self.dog_style.name} (BuddyOrder pad[0] {self.dog_style + 1 if self.dog_style != proto.DogStyle.StyleUnknown else 0})"
+		if w[0] == "busy" and len(w) > 1:
+			self.dog_busy_s = max(0.1, float(w[1]))
+			return 0, f"a full run holds {self.dog_busy_s:.1f} s between Connected and Released"
+		if w[0] == "blip" and len(w) > 2:
+			# (0.8.0 polish) the dog's place (buddyPos and its draws) off by dx, dz (dy) m for N frames, then back: the host's step
+			# guard must hold it (docs/HOST.md "D-Dog in Elden Ring")
+			frames = int(w[3]) if len(w) > 3 else 1
+			self.dog_blip = {"dx": float(w[1]), "dz": float(w[2]), "dy": float(w[4]) if len(w) > 4 else 0.0, "frames": max(1, frames)}
+			return 0, f"D-Dog off by ({self.dog_blip['dx']}, {self.dog_blip['dy']}, {self.dog_blip['dz']}) m for {self.dog_blip['frames']} frame(s)"
+		if w[0] == "move" and len(w) > 2:
+			# (0.8.0 polish) the dog put somewhere else for good (as the guest's leash does): it waits there in the odometer frame
+			self.dog_wait = (self.buddy_rel[0] + self.odo[0] + float(w[1]), self.buddy_rel[2] + self.odo[2] + float(w[2]))
+			return 0, f"D-Dog moved by ({w[1]}, {w[2]}) m (and waits there; !order 8 to follow)"
+		if self.buddy != "dog":
+			return 1, f"!dog: the buddy is {self.buddy} (`!buddy dog` first)"
+		if w[0] == "release":
+			if self.dog_engaged is None:
+				return 1, "!dog release: not engaged"
+			handle = self.dog_engaged
+			pos = next((list(r.pos) for r in self.dog_records() if r.handle == handle), None)
+			self.dog_job = None
+			return 0, self.dog_send(proto.DogPhase.Released, self.dog_engaged_style, handle, pos)
+		if w[0] != "attack":
+			return 1, "usage: !dog [status] | style <busy|fetch|kill|knockout|wound|unknown> | attack [target|nearest|none|0xHANDLE] [style] [full|ordered|connect|lost|refused] | release | busy <s>"
+		which, style, mode = "target", self.dog_style, "full"
+		for x in w[1:]:
+			if x in DOG_STYLES:
+				style = DOG_STYLES[x]
+			elif x in ("full", "ordered", "connect", "lost", "refused"):
+				mode = x
+			elif x in ("target", "nearest", "none") or x.startswith("0x"):
+				which = x
+			else:
+				return 1, f"!dog attack: what is {x!r}?"
+		out = []
+		# A new order ends the one under way, as MGSV's would: a bite lets go (Released), a run never finishes (Lost).
+		if self.dog_engaged is not None:
+			out.append(self.dog_send(proto.DogPhase.Released, self.dog_engaged_style, self.dog_engaged, None))
+		elif self.dog_job is not None:
+			out.append(self.dog_send(proto.DogPhase.Lost, self.dog_job["style"], self.dog_job["handle"], self.dog_job["pos"]))
+		self.dog_job = None
+		recs = self.dog_records()
+		pick = None
+		if which == "target":
+			pick = next((r for r in recs if r.flags & proto.ActorFlags.DogTarget), None)
+		elif which == "nearest":
+			for r in recs:
+				if r.flags & (proto.ActorFlags.Dead | proto.ActorFlags.Boss) or not r.flags & proto.ActorFlags.Hostile:
+					continue  # the real host's pick: hostile and alive only, never a boss by default
+				if style == proto.DogStyle.Fetch and not r.flags & proto.ActorFlags.Asleep:
+					continue
+				d = math.hypot(r.pos[0] - self.root[0], r.pos[2] - self.root[2])
+				if pick is None or d < math.hypot(pick.pos[0] - self.root[0], pick.pos[2] - self.root[2]):
+					pick = r
+		elif which.startswith("0x"):
+			want = int(which, 16)
+			pick = next((r for r in recs if r.handle == want), None)
+		if pick is None or mode == "refused":
+			handle = pick.handle if pick is not None else 0
+			out.append(self.dog_send(proto.DogPhase.Refused, style, handle, list(pick.pos) if pick is not None else None))
+			return 0, "; ".join(out) + ("" if pick is not None else f" -- no {which} in the ActorTable ({len(recs)} records)")
+		pos = list(pick.pos)
+		out.append(self.dog_send(proto.DogPhase.Ordered, style, pick.handle, pos))
+		t = self.elapsed()
+		if mode == "connect":
+			out.append(self.dog_send(proto.DogPhase.Connected, style, pick.handle, pos))
+		elif mode == "lost":
+			self.dog_job = {"handle": pick.handle, "style": style, "pos": pos, "steps": [(t + 0.5, proto.DogPhase.Lost)]}
+		elif mode == "full":
+			self.dog_job = {"handle": pick.handle, "style": style, "pos": pos,
+				"steps": [(t + 0.6, proto.DogPhase.Connected), (t + 0.6 + self.dog_busy_s, proto.DogPhase.Released)]}
+		name = bytes(pick.name).split(b"\0", 1)[0].decode("utf-8", "replace")
+		return 0, "; ".join(out) + f" ({name}, {mode})"
+
 	def release(self, speed: float, pitch: float, yaw_off: float = 0.0):
 		"""Snake's hand and a throw's initial velocity (MGSV world) for a speed, pitch and yaw off his facing."""
 		yaw = self.yaw + yaw_off
@@ -956,6 +1226,8 @@ class FakeGuest:
 	def publish_draw_list(self, riding: bool):
 		if self.humanoid:
 			walker = (0.0, -1.0, 0.0) if riding else (1.6 * math.cos(self.yaw) - 0.4 * math.sin(self.yaw), 0.0, -1.6 * math.sin(self.yaw) - 0.4 * math.cos(self.yaw))
+			if self.buddy == "dog" and not riding:
+				walker = self.buddy_rel  # its draws where its buddyPos is (Wait, !dog blip)
 			# v13: MGSV's own draws of a grenade in flight, tagged kOwnerProjectile as the real guest's [Capture] ProjectileMeshes does (the
 			# host learns the mesh from them and draws it on its flown copy; `!projmesh off`: none).
 			projectiles = [((g["pos"][0] - self.root[0], g["pos"][1] - self.root[1], g["pos"][2] - self.root[2]), 9.0 * g["t"])
@@ -975,6 +1247,8 @@ class FakeGuest:
 		rec_walker.textures[0] = TEX_DWALKER
 		# Anchor-relative matrices: Snake at the anchor; D-Walker under him while ridden, else beside him.
 		walker = (0.0, -0.8, 0.0) if riding else (1.5, 0.0, -0.5)
+		if self.buddy == "dog" and not riding:
+			walker = self.buddy_rel  # its draws where its buddyPos is (Wait, !dog blip)
 		upper = (0, 0.9, 0)
 		if self.climbing and self.climb:
 			upper = (0.15 * math.sin(self.climb["phase"]), 1.3, 0)  # the climb pose: arms up, swinging with its pace

@@ -56,6 +56,7 @@ namespace phantom::er::InputBridge
 		std::atomic<int>           g_padIndex{ -1 };
 		std::atomic<std::uint16_t> g_lastButtons{ 0 };
 		std::atomic<std::int16_t>  g_lastRx{ 0 };
+		std::atomic<std::int16_t>  g_lastRy{ 0 };
 		std::atomic<std::uint32_t> g_menuPresses{ 0 };
 		std::atomic<std::uint32_t> g_promptPresses{ 0 };  // prompt-button presses handed to ER (interactions started)
 		std::atomic<std::uint64_t> g_calls{ 0 };
@@ -375,6 +376,7 @@ namespace phantom::er::InputBridge
 					const auto now = a_state->Gamepad.wButtons;
 					const auto before = g_lastButtons.exchange(now, std::memory_order_relaxed);
 					g_lastRx.store(a_state->Gamepad.sThumbRX, std::memory_order_relaxed);
+					g_lastRy.store(a_state->Gamepad.sThumbRY, std::memory_order_relaxed);
 					// Start/View: Elden Ring's menu and map, MGSV's iDroid, the Tarnished-mode chord; the presses that reach Elden
 					// Ring are counted for MenuWatch's latch (er/Chord.h).
 					UpdateGate(now);
@@ -396,6 +398,7 @@ namespace phantom::er::InputBridge
 					// The pad went away (or a test press ended): nothing is held any more.
 					g_lastButtons.store(0, std::memory_order_relaxed);
 					g_lastRx.store(0, std::memory_order_relaxed);
+					g_lastRy.store(0, std::memory_order_relaxed);
 					UpdateGate(0);
 				}
 				Publish(a_state, ok);
@@ -673,6 +676,7 @@ namespace phantom::er::InputBridge
 	void          SetCardUp(bool a_up) { g_cardUp.store(a_up, std::memory_order_relaxed); }
 	std::uint32_t CardCloses() { return g_cardCloses.load(std::memory_order_relaxed); }
 	std::int16_t  LastRightStickX() { return g_lastRx.load(std::memory_order_relaxed); }
+	std::int16_t  LastRightStickY() { return g_lastRy.load(std::memory_order_relaxed); }
 	std::uint32_t MenuPresses() { return g_menuPresses.load(std::memory_order_relaxed); }
 	std::uint32_t PromptPresses() { return g_promptPresses.load(std::memory_order_relaxed); }
 	int           PadIndex() { return g_padIndex.load(std::memory_order_relaxed); }

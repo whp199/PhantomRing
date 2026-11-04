@@ -3,6 +3,7 @@
 #include "Addresses.h"
 #include "Config.h"
 #include "Death.h"
+#include "Dog.h"
 #include "Hook.h"
 #include "Link.h"
 #include "Log.h"
@@ -464,15 +465,21 @@ namespace phantom::guest::follow
 				// The whistle and "Normal Mode" (21: disengage from the current mode) both leave the walker in Normal Mode, the
 				// mode our whistles don't change: following resumes. Any other command (a mode, another buddy's) holds it.
 				// D-Horse's whistle resumes it the same way; its "Stay back" (18) holds it.
-				const bool hold = a_command != addr::kBuddyWhistle && a_command != addr::kBuddyNormalMode && a_command != addr::kBuddyHorseWhistle &&
-				                  a_command != 19 && Cfg().buddyFollowRespectCommands;
-				if (hold != g_playerHold.exchange(hold, std::memory_order_acq_rel)) {
+				// D-Dog's own commands (8-16) say nothing about the walker's or the horse's following: live 2026-11-04, the dog's orders
+				// left a D-Walker deployed afterwards standing 36 m away until the player whistled it.
+				const bool dogCommand = a_command >= 8 && a_command <= 16;
+				const bool hold = dogCommand ? g_playerHold.load(std::memory_order_acquire)
+				                             : a_command != addr::kBuddyWhistle && a_command != addr::kBuddyNormalMode &&
+				                                   a_command != addr::kBuddyHorseWhistle && a_command != 19 && Cfg().buddyFollowRespectCommands;
+				if (dogCommand) {
+					Log::Info("follow: the player's buddy command {} (arg {}) -- D-Dog's", a_command, a_arg);
+				} else if (hold != g_playerHold.exchange(hold, std::memory_order_acq_rel)) {
 					Log::Info("follow: the player's buddy command {} (arg {}) -> {}", a_command, a_arg,
 						hold ? "auto-follow paused until the player whistles" : "auto-follow resumed");
 				} else {
 					Log::Info("follow: the player's buddy command {} (arg {})", a_command, a_arg);
 				}
-				if (hold) {
+				if (hold && !dogCommand) {
 					std::scoped_lock lock(g_lock);
 					g_record = 0;  // its destination is the player's now: no steering
 				}
@@ -482,7 +489,16 @@ namespace phantom::guest::follow
 				e.type = proto::kGEvBuddyOrder;
 				e.a = static_cast<std::uint32_t>(a_command);
 				e.b = a_command >= 20 ? 4u : a_command >= 17 ? 1u : a_command >= 8 ? 2u : 3u;  // BuddyType by command range (18.3)
+				// (v17) pad[0] = DogStyle + 1 for D-Dog's attack orders (b == 2): the style its equipment gives commands 11-15 (the dog
+				// system's +0xD4, Dog.cpp); 0 = unknown or not an attack
+				e.pad[0] = e.b == 2u ? dog::OrderStylePad(a_command) : 0u;
+				// D-Dog's attack orders go to the Elden Ring enemy the host picks ([Dog] Attack, Dog.cpp): MGSV's own target (whatever its
+				// view centre held) is never ordered; the dog job orders the dog at that enemy's soldier itself.
+				const bool taken = e.b == 2u && dog::OnPlayerCommand(a_command, a_arg);
 				link::PushEvent(e);
+				if (taken) {
+					return;
+				}
 			}
 			g_command(a_system, a_command, a_arg);
 		}
@@ -650,6 +666,27 @@ namespace phantom::guest::follow
 		Log::Info("follow: {}", g_hooked ? std::format("whistles send D-Walker {:.1f} m ahead / {:.1f} m right of Snake", Cfg().buddyFollowAhead,
 			                                               Cfg().buddyFollowSide)
 		                                 : std::string("message handler hook refused -- whistles bring D-Walker to Snake himself"));
+	}
+
+	bool SendCommand(int a_command, std::uint16_t a_arg, const char* a_why, bool a_asPlayer)
+	{
+		if (g_ok < 0) {
+			g_ok = Check() ? 1 : 0;
+		}
+		if (g_ok != 1 || a_command < 1 || a_command > 26) {
+			return false;
+		}
+		if (a_asPlayer) {
+			// Tests (`!dog player <cmd>`): through the command detour as the call menu's own call would go (kGEvBuddyOrder, the dog job).
+			reinterpret_cast<BuddyCommandFn>(addr::kBuddyCommand.va)(reinterpret_cast<void*>(addr::kBuddySystem), a_command, a_arg);
+			Log::Info("follow: buddy command {} arg {:#x} given as the player's ({})", a_command, a_arg, a_why);
+			return true;
+		}
+		t_ourCommand = true;
+		reinterpret_cast<BuddyCommandFn>(addr::kBuddyCommand.va)(reinterpret_cast<void*>(addr::kBuddySystem), a_command, a_arg);
+		t_ourCommand = false;
+		Log::Debug("follow: buddy command {} arg {:#x} ({})", a_command, a_arg, a_why);
+		return true;
 	}
 
 	void Update(std::uint64_t a_nowMs, bool a_ready)

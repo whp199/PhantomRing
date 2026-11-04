@@ -1,20 +1,25 @@
 #include "RenderScene.h"
 
 #include "Buddy.h"
+#include "BuddyGuard.h"
 #include "Calibration.h"
 #include "Config.h"
 #include "Game.h"
 #include "Host.h"
+#include "Ini.h"
 #include "Link.h"
 #include "Log.h"
 #include "Pacing.h"
 #include "PacingProbe.h"
 #include "Projectiles.h"
 #include "Puppet.h"
+#include "WorldShift.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <format>
@@ -41,6 +46,7 @@ namespace phantom::er::RenderScene
 		std::uint64_t                                     g_captures{ 0 }, g_withDraws{ 0 }, g_badLists{ 0 };
 		bool                                              g_loggedFirst{ false };
 		float                                             g_buddyLift{ 0 };  // smoothed ground offset of the buddy's draws (m)
+		Vec3                                              g_buddyShift;      // smoothed horizontal move (Buddy::DrawShift, ER space)
 		std::uint32_t                                     g_tarnishedFrames{ 0 };  // consecutive frames the Tarnished was on screen
 
 		Vec3 Row(const std::uint8_t* a_cam, int a_row)
@@ -82,13 +88,271 @@ namespace phantom::er::RenderScene
 			std::memcpy(a_m, m, sizeof(m));
 		}
 
+		// ---- (0.8.0 polish) D-Dog's drawn body guarded: er/BuddyGuard.h StepGuard on the dog's draws as Elden Ring shows them -----------
+		buddyguard::StepGuard      g_drawGuard;
+		float                      g_groundTarget{ 0 };   // the drawn buddy's lift and floor shift to smooth toward (GroundBuddy)
+		Vec3                       g_groundShiftTarget;
+		bool                       g_guardFromPub{ false };  // the draw guard watches the published place (else the draws' estimate)
+		// `buddy trace on|off` (0.8.0 integration): one CSV line per frame D-Dog is drawn -- PhantomRingBuddyTrace.csv next to the DLL
+		std::atomic<int>           g_traceWant{ 0 };      // +1 open, -1 close (the task thread does it)
+		std::FILE*                 g_trace{ nullptr };
+		std::uint64_t              g_traceRows{ 0 };
+		std::uint64_t              g_guardNonce{ 0 };
+		ULONGLONG                  g_guardDrawsAt{ 0 };   // the last frame the dog's draws were there
+		Vec3                       g_guardPe;             // Snake's Elden Ring feet then (a new place: the guard starts over)
+		bool                       g_guardPeValid{ false };
+		std::uint32_t              g_guardEpoch{ 0 };     // Puppet::StartEpoch then (the puppet started anew: the guard starts over)
+		ULONGLONG                  g_guardLogAt{ 0 };
+		std::mutex                 g_guardStatsLock;
+		struct GuardStats
+		{
+			std::array<std::uint64_t, static_cast<std::size_t>(buddyguard::Act::kCount)> acts{};
+			std::uint64_t frames{ 0 }, rawOver{ 0 }, drawnOver{ 0 }, resets{ 0 }, staged{ 0 };
+			float         rawMax{ 0 }, drawnMax{ 0 }, jumpMax{ 0 };
+			std::uint32_t heldMaxMs{ 0 };
+		} g_guardStats;
+
+		Vec3 Apply(const float* a_m, const Vec3& a_p)
+		{
+			return { a_m[0] * a_p.x + a_m[1] * a_p.y + a_m[2] * a_p.z + a_m[3], a_m[4] * a_p.x + a_m[5] * a_p.y + a_m[6] * a_p.z + a_m[7],
+				a_m[8] * a_p.x + a_m[9] * a_p.y + a_m[10] * a_p.z + a_m[11] };
+		}
+
+		// a_out = a_a * a_b (3x4 affine, row-major: the 4th row is 0 0 0 1).
+		void Compose(const float* a_a, const float* a_b, float* a_out)
+		{
+			float r[12];
+			for (int i = 0; i < 3; ++i) {
+				for (int j = 0; j < 4; ++j) {
+					r[i * 4 + j] = a_a[i * 4 + 0] * a_b[0 * 4 + j] + a_a[i * 4 + 1] * a_b[1 * 4 + j] + a_a[i * 4 + 2] * a_b[2 * 4 + j] + (j == 3 ? a_a[i * 4 + 3] : 0.0f);
+				}
+			}
+			std::memcpy(a_out, r, sizeof(r));
+		}
+
+		// The inverse of an anchor matrix (its 3x3 part is orthogonal: a turn about Y, maybe mirrored in x).
+		void InverseRigid(const float* a_m, float* a_out)
+		{
+			const float r[12] = { a_m[0], a_m[4], a_m[8], 0, a_m[1], a_m[5], a_m[9], 0, a_m[2], a_m[6], a_m[10], 0 };
+			std::memcpy(a_out, r, sizeof(r));
+			for (int i = 0; i < 3; ++i) {
+				a_out[i * 4 + 3] = -(r[i * 4 + 0] * a_m[3] + r[i * 4 + 1] * a_m[7] + r[i * 4 + 2] * a_m[11]);
+			}
+		}
+
+		// The camera sees p (its frustum with a metre's margin for the dog's body; not occlusion). Unknown camera: yes.
+		bool InView(const RenderCamera& a_c, const Vec3& a_p)
+		{
+			if (!a_c.valid) {
+				return true;
+			}
+			const Vec3  d = a_p - a_c.pos;
+			const float z = Dot(d, Normalize(a_c.fwd));
+			if (z < 0.2f || z > 250.0f) {
+				return false;
+			}
+			const float ty = std::tan(a_c.fovY * 0.5f) * 1.15f;
+			const float tx = ty * (a_c.aspect > 0.1f ? a_c.aspect : 16.0f / 9.0f);
+			return std::fabs(Dot(d, Normalize(a_c.right))) <= tx * z + 1.0f && std::fabs(Dot(d, Normalize(a_c.up))) <= ty * z + 1.0f;
+		}
+
 		// The buddy walks on MGSV's flat sandbox: lift (or lower) its draws onto Elden Ring's ground under it (er/Buddy.cpp's
 		// ray), smoothed so a rock or a step doesn't make it pop; not while Snake rides it (the puppet carries both).
-		void GroundBuddy(RenderSnapshot& a_s, float a_dt)
+		// (0.8.0 polish) Also: drawn through Snake's own anchor while his body is turned for a staged move (Puppet::StagedDrawAnchor turned
+		// the buddy around him with it); a waiting D-Dog's Wait correction (Buddy::WaitShift, unsmoothed); D-Dog's draws guarded against
+		// one-frame jumps and snaps (StepGuard: what the player sees never moves more than 0.5 m a frame but out of view).
+		void GroundBuddy(RenderSnapshot& a_s, const Frame& a_f)
 		{
-			const float target = !a_s.riding && Buddy::HasEstimate() ? std::clamp(Buddy::GroundOffset(), -1.5f, 1.5f) : 0.0f;
-			g_buddyLift += (target - g_buddyLift) * std::min(1.0f, std::max(0.0f, a_dt) * 8.0f);
-			if (std::fabs(g_buddyLift) < 0.005f) {
+			const float a_dt = a_f.dt;
+			const bool placed = !a_s.riding && Buddy::HasEstimate();
+			// The ground where the body is drawn: measured at the unguarded place (Buddy::DrawGroundOffset; the placement's own guard may
+			// still hold the move this guard took out of view), kept as it was while this guard holds a jump (the body stays where it
+			// was) -- review 0.8.0.
+			if (!(g_drawGuard.Holding() && a_f.guest.buddyType == Buddy::kDog)) {
+				g_groundTarget = placed ? std::clamp(Buddy::DrawGroundOffset(), -1.5f, 1.5f) : 0.0f;
+				g_groundShiftTarget = placed ? Buddy::DrawGroundShift() : Vec3{};
+			}
+			const float target = placed ? g_groundTarget : 0.0f;
+			const float k = std::min(1.0f, std::max(0.0f, a_dt) * 8.0f);
+			g_buddyLift += (target - g_buddyLift) * k;
+			// The floor-near-Snake rule's horizontal move (er/Buddy.h DrawShift), smoothed the same way, at most 30 m.
+			Vec3 shift = placed ? g_groundShiftTarget : Vec3{};
+			if (!Finite(shift) || LengthXZ(shift) > 30.0f) {
+				shift = {};
+			}
+			g_buddyShift = g_buddyShift + (shift - g_buddyShift) * k;
+			Vec3 wait = placed ? Buddy::WaitShift() : Vec3{};
+			if (!Finite(wait) || LengthXZ(wait) > 40.0f) {
+				wait = {};
+			}
+			const float* am = a_s.anchor;
+			bool         any = false;
+			for (const auto& d : a_s.draws) {
+				any = any || d.owner == proto::kOwnerBuddy;
+			}
+			if (!any) {
+				return;
+			}
+			// Staged: back to Snake's own anchor for the buddy (C = A_staged^-1 * A_own, applied to its matrices).
+			float effA[12];  // the anchor the buddy's draws end up drawn with
+			std::memcpy(effA, am, sizeof(effA));
+			if (!a_s.riding) {
+				float own[12];
+				AnchorMatrix(Puppet::CurrentAnchor(), own);
+				bool differs = false;
+				for (int i = 0; i < 12; ++i) {
+					differs = differs || std::fabs(own[i] - am[i]) > 1e-4f;
+				}
+				if (differs) {
+					std::memcpy(effA, own, sizeof(effA));
+					float inv[12], c[12];
+					InverseRigid(am, inv);
+					Compose(inv, own, c);
+					std::vector<std::uint8_t> done(a_s.matrices.size() / 12, 0);
+					for (const auto& d : a_s.draws) {
+						if (d.owner != proto::kOwnerBuddy) {
+							continue;
+						}
+						for (std::uint32_t m = d.firstMatrix; m < d.firstMatrix + d.matrixCount && m < done.size(); ++m) {
+							if (!done[m]) {
+								done[m] = 1;
+								Compose(c, &a_s.matrices[std::size_t(m) * 12], &a_s.matrices[std::size_t(m) * 12]);
+							}
+						}
+					}
+					std::scoped_lock lock(g_guardStatsLock);
+					++g_guardStats.staged;
+				}
+			}
+			if (const int want = g_traceWant.exchange(0)) {
+				if (want > 0 && !g_trace) {
+					const auto path = ModuleDir() + L"PhantomRingBuddyTrace.csv";
+					g_trace = _wfopen(path.c_str(), L"ab");
+					g_traceRows = 0;
+					if (g_trace) {
+						std::fputs("# ms,guestFrame,odoEpoch,raw.x,raw.y,raw.z,drawn.x,drawn.y,drawn.z,act,rawStep,drawnStep,jump,rawIn,drawnIn,gflags,bflags,pe.x,pe.y,"
+						           "pe.z,wait.x,wait.z,lift,dt,fromPub,est.x,est.y,est.z\n",
+							g_trace);
+					}
+					Log::Info("render: D-Dog's draw trace {}", g_trace ? "on (PhantomRingBuddyTrace.csv next to the DLL, one line per frame it is drawn)" : "could NOT be opened");
+				} else if (want < 0 && g_trace) {
+					std::fclose(g_trace);
+					g_trace = nullptr;
+					Log::Info("render: D-Dog's draw trace off ({} lines)", g_traceRows);
+				}
+			}
+			// D-Dog's drawn place: its published place (below), else the median of its draws' own centres (a stray draw doesn't move it).
+			Vec3       guardOffset{};
+			const auto now = ::GetTickCount64();
+			const bool dog = a_f.guest.buddyType == Buddy::kDog && Cfg().dog.enabled && Cfg().dog.stepGuard && !a_s.riding;
+			const Vec3 pe = Puppet::CurrentAnchor().pe;
+			const auto nonce = Link::Get().Nonce();
+			const auto epoch = Puppet::StartEpoch();
+			if (dog && g_guardPeValid && !(LengthXZ(pe - g_guardPe) <= 5.0f)) {
+				// Elden Ring moved its world origin (8 m steps): the guard's places move with it, nothing jumps.
+				if (const auto shift = WorldShift::ShiftOf(g_guardPe, pe)) {
+					g_drawGuard.Shift(*shift);
+					g_guardPe = g_guardPe + *shift;
+				}
+			}
+			if (!dog || nonce != g_guardNonce || now - g_guardDrawsAt > 250 || !g_guardPeValid || !(LengthXZ(pe - g_guardPe) <= 5.0f) || Puppet::ClimbVisual() ||
+				epoch != g_guardEpoch) {
+				if (dog && g_guardNonce && g_guardDrawsAt) {
+					std::scoped_lock lock(g_guardStatsLock);
+					++g_guardStats.resets;
+				}
+				g_drawGuard.Reset();
+				g_guardNonce = nonce;
+			}
+			g_guardPe = pe;
+			g_guardEpoch = epoch;
+			g_guardPeValid = Finite(pe);
+			g_guardDrawsAt = now;
+			if (dog) {
+				std::vector<float> xs, ys, zs;
+				for (const auto& d : a_s.draws) {
+					if (d.owner != proto::kOwnerBuddy || d.matrixCount == 0 || std::size_t(d.firstMatrix + d.matrixCount) * 12 > a_s.matrices.size()) {
+						continue;
+					}
+					Vec3          sum{};
+					std::uint32_t n = 0;
+					for (std::uint32_t m = d.firstMatrix; m < d.firstMatrix + d.matrixCount && n < 64; ++m, ++n) {
+						const float* t = &a_s.matrices[std::size_t(m) * 12];
+						sum += Vec3{ t[3], t[7], t[11] };
+					}
+					sum = sum * (1.0f / static_cast<float>(n));
+					xs.push_back(sum.x);
+					ys.push_back(sum.y);
+					zs.push_back(sum.z);
+				}
+				if (!xs.empty()) {
+					const auto median = [](std::vector<float>& a_v) {
+						std::nth_element(a_v.begin(), a_v.begin() + a_v.size() / 2, a_v.end());
+						return a_v[a_v.size() / 2];
+					};
+					const Vec3 est{ median(xs), median(ys), median(zs) };
+					// What the guard watches: the dog's published place (GuestState buddyPos relative to Snake's root -- the guest moves its
+					// draws to it, at most 14 m/s), through the anchor its draws end up with. The integration run (2026-11-04) found the
+					// median of its draws' matrix means (skinning matrices: bind-pose offsets that swing as the dog turns) jumping 1.5-6 m
+					// while the published place moved under 0.25 m: holding such a "jump" moved the real body by it (~190 offset steps over
+					// 0.5 m in 20 minutes, all in view). The estimate stays the fallback while the guest has no place for it.
+					const auto& gs = a_f.guest;
+					const bool  pub = (gs.buddyFlags & proto::kBuddyPresent) && (gs.buddyFlags & proto::kBuddyPosValid);
+					const Vec3  relPub{ gs.buddyPos[0] - gs.rootPos[0], gs.buddyPos[1] - gs.rootPos[1], gs.buddyPos[2] - gs.rootPos[2] };
+					const bool  usePub = pub && Finite(relPub) && LengthXZ(relPub) < 200.0f;
+					const Vec3  rel = usePub ? relPub : est;
+					const Vec3  raw = Apply(usePub ? effA : am, rel) + Vec3{ 0, g_buddyLift, 0 } + g_buddyShift + wait;
+					const Vec3  estEr = Apply(am, est);
+					if (usePub != g_guardFromPub) {
+						g_guardFromPub = usePub;
+						g_drawGuard.Reset();  // another point: nothing to compare it with
+					}
+					const bool rawIn = InView(a_s.camera, raw + Vec3{ 0, 0.5f, 0 });
+					const bool drawnIn = InView(a_s.camera, g_drawGuard.Drawn() + Vec3{ 0, 0.5f, 0 });
+					const auto st = g_drawGuard.Update(raw, rawIn, drawnIn, a_dt, now, buddyguard::Rules{});
+					guardOffset = st.offset;
+					const bool taken = st.act == buddyguard::Act::kTakenOut;
+					{
+						std::scoped_lock lock(g_guardStatsLock);
+						auto& gs = g_guardStats;
+						++gs.acts[static_cast<std::size_t>(st.act)];
+						++gs.frames;
+						const float scale = std::max(1.0f, a_dt * 60.0f);  // per 60 Hz frame
+						gs.rawOver += st.raw > 0.5f * scale ? 1 : 0;
+						gs.rawMax = std::max(gs.rawMax, st.raw / scale);
+						if (!taken) {
+							gs.drawnOver += st.drawn > 0.5f * scale + 1e-3f ? 1 : 0;
+							gs.drawnMax = std::max(gs.drawnMax, st.drawn / scale);
+						}
+						gs.jumpMax = std::max(gs.jumpMax, st.jump);
+						gs.heldMaxMs = std::max(gs.heldMaxMs, st.heldMs);
+					}
+					if (g_trace) {
+						const Vec3 drawn = raw + st.offset;
+						std::fprintf(g_trace, "%llu,%llu,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f,%d,%d,%#x,%#x,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%.3f,%.3f,%.3f\n",
+							static_cast<unsigned long long>(now), static_cast<unsigned long long>(a_s.guestFrame), static_cast<unsigned>(a_f.guest.odoEpoch), raw.x, raw.y,
+							raw.z, drawn.x, drawn.y, drawn.z, static_cast<int>(st.act), st.raw, st.drawn, st.jump, rawIn ? 1 : 0, drawnIn ? 1 : 0, a_f.guest.flags,
+							a_f.guest.buddyFlags, pe.x, pe.y, pe.z, wait.x, wait.z, g_buddyLift, a_dt, usePub ? 1 : 0, estEr.x, estEr.y, estEr.z);
+						if (++g_traceRows % 120 == 0) {
+							std::fflush(g_trace);
+						}
+					}
+					if (st.act != buddyguard::Act::kNone && st.act != buddyguard::Act::kHolding && st.act != buddyguard::Act::kLimited &&
+						(st.act != buddyguard::Act::kSnap || now - g_guardLogAt >= 250)) {
+						g_guardLogAt = now;
+						Log::Info("render: guard (D-Dog as drawn): {} -- {:.2f} m{} (raw step {:.2f} m, drawn step {:.2f} m; raw {} / drawn {} in view)",
+							buddyguard::Name(st.act), st.jump, st.heldMs ? std::format(" after {} ms", st.heldMs) : std::string(), st.raw, st.drawn,
+							rawIn ? "is" : "not", drawnIn ? "is" : "not");
+					}
+				}
+			}
+			// ER-space shift -> the draws' anchor-relative MGSV space: the anchor matrix's x and z columns are orthonormal (y is up).
+			const Vec3   total = g_buddyShift + wait + guardOffset;
+			const float  sx = total.x * am[0] + total.y * am[4] + total.z * am[8];
+			const float  sz = total.x * am[2] + total.y * am[6] + total.z * am[10];
+			const float  lift = g_buddyLift + guardOffset.y;
+			const bool   moveXZ = std::fabs(sx) + std::fabs(sz) >= 0.005f;
+			if (std::fabs(lift) < 0.005f && !moveXZ) {
 				return;
 			}
 			std::vector<std::uint8_t> moved(a_s.matrices.size() / 12, 0);
@@ -99,7 +363,11 @@ namespace phantom::er::RenderScene
 				for (std::uint32_t m = d.firstMatrix; m < d.firstMatrix + d.matrixCount && m < moved.size(); ++m) {
 					if (!moved[m]) {
 						moved[m] = 1;
-						a_s.matrices[std::size_t(m) * 12 + 7] += g_buddyLift;  // y: the anchor turns about y only
+						a_s.matrices[std::size_t(m) * 12 + 7] += lift;  // y: the anchor turns about y only
+						if (moveXZ) {
+							a_s.matrices[std::size_t(m) * 12 + 3] += sx;
+							a_s.matrices[std::size_t(m) * 12 + 11] += sz;
+						}
 					}
 				}
 			}
@@ -240,7 +508,7 @@ namespace phantom::er::RenderScene
 			// frame: Throw / Rounds leave their ball out for a copy placed here, which must not vanish while MGSV stalls.
 			s->draw = Projectiles::Apply(*s);
 			if (s->draw) {
-				GroundBuddy(*s, a_f.dt);
+				GroundBuddy(*s, a_f);
 			}
 			if (dying >= 0.0f && !s->draw) {
 				g_dyingWhy.store("no draw list from MGSV", std::memory_order_relaxed);
@@ -303,6 +571,28 @@ namespace phantom::er::RenderScene
 		while (g_history.size() > kHistory) {
 			g_history.pop_front();
 		}
+	}
+
+	std::string BuddyGuardDescribe()
+	{
+		std::scoped_lock lock(g_guardStatsLock);
+		const auto&      gs = g_guardStats;
+		const auto       a = [&](buddyguard::Act x) { return gs.acts[static_cast<std::size_t>(x)]; };
+		return std::format("D-Dog as drawn ([Dog] step_guard {}): {} frames measured -- steps over 0.5 m: {} raw, {} drawn (out-of-view takes left out); largest "
+		                   "step raw {:.2f} m, drawn {:.2f} m (per 60 Hz frame); {} snaps spread, {} jumps held ({} came back, {} eased in, {} taken out of view, {} "
+		                   "taken in view late), longest hold {} ms, largest jump {:.2f} m; {} frames limited; {} starts over; {} frames drawn through Snake's own "
+		                   "anchor (a staged move)",
+			Cfg().dog.stepGuard ? "on" : "off", gs.frames, gs.rawOver, gs.drawnOver, gs.rawMax, gs.drawnMax, a(buddyguard::Act::kSnap), a(buddyguard::Act::kHold),
+			a(buddyguard::Act::kReturned), a(buddyguard::Act::kEase), a(buddyguard::Act::kTakenOut), a(buddyguard::Act::kTakenLate), gs.heldMaxMs, gs.jumpMax,
+			a(buddyguard::Act::kLimited), gs.resets, gs.staged);
+	}
+
+	void BuddyTrace(bool a_on) { g_traceWant.store(a_on ? 1 : -1); }
+
+	void BuddyGuardReset()
+	{
+		std::scoped_lock lock(g_guardStatsLock);
+		g_guardStats = {};
 	}
 
 	std::string DyingDraw()

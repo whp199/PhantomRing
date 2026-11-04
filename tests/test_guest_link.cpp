@@ -110,6 +110,9 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.buddyWalkerLeadIdleSpeed == d.buddyWalkerLeadIdleSpeed && shipped.buddyWalkerLeadAccel == d.buddyWalkerLeadAccel &&
 	      shipped.buddyWalkerLeadOrderAhead == d.buddyWalkerLeadOrderAhead && shipped.buddyWalkerLeadReorderMs == d.buddyWalkerLeadReorderMs);
 	CHECK(shipped.climbHudThawMs == d.climbHudThawMs && d.climbHudThawMs == 150);
+	// [Dog] (protocol v17; on since the guest's live pass M3, 2026-11-03; Announce is parsed only)
+	CHECK(shipped.dog == d.dog && d.dog.enabled && d.dog.treadmill && d.dog.attack && d.dog.keepDrawsNearProxy && !d.dog.announce &&
+	      d.dog.targetPuppet && d.dog.whistleBack && d.dog.realizeTimeoutMs == 1500 && d.dog.reachTimeoutMs == 12000 && d.dog.busyMaxMs == 10000);
 
 	// And a non-default file parses into what it says.
 	const std::wstring custom = L"test_guest_custom.ini";
@@ -124,6 +127,18 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(c.holdMode == phantom::guest::HoldMode::kNativeTreadmill && c.buddy == "horse" && c.music == phantom::guest::MusicMode::kKeep);
 	CHECK(c.tranqWeapons.size() == 2 && c.tranqWeapons[0] == 0x10 && c.tranqWeapons[1] == 17);
 	CHECK(c.jumpButton == 0x0040 && c.jumpPassWith == 0x0300 && !c.jumpPassAiming && c.jumpLift == 1.5f);  // L3, LB/RB, no LT, lift capped
+	CHECK(c.dog == d.dog);  // no [Dog] section: the defaults
+
+	// [Dog] (protocol v17 scaffolding): values and clamps
+	f = _wfopen(custom.c_str(), L"wb");
+	std::fputs("[Dog]\nEnabled = true\nTreadmill = true\nLeash = 0\nAttack = true\nTargetPuppet = false\nRealizeTimeoutMs = 5\nBusyMaxMs = 6000\n"
+	           "Announce = true\n",
+		f);
+	std::fclose(f);
+	Config dc;
+	dc.Load(custom);
+	CHECK(dc.dog.enabled && dc.dog.treadmill && dc.dog.leash == 1.0f && dc.dog.attack && !dc.dog.targetPuppet && dc.dog.realizeTimeoutMs == 100 &&
+	      dc.dog.busyMaxMs == 6000 && dc.dog.announce && dc.dog.reachTimeoutMs == d.dog.reachTimeoutMs && dc.dog.keepDrawsNearProxy == d.dog.keepDrawsNearProxy);
 }
 
 // The real guest link (mgsv/Link.cpp) against a live host on a_where -- fake_er.py or the real host

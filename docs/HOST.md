@@ -1458,6 +1458,233 @@ drawing its cube when "none" as MGSV may draw a buddy leaving): the cube gone an
 ridden with its values, the dog drawn and placed (screenshots). With the real MGSV: UNVERIFIED (the guest's side of
 dismissing is the MGSV agent's).
 
+### D-Dog in Elden Ring (`er/Dog.*`, `er/DogLogic.*`, `[Dog]`, protocol v17 `kActorDogTarget` / `kGEvDogAttack` / `kBuddyEngaged`; round E1-E2 2026-11-03)
+
+The host half of docs/research/ddog.md (§3.1-3.3, §3.6-3.7). MGSV runs the dog -- its follow, and (the guest, `mgsv/Dog.cpp`) its run,
+leap and bite on one inert stand-in soldier at the Elden Ring enemy's place; the host spots, picks, applies and draws. **On by default
+since the 0.8.0 polish** (`[Dog] enabled`, `spot`, `indicator`, `bark`, `order_text` = true, also built in: a player who never touches
+the ini gets it; 0.8.0's integration had shipped it opt-in for the dog's per-frame steps, docs/STATUS.md 0.8.0, ddog.md §9). Off, a
+`kGEvDogAttack` is only logged, nothing is picked, marked or applied and `kHostDogLayer` is clear (the guest leaves the orders to
+MGSV). `pr er "dog all off"` / `"dog all on"` for a session (not saved).
+
+- **0.8.0 polish (2026-11-04, Elden Ring 1.17.2 alone with fake MGSV and replays of the real guest; the guest's half is GUEST.md 8.4):**
+  - **Nothing while D-Dog isn't out.** `Dog::Tick` returns at once unless D-Dog is out and Snake plays (no character read, no ray, no
+    marker); the paw and the why-no-pick line only with D-Dog out and LB held; BuddyOrders' LB how-to only for the buddy that is out.
+    Live: `!buddy walker` / `!buddy none` and LB held 2.5 s each -> `picks 1820 (31837 rays)` before and after, no `dog:` line. The
+    why-no-pick corner line now only once the right stick points at the attack entry (`dog::PointsAtAttack`: pushed over half way
+    within 35° of right) -- an LB hold for Wait or the whistle says nothing.
+  - **The shown pick is kept through the click** (`dog::PickLatch`, `[Dog] pick_latch_ms` 500; `dog::kClickGraceMs` 800). In 0.8.0 two
+    of 16 orders were refused "out of sight" the instant the order came although the paw had shown: the 4 Hz pick, re-run at the
+    order, had lost him for a few hundred ms (a pillar, a barricade post, the view moving as the stick was let go), and the guest
+    looks for the pick only 350 ms after the click. Now the pick the rules last chose stays the published one (`kActorDogTarget`, the
+    paw) for 500 ms after they stop choosing him -- nobody, or someone else -- while he still passes every hard rule (`LatchFits`:
+    hostile by both reads, alive, rendered, not a boss with `bosses = off`, not held or lifted, asleep for Get it, 3.5-25 m, at most
+    3x the cone off the centre; sight is not asked again, and since the integration's review the run is -- `dog::LatchKeeps`: with
+    `clear_run` a wall, a drop or a step the dog can't take ends the latch); and a click that comes while nobody is published, within
+    800 ms of the paw showing over someone who still fits, makes him the pick again (`PickLatch::Revive`; the guest's 350 ms finds
+    him). Every attack order logs what the guest finds: `dog: the player's attack order 11: the pick is <him> (kept by the latch: the
+    rules say nobody (... out of sight); the paw showed over him 201 ms before the click); the paw showed over him ...`; `dog
+    status` counts holds and clicks. Measured with fake MGSV's call menu from the virtual pad (`!callmenu on ordered`: hold LB, right
+    stick, let go, R3, the pick taken at once or within 350 ms -- the real guest's rule; `pick_latch_ms 0` = 0.8.0):
+    - Stormveil's walking jars among pillars, Snake sweeping sideways 0.8 m/s (the sight line crossing a pillar's edge), 2 x 20 clicks
+      each: **0.8.0: 9 of 40 refused** (3 with the paw shown <= 500 ms before); the latch alone (before the click grace): 6 of 40;
+    - the lower courtyard, the view swinging ~17° off the pick as the stick is let go and the click 0.45 s later (10 clicks each):
+      **0.8.0: 10 of 10 refused** (`the paw showed over 0xa...4f 450-500 ms before`); **now: 10 of 10 taken** (all through the click
+      grace, the paw 201-267 ms before the click);
+    - the same courtyard, a soldier in plain view, Snake sweeping (20 each): 20 of 20 taken either way; one hidden behind barricades
+      (20 each): 20 of 20 refused either way (the paw never showed: correct).
+  - **D-Dog's place and drawn body never follow a one-frame jump** (`er/BuddyGuard.h` `StepGuard`, `[Dog] step_guard`). The 0.8.0 run
+    measured the dog's MGSV place as Elden Ring maps it stepping 0.5-0.7 m in one frame while it bit (MGSV's leap snapping its root
+    onto the soldier), once 5.9 m, twice a one-frame 6-8 m blip, and ~77 m for 0.33 s after a climb-up. The guest fixes what it can
+    (GUEST.md 8.4, `MaxShownSpeed`, `StageAlong`); the host's guard is the backstop and **logs every time it acts** (`render: guard
+    (D-Dog as drawn): <what> -- <m> ...`, `buddy: guard (D-Dog's place): ...`), so it never hides a guest-side fault from a test:
+    - per frame it takes one point -- for the draws **the dog's published place** (GuestState `buddyPos` relative to Snake's root,
+      through the anchor its draws end up with, after the ground lift, the floor shift and the Wait pin; until the integration run
+      with both games it was the median of the dog's draws' own centres, see below), for the placement (`Buddy::Position`: the pick,
+      spotting, Bark, the ground ray) the mapped `buddyPos` -- and its own motion (the median of its last three steps);
+    - a **snap** (0.3-1.5 m off its own motion in a frame) is taken back and given out over the next frames (`settleS` 0.1 s): MGSV's
+      leap looks like a leap; a **jump** (1.5 m and more, plus 15 m/s x a long frame's extra time) is **held** -- the dog stays where
+      it was -- until it comes back (within max(1 m, half the jump) of where it was held, but never further than 2 m: it was never
+      drawn there; review: a 60 m jump settling 20 m off counted as "came back" and glided there in view), or is taken as a real move: at once where
+      neither the old nor the new place is in view (the guest's leash, which moves the dog out of MGSV's view), eased in at most
+      0.5 m a frame after 100 ms when it is within 10 m, and a farther one in view after 2 s at the latest (the placement: after
+      500 ms, never eased); every 60 Hz frame the drawn point moves at most 0.5 m (`maxStep`) but where it is taken out of view;
+    - it starts over when the puppet starts (`Puppet::StartEpoch`), when Snake is put more than 5 m away in a frame (a grace, a
+      load, a `call setpos`), a new guest session, 250 ms without the dog's draws, a ladder (the buddy isn't drawn), and moves with
+      Elden Ring's origin (`WorldShift`). A 1.5-5 m re-anchor (Elden Ring shoving the player, a grab) no longer starts it over
+      (review: the mapped dog's jump with the anchor was drawn at once): it is held and eased like any jump.
+    - also (all buddies): while Snake's body is turned for a staged move (`Puppet::StagedDrawAnchor`, a climb-up / vault), the buddy's
+      draws are put back through Snake's own anchor (C = A_staged^-1 * A_own on its matrices) -- the staged anchor had swung them
+      round him with his body.
+    - `pr er buddy` adds both guards' counts: frames measured, steps over 0.5 m raw and drawn, the largest of each, snaps, holds and
+      how they ended; `buddy guard reset` zeroes the draws' counts.
+    Live: fake MGSV's `!dog blip <dx> <dz> [frames]` (the dog's place and draws off for N frames): a 7 m one-frame blip -> `jump held
+    -- 7.00 m`, `jump came back -- 7.00 m after 16 ms`; 6 m for 2 frames -> back after 33 ms; 77 m for 20 frames (the climb-up case) ->
+    held 333 ms, came back; a 0.8 m one-frame step -> `snap spread`; over those 501 frames 7 raw steps over 0.5 m (largest 77 m), **0
+    drawn** (largest 0.19 m). Frames: a 77 m jump for 1.25 s -- with the guard the dog stays drawn beside Snake, without it it is gone
+    (drawn 77 m away). **Replays of the real guest**: `ddog_kill_080.prrec` (the knife's run, leap and pin; 2671 frames): 14 raw steps
+    over 0.5 m (largest 0.78 m), 0 drawn (largest 0.50 m: the limit), 34 snaps spread; `ddog_attack.prrec` (the battledress's run,
+    leap and pin, then Wait, Snake running off and back, the whistle; 2910 frames): 12 raw over 0.5 m (largest 2.27 m, taken out of
+    view during the wait), 0 drawn, the bite's 0.62-0.81 m snaps drawn as 0.04-0.15 m steps.
+  - **A waiting D-Dog keeps its Elden Ring spot** (`er/BuddyGuard.h` `WaitPin`, `[Dog] wait_pin`). What each side does:
+    - the **guest** keeps the waiting dog's MGSV place through Snake's treadmill jumps (GUEST.md 8.4: its Elden Ring place stays put as
+      long as Elden Ring lets Snake go where MGSV's Snake goes), and -- with its `[Dog] WaitKeepsPlace`, added by the guest's side of
+      this polish (GUEST.md 8.4) -- adds the slip it sees in the Elden Ring characters around Snake to what Elden Ring is shown of
+      the waiting dog (its published place and draws; moving MGSV's dog itself ended MGSV's Wait);
+    - the **host** knows Snake's slip exactly -- his Elden Ring step minus his MGSV step (the odometer, as the puppet consumes it)
+      mapped to Elden Ring, summed since the Wait (9) -- and takes back **only the part of the dog's drift that slip explains** (the
+      drift's projection on the slip, at most the slip): a guest that already moved the dog leaves ~0 to correct, so the two never
+      add up, and while the guest's correction lags the host fills the gap. The dog's own moves off that line pass through; 1.5 m of
+      them and the wait is over (MGSV ended it); the whistle (8) or DD (16) end it too, and so does an attack order MGSV takes
+      (`kGEvDogAttack` Ordered, `Buddy::OnDogAttack`; a refused one leaves the dog waiting -- review: the pin kept the bite drawn off its
+      target); the correction then eases out at 2 m/s, or with the dog's own run (0.75 of its step a frame) when that is faster.
+      MGSV's staged moves freeze it (their places mean nothing) until 1 s after; Snake put more than 5 m away in a frame (a teleport)
+      drops it (`Buddy`'s slip), and a slip built up past 40 m against a wall lets go eased (it was dropped in one frame); it moves
+      with Elden Ring's origin. With `[Dog] enabled = false` neither the pin nor the step guard runs (review: the kill switch said
+      "as in 0.7.0"). Applied to the placement (so the pick, the marks and the ground ray use the spot) and, unsmoothed, to the
+      dog's draws (`Buddy::WaitShift`).
+    Live (fake MGSV's `!order 9`: its dog keeps its place in the odometer frame and moves nothing by the slip; Snake run 2 s at 3 m/s
+    into the wall of the jars' courtyard): **pin on -- Snake asked 6.31 m, moved 2.02 m (slip 4.30 m), the waiting dog stayed at
+    (-3.13, 2.89) to the centimetre; pin off -- slip 4.24 m, the dog's spot moved 4.25 m.** The real guest's `ddog_attack.prrec` Wait
+    (Snake running off and back through the lower courtyard's barricades): `D-Dog waits`, the correction reached 5.21 m, `called back
+    (order 8) -- its Wait correction 5.21 m eases out`.
+  - Live as well: **Snake's CQC grab on the enemy the dog holds** -- `dog attack busy` on a soldier 1.4 m from Snake (`cqc: D-Dog holds
+    npc 30000114 ... for 6.0 s (no attack / no move; bits 0x30 ours)`, ChrIns+0x538 = 0x30), fake `!grab grab` 0.7 s later: `cqc:
+    Snake takes npc 30000114 ... over from D-Dog's hold`, `dog: done with ... (hold; the hold ended)`, still 0x30 (one hold, one owner);
+    `!grab release`: `let go (Snake let go)`, 0x00, and 0x00 6 s later (nothing left set). A kill through the dog's effect on two
+    soldiers next to Snake: `bullet ... landed after 39 ms` / `did not land within 300 ms; hp fallback -265` -> both dead. The paw over
+    a soldier whose neighbour, a team-30 `81100014` lying 1.2 m from him, was nearer the centre (2.8° vs 4.1°): `not hostile (never a
+    candidate)`, the paw over the soldier (frame), the LB how-to in the corner. Every hit of the session was on a soldier (the log
+    names each); a lying `81100014` lost 358 HP in the lower courtyard to Elden Ring's own scene, none of ours.
+  - **Not done:** a real Elden Ring dog or wolf as the target (none loaded around Stormveil's Rampart Tower and lower courtyard: the
+    pack found there, `44910014` x7 + `44907014` (1.0 / 2.9 m tall), are pot-shaped walkers, not dogs -- picked and spotted like any
+    hostile; Limgrave's wolves need a grace trip); `bosses = stagger` is unit-tested only (`TestDogBossStagger`: a boss is pickable then, one stagger -- no
+    damage, no hold, no sleep -- then nothing for 20 s, then one again; with `off` never picked, nothing applied).
+  - **The integration run with both games (2026-11-04, real MGSV 1.0.15.4 + Elden Ring 1.17.2; docs/STATUS.md "0.8.0 polish"):**
+    - **The draw guard watched the wrong point.** With the real dog, the median of its draws' matrix means (skinning matrices: the
+      bind pose's offsets swing as the dog turns, and the set of draws changes) jumped 1.5-6 m in a frame while the dog's published
+      place moved under 0.25 m -- 74 "jumps held", 15 taken out of view and 135 snaps in the first 20 minutes were all the estimate's
+      (the guest's per-frame trace had no such step). Holding such a "jump" moves the real body by it: the guard's offset changed by
+      more than 0.5 m in a frame 125 times in the first 10-minute run (up to 6.4 m, in view). The guard now watches the published
+      place (`RenderScene::GroundBuddy`: GuestState `buddyPos - rootPos` through the anchor the buddy's draws end up with; the
+      estimate only while the guest has no place), which the guest already moves at most 14 m/s and with its draws. The second
+      10-minute run: 0 guard offset steps over 0.5 m but where `call setpos` moved Snake himself.
+    - Review fixes (commit "Review fixes for the D-Dog polish"): the latch and the click revive re-check the clear run
+      (`LatchKeeps`); a held jump comes back within 2 m at most; the guards start over only when the puppet starts
+      (`Puppet::StartEpoch`), not at a 1.5-5 m re-anchor; the pin ends at an attack order MGSV takes (`Buddy::OnDogAttack`) and eases
+      with the dog's run; a 40 m wall push lets go eased; `step_guard` / `wait_pin` only with `[Dog] enabled`; the drawn body's lift
+      and floor shift are measured where the renderer's guard draws it (`Buddy::DrawGroundOffset` / `DrawGroundShift`, the unguarded
+      place, one more ray only while the placement guard holds a move).
+    - `buddy trace on|off`: one CSV line per frame D-Dog is drawn (`PhantomRingBuddyTrace.csv` next to the DLL: the raw and drawn
+      place, the guard's act, raw / drawn in view, guest and buddy flags, Snake's Elden Ring place, the Wait pin's shift, the lift, dt,
+      and the old draws' estimate for comparison) -- with the guest's `!dog placetrace on` the measure of every frame (docs/TOOLS.md).
+
+- **0.8.0 (review fixes and the integration run with both games, 2026-11-04):**
+  - HostState **`kHostDogLayer`** (v17) is set while `[Dog] enabled`: the guest takes the player's attack orders over only then, else
+    they are MGSV's own (0.7.0). The guest publishes **D-Dog's style every frame** in buddyFlags bits 8-15 (`proto::BuddyDogStyle`):
+    the pick is made for it before any order ("Get it" takes sleepers from the first order on; `dog: D-Dog's style is ... (its
+    equipment, published by the guest)`).
+  - **A boss** is `Cqc::IsBoss(npcParam, maxHp)` everywhere (the pick, the bite, Bark, the dog's hold, CQC's grab, decoys, the box
+    poster, the Fulton, `kActorBoss`): CQC's HP rule **or Elden Ring's own mark of a boss, his NpcParam row's `isSoulGetByBoss` bit**
+    (`params::kNpcBossBits` 0x15D bit 0: all 315 boss rows of this regulation -- Godrick 47500014, the catacombs' and evergaols' 9xx rows
+    of 350-1500 HP -- and no soldier; `test_host_combat` checks it on the real regulation). An NpcParam row that can't be read counts
+    anything bigger than an ordinary enemy (Bigness > 0) as one. Live: `cqc` -- `NpcParam's boss bit (204 seen, 0 rows unread)` with
+    Godrick within the ActorTable's radius; the pick lists him `a boss` at 147 m (never approached).
+  - The bite never lands on one a **Fulton balloon** lifts or **Snake's CQC** holds (`connected on ... a Fulton balloon has him:
+    nothing done`; live on a fetch: the yank's Connected found him lifting), nor while D-Dog isn't live (`while D-Dog isn't live here`);
+    anything a Connected or a console bark left while not live is dropped at the next frame. A second busy bite on the enemy the dog
+    holds keeps the hold (it used to let him go at once). A dog **kill or wound whose hit bullet misses** (a raised shield, a turn) is
+    dealt through the HP route (`HitEffect::landOrHp`: `hp fallback -N (D-Dog's bite connected: its damage is dealt anyway)`; nonLethal
+    still holds) -- live, a kill bullet on a soldier charging Snake had missed and left him unhurt.
+  - LB counts as the call menu's only while neither Elden Ring's nor MGSV's menu (the iDroid pages with LB) nor a vehicle has the pad;
+    no failure text after the player's own whistle, Wait or DD (`dog::QuietEnd`, 2.5 s) or while not live; `the pick (kActorDogTarget)
+    is nobody (<why>)`; the floor-near-Snake search only within 30 m of Snake (a horse left 150 m away cost ~300 rays a frame).
+- **Live** only while D-Dog is out (`buddyType` 2, `kBuddyPresent`, not `Buddy::Absent`) and Snake plays (no load, death, cutscene).
+  Every frame `Dog::Tick` (FrameBegin, after `Cqc::Tick`) reads the 64 nearest characters once.
+- **Never a friend.** Every rule below takes only characters that are hostile by *both* team reads: the ActorTable's (an `EnemyIns`
+  of another raw team byte, ChrIns+0x6C, that the team relation table makes the Tarnished's enemy) and every hit's (`GetTeamType`,
+  `Combat::HostileChr`). NPC phantoms (`PlayerIns`: Rogier, summonable NPCs, NPC invaders) are never even looked at. A merchant, a
+  quest character, a spirit summon, a neutral animal (Stormveil's team-30 `81100014`s) is no candidate, smelled, bitten or barked at.
+- **Spotting** (`spot`, every 0.25 s): `dog::Spotter` -- hostile, living, rendered characters within `spot_range` 40 m of the dog
+  (horizontally; the dog's placement, `Buddy::Position`) and `spot_height` 8 m above or below it; no line of sight. Each one gets
+  `Marking::Provisional(handle, until)` (until = now + `spot_linger` 10 s, renewed while he stays in range): a **provisional mark** --
+  the binocular mark's triangle drawn **hollow** (`marking::kHollow`, the marker shader's band), his distance only within 10° of the
+  view's centre; it fades over its last 0.5 s and at his death; the binoculars still mark him for good; a new world forgets them. When
+  the spotted set gains someone: "D-Dog: Found enemy" in the corner, "(N nearby)" with several, at most every `spot_text_every` 8 s
+  (`dog::FoundText`; a gain inside the quiet time is said when it ends if someone is still spotted).
+- **The pick** (`dog::Pick`; 4 times a second while LB is held and 2 s after, else once a second): hostile, alive, rendered, not on a
+  Fulton balloon, not a boss (`Cqc::IsBossHp`, unless `bosses = stagger`), not held (`Cqc::IsHeld`: Snake's or the dog's hold), asleep
+  for Get it (the style the guest last named: `kGEvBuddyOrder` pad[0]), `target_min` 3.5 - `target_range` 25 m from Snake, within
+  `target_cone_deg` 10° of the camera's axis (his body counts); marked ones first (`target_marked_first`), then the one nearest the
+  centre; at most three get rays: the camera's sight line (`CastRay`, `marking::RayClear`) and the **clear run** (`clear_run`): ground
+  samples every 0.5 m from the dog's feet to 0.7 m short of his (Snake's ground filter, `Puppet::CastWorld`, from 2 m over the line to
+  4 m under it), refused for a step over `run_step_max` 0.8 m between samples, a sample without ground (a drop) or a knee-high (0.5 m)
+  ray along the line that hits something (a wall). The winner's handle is `Dog::TargetHandle()`; `Actors::Publish` sets
+  `kActorDogTarget` on that one record only, and only if the record is `kActorHostile`, alive and not `kActorBoss` (checked again at the
+  boundary). `Actors` now also sets `kActorBoss` on hostile bosses (CQC's rule).
+- **The paw** (`indicator`): while LB is held, an amber paw (`marking::BuildPaw`, glyph 11 of the marker shader: a pad and four toes,
+  dark-edged, through walls; `RenderMarkers::Owner::kDog`) over the pick's mark. LB held 0.6 s with no pick: one corner line per hold
+  saying why the enemy in view isn't taken (`dog::NoPickText`: "D-Dog can't run to him straight (a wall in the way)", "he is out of
+  sight", "he is too close -- CQC him", "won't take on a boss", ...), else "D-Dog: look at an enemy (25 m)".
+- **`kGEvDogAttack`**: Ordered is logged; **Connected** re-checks the handle (in Elden Ring's list, hostile by both reads, alive -- else
+  `dog: connected on ... NOT a hostile Elden Ring enemy ...: nothing done`, a warning), one effect per bite (a second Connected within
+  1 s is ignored), then the style's effect (docs/COMBAT.md §7b) through `Combat::HitCharacter` from 0.8 m on the dog's side of him (v1
+  mapped: a raised shield faces the dog), queued for the bullet row like CQC's hits (`cqc::WhenToFire`); Released / Lost end the
+  engagement (the dog's hold let go); Refused says why in the corner ("D-Dog: no enemy in sight", or the pick's reason). An unknown
+  style (0xFF) is the one the player's command named (11-15, within 30 s), else the last known, else busy. The guest's `kBuddyEngaged`
+  going off 1.5 s after Connected ends it too.
+- **Bark** (`bark`; `kGEvBuddyOrder` a = 10, b = 2): `dog::HearsBark` -- the active decoy's rule (`decoy::Notices`, heard within
+  `bark_range` 20 m of the dog, no cone, no ray; not one within 4 m of Snake and nearer him than the dog), never a sleeper, a boss, one
+  held or lifted: each stares `bark_stare` 5 s (ChrIns+0x538 no attack / no move, only the bits we set go back), `bark_cooldown` 15 s.
+- **Holds** (`Cqc::HoldFor` / `LetGo` / `DogHolds`): busy's hold uses CQC's own bookkeeping, a second slot beside Snake's grab, so a dog
+  hold and a CQC hold never stack on one enemy -- one owner of his bits, put back once: Snake's grab of the one the dog holds takes it
+  over; HoldFor refuses one Snake holds, a boss, one on a balloon, one let go less than `hold_cooldown` ago (then the bite is a flinch);
+  no `leave_distance` rule; it ends at `busy_hold`, his death, his leaving the world or the balloon.
+- **The floor near Snake** (all buddies, not while ridden; `Buddy::FloorNearSnake`, `DrawShift`): where Elden Ring has no ground within
+  8 m under the mapped buddy (beside a tower top, a cliff's edge), it no longer floats at MGSV's height: the floor at Snake's height
+  (±1.5 m) under it, else the nearest one on the line toward Snake (0.5 m steps); `RenderScene::GroundBuddy` moves its draws there
+  (smoothed like the lift; the anchor matrix's x/z columns turn the ER shift into the draws' space). `pr er buddy` counts them.
+- Orders in the corner (`order_text`, `er/BuddyOrders.cpp`): D-Dog's commands 8-16 ("D-Dog: Keep 'em busy -- he pins the enemy you look
+  at", "D-Dog: Get it -- he fultons the sleeping enemy you look at", ...); the LB how-to per buddy ("D-Dog orders: ... -- look at the
+  enemy first"). Without `order_text` a dog order is "Buddy order N" as before.
+- Console: `dog [status | on | off | all on|off | pick | test boss | style <s> | attack [busy|kill|knockout|wound|fetch] [0xHANDLE] |
+  release | bark | set <key> <value>]` (keys include `pick_latch_ms`, `step_guard`, `wait_pin`; `buddy guard reset`) -- `pick` lists every character around with the reason he is or isn't the pick (NPC phantoms
+  "never a candidate"); `test boss` the same with every hostile one treated as a boss; `attack` / `release` a Connected / Released as the
+  guest would send it (no `kBuddyEngaged` to follow then). No new Elden Ring address. Tests: `tests/test_host_dog.inc` (in
+  test_host_combat), `test_host_marking.inc` (provisional marks, the hollow triangle, the paw), `TestBuddyOrders`; 0.8.0 polish:
+  `TestDogLatch` (the latch, the click grace, `LatchFits`, the attack entry), `TestBuddyGuard` (a run untouched, the leap's 0.59 m snap
+  spread, the 7 m / 77 m blips held and back, a 5.9 m snap eased in, the leash taken out of view, a far move taken in view after 2 s,
+  a long frame, the placement's rules), `TestDogWaitPin` (the slip taken back, a guest that moved the dog itself not corrected twice,
+  a lagging one filled in, staged moves, the end, the ease, a teleport, the origin shift), `TestDogBossStagger`, and test_host's
+  `[Dog]` defaults (on) and keys.
+
+**Live 2026-11-03** (Elden Ring 1.17.2 alone, `--er-headless 3840x2160`, fake MGSV `--buddy dog` and `pr replay` of the real
+`dog_follow.prrec` / `idle_walker.prrec`, the player's save at Stormveil; `combat set hurt_mult 0` throughout; the saves restored
+after: 8 of 8 files equal by sha256):
+- spotting: `dog: smells npc 42101014 ... 25.9 m from the dog`, `smells npc 30100114 ... 28.2 m` -> "D-Dog: Found enemy (2 nearby)"
+  (frame: the corner line); frames: two hollow red triangles over a tower top 8 m above Snake, others through walls, "16m" / "18m"
+  near the centre only; with the real dog's placement (replay): `smells ... 35.8 m`, `37.8 m` -> the same corner line;
+- the pick and the paw: lower courtyard, `dog pick`: `PICKED npc 30001014`; with LB held the amber paw over him (frame); the guest
+  (fake) read `kActorDogTarget` on 4 handles in the session, all hostile soldiers / a warhawk, never a non-hostile one;
+- never a friend: a Stormveil team-30 `81100014` lying 1.2 m from a soldier, 1.5° off the centre at 15.6 m: `not hostile (never a
+  candidate)` while the soldier at 5.1° is the one checked; the Rampart Tower room: the team-0 armoured figure (`30100214`) 1.1° off the
+  centre at 5 m -- no pick, no paw, "D-Dog: look at an enemy (25 m)" (frame), Rogier's phantom (team 26 `PlayerIns`) never looked at;
+- refusals seen: `too near (CQC's)`, `out of sight` (a wooden siege engine in the way: `call rayall` showed two map bodies between),
+  `no clear run (a step)` (a barrel 1.2 m high 1 m before a soldier; `run_step_max 2` took him), `no clear run (a wall)` (rubble,
+  barricades), `awake (Get it takes sleepers)`, `a boss` (`46000014` 3148 HP, `47500014` 6080 HP, listed from 57-141 m: never
+  approached); `dog test boss` on a warhawk in the cone: `a boss`, `a bite ... as a boss: refused (a boss)`. "D-Dog can't run to him
+  straight (a wall in the way)" in the corner with LB held (frame);
+- the bites, Bark, Get it: docs/COMBAT.md §7b; holds and decoys: a dog-held warhawk was `held (CQC)` in the pick, an active decoy's 4
+  stares left him alone;
+- the floor near Snake: Snake on a rooftop with the dog's spot past the parapet: `drawn shifted 0.50 m` (`389 moved toward Snake`),
+  D-Walker the same (frame); the real D-Dog (`dog_follow.prrec`) drawn on the wooden floor beside Snake, the real D-Walker
+  (`idle_walker.prrec`) beside him (frames); D-Walker's order and how-to unchanged ("D-Walker: Search Mode ...").
+- the committed build (Elden Ring's characters read only when spotting, the pick, the paw or a hit needs them) once more, a third
+  launch: "D-Dog: Found enemy (2 nearby)", the paw over a warhawk on a tower top 25 m off (`target_range 35`, `clear_run off` for it;
+  frame), its busy bite (flinches at +1.65 / +3.17 / +4.65 s, let go at 6.0 s), Bark (`bark_range 35`: 2 of 2 stare); 57 picks, 59 rays.
+- Not live: the guest's own dog (its run, leap and bite; `kBuddyEngaged` from it), `bosses = stagger`, Snake's CQC grab taking over
+  the dog's hold, a real Elden Ring dog (Stormveil has warhawks: `4210xxxx`), the ER 2.7.1.0 exe (no new address, nothing to check).
+
 ### Fulton: MGSV's recovery of an Elden Ring enemy (`er/Fulton.cpp`, protocol v12 `kGEvFulton`)
 
 The guest's ActorProxy stands an MGSV soldier in for an Elden Ring character (docs/GUEST.md 20); when Snake fultons it, MGSV's
@@ -1855,6 +2082,8 @@ input virtualpad on|exclusive|shared|off   (on = exclusive since 0.6.0: every re
 press <buttons|none> [ms] [lx ly [rx ry]]   the injected pad (lt/rt included), through the same masks as a real one
 puppet hide render_flag|fade|none   switch [Puppet] hide_mode live
 buddy                        the buddy, plus D-Walker's orders seen and the LB hints shown (er/BuddyOrders)
+dog [status | on | off | all on|off | pick | test boss | style <s> | attack [style] [0x..] | release | bark | set <key> <v>]
+                             D-Dog (er/Dog.h, "D-Dog in Elden Ring"): pick = every character with why he is (not) the pick
 throw [status | arc on|off|auto|ini | meshes on|off]   Snake's grenades we fly, the aiming arc, [Render] projectile_meshes live
 mines [detonate <id>]        Snake's placed explosives
 decoys [add [m] [plain|active|shock] | pop <id>]   Snake's decoys; add = a test decoy m ahead of the Tarnished (no MGSV)

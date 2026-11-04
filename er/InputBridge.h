@@ -92,6 +92,7 @@ namespace phantom::er
 		// Hook -> game thread: the last real pad seen (for menu learning / console).
 		std::uint16_t LastButtons();
 		std::int16_t  LastRightStickX();  // the real pad's (er/BuddyOrders: where the call menu points)
+		std::int16_t  LastRightStickY();  // (er/Dog.cpp: the call menu's attack entry is to the right)
 		std::uint32_t MenuPresses();  // running count of Start/Back presses (rising edges)
 		std::uint32_t PromptPresses();  // running count of prompt-button presses that went to ER (interactions)
 		int           PadIndex();

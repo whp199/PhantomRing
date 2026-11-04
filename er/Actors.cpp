@@ -3,6 +3,7 @@
 #include "Combat.h"
 #include "Cqc.h"
 #include "Config.h"
+#include "Dog.h"
 #include "Game.h"
 #include "Host.h"
 #include "Link.h"
@@ -32,6 +33,8 @@ namespace phantom::er::Actors
 		}
 		const auto& anchor = Puppet::CurrentAnchor();
 		const auto  myTeam = SafeTeam(a_f);
+		const auto  dogTarget = Dog::TargetHandle();  // (v17) D-Dog's pick: at most one record, only a hostile, living non-boss one
+		const bool  bossesOk = Cfg().dog.bosses == "stagger";
 		std::uint32_t n = 0;
 		for (const auto& c : game::Characters(static_cast<std::size_t>(Cfg().actorMax) + 1)) {
 			if (c.chr == a_f.player.chr || c.distance > Cfg().actorRadius || n >= static_cast<std::uint32_t>(Cfg().actorMax)) {
@@ -44,12 +47,20 @@ namespace phantom::er::Actors
 			if (c.isEnemy && c.team != myTeam && Combat::HostileToPlayer(a_f, c.team)) {
 				r.flags |= proto::kActorHostile;
 			}
+			const bool boss = (r.flags & proto::kActorHostile) && Cqc::IsBoss(c.npcParam, c.maxHp);
+			if (boss && !c.dead) {
+				r.flags |= proto::kActorBoss;  // (v17 round) CQC's boss rule, for hostile ones: the guest leaves bosses alone
+			}
 			if (c.dead) {
 				r.flags |= proto::kActorDead;
-			} else if (Combat::Asleep(c.chr) && !Cqc::IsBossHp(c.maxHp)) {
+			} else if (Combat::Asleep(c.chr) && !Cqc::IsBoss(c.npcParam, c.maxHp)) {
 				// The guest's Fulton anchor stands a sleeping soldier in for him (docs/GUEST.md 20). Never for a boss (review
 				// 2026-10-31): MGSV then offers no Fulton for him at all (er/Fulton.cpp refuses one anyway).
 				r.flags |= proto::kActorAsleep;
+			}
+			// Checked again here, at the boundary: never on a record that isn't hostile, or is dead, or a boss (bosses = off).
+			if (dogTarget && c.handle == dogTarget && (r.flags & proto::kActorHostile) && !c.dead && c.hp > 0 && (!boss || bossesOk)) {
+				r.flags |= proto::kActorDogTarget;
 			}
 			const Vec3 p = anchor.PointToMgsv(c.pos);
 			r.pos[0] = p.x;

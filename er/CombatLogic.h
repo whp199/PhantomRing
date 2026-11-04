@@ -120,6 +120,10 @@ namespace phantom::er::combat
 		bool         nonLethal{ false };  // stun / sleep: never takes the target below 1 HP (our part of it)
 		std::uint16_t correction{ 0 };    // the bullet's AtkParam correction (%); 0 = chosen per target (TopUp / sleep_correction)
 		bool          quiet{ false };     // (v16) a suppressed shot: its hit bullet makes no AI sound (its AtkParam's appear / hit ids -1)
+		// D-Dog's bite (er/Dog.cpp): its damage is dealt even when the hit bullet doesn't land -- MGSV's bite connected, so a bullet
+		// a raised shield or a turn swallowed whole (live 2026-11-04: a kill bullet on a soldier charging Snake missed and he was left
+		// unhurt) takes the HP route (nonLethal still holds). The route monitor counts the miss as before.
+		bool          landOrHp{ false };
 	};
 
 	struct HitRules

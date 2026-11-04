@@ -136,7 +136,7 @@ namespace phantom::er::Stealth
 				if (Cqc::IsHeld(foe.handle)) {
 					continue;  // CQC owns his no-attack / no-move bits: a stare's end must not let him go
 				}
-				if (!decoy::Fooled(Combat::Asleep(foe.chr), Cqc::IsBossHp(foe.maxHp))) {
+				if (!decoy::Fooled(Combat::Asleep(foe.chr), Cqc::IsBoss(foe.npcParam, foe.maxHp))) {
 					continue;  // a sleeper sees nothing; a boss never stops to stare (review 2026-10-31: it froze 6 s like a soldier)
 				}
 				if (auto it = g_cooldown.find(foe.handle); it != g_cooldown.end() && now < it->second) {

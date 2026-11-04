@@ -5,6 +5,7 @@
 #include "CombatLogic.h"
 #include "Config.h"
 #include "Cqc.h"
+#include "Dog.h"
 #include "DebugDraw.h"
 #include "Explosion.h"
 #include "Game.h"
@@ -93,6 +94,7 @@ namespace phantom::er::Combat
 			std::int32_t  dealtSeen{ 0 };       // what ER had dealt by then (hpBefore no longer shows it)
 			ULONGLONG     due{ 0 };
 			bool          fallback{ false };  // route auto: give it the HP route if it didn't land
+			bool          landOrHp{ false };  // HitEffect::landOrHp: the HP route on a miss whatever the route's state (D-Dog's bite)
 			bool          nonLethal{ false };
 			// damage_route = speffect: the damage rides on the bullet as ladder rows (combat::NativeDamage), no top-up.
 			bool          ladder{ false };
@@ -674,6 +676,7 @@ namespace phantom::er::Combat
 				// Nothing to measure on a hit without damage: it only holds the row while it flies (~50 ms live).
 				p.due = ::GetTickCount64() + static_cast<ULONGLONG>(a_e.damage > 0 ? std::max(50, c.verifyMs) : 120);
 				p.fallback = ConfiguredRoute() == "auto" && g_monitor.Current() == combat::RouteMonitor::State::kUnknown;
+				p.landOrHp = a_e.landOrHp && a_e.damage > 0;
 				p.name = a_t.Name();
 				p.ladder = ladder;
 				p.carried = carried;
@@ -1040,6 +1043,8 @@ namespace phantom::er::Combat
 
 	bool HostileToPlayer(const Frame& a_f, std::uint8_t a_team) { return a_f.player && Hostile(TeamOf(a_f.player.chr), a_team); }
 
+	bool HostileChr(const Frame& a_f, std::uint8_t* a_chr) { return a_f.player && IsChr(a_chr) && Hostile(TeamOf(a_f.player.chr), TeamOf(a_chr)); }
+
 	bool Asleep(std::uint8_t* a_chr)
 	{
 		constexpr std::uint16_t kStateHelpless = 434;  // SpEffectParam stateInfo of row 54, on a sleeping (or stance-broken) character
@@ -1063,7 +1068,7 @@ namespace phantom::er::Combat
 		std::vector<Foe> out;
 		for (const auto& t : Targets(a_f, a_centre, a_radius)) {
 			if (t.hostile && combat::CapsuleDistance(t.cap, a_centre) <= a_radius) {
-				out.push_back({ t.cap, t.Name(), t.chr, t.handle, t.orientation, t.maxHp });
+				out.push_back({ t.cap, t.Name(), t.chr, t.handle, t.orientation, t.maxHp, t.npc });
 			}
 		}
 		return out;
@@ -1117,7 +1122,7 @@ namespace phantom::er::Combat
 				continue;
 			}
 			if (valid) {
-				const bool fallback = g_monitor.Report(landed) && it->fallback;
+				const bool fallback = (g_monitor.Report(landed) && it->fallback) || (!landed && it->landOrHp);
 				if (landed) {
 					// What ER made of the hit (its own weapon-based damage, guard, absorption) -- diagnostics -- and the
 					// rest of the wanted damage on top (combat::TopUp; [Combat] top_up).
@@ -1193,7 +1198,8 @@ namespace phantom::er::Combat
 							other.hpBefore = std::min(other.hpBefore, after);
 						}
 					}
-					HitLog("combat: bullet on {} did not land within {} ms; hp fallback -{}", it->name, Cfg().verifyMs, it->damage);
+					HitLog("combat: bullet on {} did not land within {} ms; hp fallback -{}{}", it->name, Cfg().verifyMs, it->damage,
+						it->landOrHp ? " (D-Dog's bite connected: its damage is dealt anyway)" : "");
 				}
 			}
 			it = g_pending.erase(it);
@@ -1234,6 +1240,7 @@ namespace phantom::er::Combat
 
 	void OnPuppetStop()
 	{
+		Dog::OnPuppetStop();  // D-Dog's bark starers and its hold (through Cqc) go first
 		Cqc::OnPuppetStop();  // held enemies go before anything else is put back
 		Throw::OnPuppetStop();
 		Rounds::OnPuppetStop();

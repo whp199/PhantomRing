@@ -153,6 +153,11 @@ if(PHANTOM_GUEST_SOURCES)
 	target_include_directories(test_guest_c4 PRIVATE mgsv)
 	target_link_options(test_guest_c4 PRIVATE ${PHANTOM_STATIC_LINK})
 
+	# D-Dog's pure half (mgsv/DogLogic.cpp, docs/research/ddog.md): style, the attack job, the treadmill's choice, the leash
+	add_executable(test_guest_dog tests/test_guest_dog.cpp mgsv/DogLogic.cpp mgsv/Logic.cpp)
+	target_include_directories(test_guest_dog PRIVATE mgsv protocol)
+	target_link_options(test_guest_dog PRIVATE ${PHANTOM_STATIC_LINK})
+
 	add_executable(test_guest_actorproxy tests/test_guest_actorproxy.cpp mgsv/ActorProxy.cpp mgsv/Logic.cpp)
 	target_include_directories(test_guest_actorproxy PRIVATE mgsv)
 	target_link_libraries(test_guest_actorproxy PRIVATE phantom_common)
@@ -224,13 +229,14 @@ if(PHANTOM_GUEST_SOURCES)
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_link> ${CMAKE_SOURCE_DIR}/mgsv/PhantomRingGuest.ini
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_watch>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_actorproxy>
+		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_dog>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_cqc>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_horse>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_climb>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all "WINEDLLOVERRIDES=dinput8=n,b"
 			wine $<TARGET_FILE:test_guest_proxy> $<TARGET_FILE:PhantomRingGuest>
 		WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-		DEPENDS test_guest_logic test_guest_dive test_guest_c4 test_guest_actorproxy test_guest_cqc test_guest_horse test_guest_climb test_guest_link test_guest_watch test_guest_proxy PhantomRingGuest ${PHANTOM_GUEST_PUMP_DEP}
+		DEPENDS test_guest_logic test_guest_dive test_guest_c4 test_guest_actorproxy test_guest_dog test_guest_cqc test_guest_horse test_guest_climb test_guest_link test_guest_watch test_guest_proxy PhantomRingGuest ${PHANTOM_GUEST_PUMP_DEP}
 		USES_TERMINAL)
 endif()
 

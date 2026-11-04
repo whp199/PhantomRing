@@ -111,14 +111,23 @@ namespace phantom::er::marking
 		std::vector<std::uint64_t> Update(const View& a_view, std::span<const Seen> a_seen, float a_dt, const Rules& a_rules, const LineOfSight& a_los);
 
 		bool  Marked(std::uint64_t a_handle) const;
-		float Opacity(std::uint64_t a_handle, float a_fade) const;  // 1 marked and alive, to 0 over a_fade s after a death; 0 not marked
+		// 1 marked (or provisionally) and alive, to 0 over a_fade s after a death; a provisional one also fades over its last
+		// kProvisionalFade s; 0 neither.
+		float Opacity(std::uint64_t a_handle, float a_fade) const;
 		float Age(std::uint64_t a_handle) const;      // s since marked (the marker's pop), -1 not marked
 		float Dwell(std::uint64_t a_handle) const;    // s looked at so far (not marked yet), 0 none
 		bool  Mark(std::uint64_t a_handle, const Rules& a_rules);  // marks at once (console); false: already marked
+		// (D-Dog, docs/research/ddog.md §3.1) A provisional mark for a_seconds from now (never shorter than one it has): drawn
+		// hollow, without the distance but near the view's centre; looking at him through the binoculars still marks him for good.
+		// A dead one fades as a marked one does. Nothing for one already marked.
+		void  Provisional(std::uint64_t a_handle, float a_seconds);
+		bool  IsProvisional(std::uint64_t a_handle) const;  // provisionally marked, not marked for good
+		static constexpr float kProvisionalFade = 0.5f;     // s: a provisional mark fades out over its last half second
 		void  Forget(std::uint64_t a_handle);
 		void  Clear();
 		std::size_t Count() const;         // marked
-		std::size_t Looking() const;       // with dwell, not marked yet
+		std::size_t Looking() const;       // with dwell, not marked yet (provisional ones not counted)
+		std::size_t Provisionals() const;  // provisionally marked, not marked for good
 		std::uint64_t Rays() const { return rays_; }
 
 	private:
@@ -128,8 +137,9 @@ namespace phantom::er::marking
 			float         dwell{ 0 };
 			bool          marked{ false };
 			float         age{ 0 };
-			float         deadFor{ -1 };  // s since a marked one was seen dead, -1 alive
+			float         deadFor{ -1 };  // s since a marked (or provisional) one was seen dead, -1 alive
 			std::uint64_t order{ 0 };     // when marked (the oldest goes first)
+			float         provisional{ 0 };  // s left of a provisional mark (D-Dog), 0 none
 		};
 		Entry*       Find(std::uint64_t a_handle);
 		const Entry* Find(std::uint64_t a_handle) const;
@@ -163,7 +173,12 @@ namespace phantom::er::marking
 	// The quads of one marker: a triangle pointing down at a_at (over the character's head) and, when a_text isn't empty, its
 	// glyphs centred over it, all the same size on screen at any distance (they scale with the distance and the FOV). A newly
 	// marked one's triangle pops (a_age < 0.3 s: up to 1.6x); the glyphs stay put. Shown through walls. Nothing when a_at is
-	// behind the camera.
+	// behind the camera. a_hollow: a provisional mark (D-Dog's): the triangle hollow (kHollow).
+	inline constexpr float kHollow = 0.2f;  // the hollow triangle's band (corner units; the triangle's inradius is ~0.45)
 	void Build(std::vector<Marker>& a_out, const Camera& a_cam, const Vec3& a_at, std::string_view a_text, bool a_hostile, float a_opacity, float a_age,
-		const Style& a_style);
+		const Style& a_style, bool a_hollow = false);
+	// D-Dog's paw (glyph 11) a_lift triangle heights over a_at, a_scale of the triangle's size on screen (er/Dog.h: over the enemy
+	// its next attack order takes, while LB is held).
+	void BuildPaw(std::vector<Marker>& a_out, const Camera& a_cam, const Vec3& a_at, const float (&a_color)[4], float a_opacity, const Style& a_style,
+		float a_scale = 1.6f, float a_lift = 3.2f);
 }

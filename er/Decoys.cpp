@@ -231,7 +231,7 @@ namespace phantom::er::Decoys
 				}
 				// A boss walks into a decoy and pops it like anyone, but never stops to stare (review 2026-10-31: nothing checked, and
 				// a boss within 25 m of an active decoy froze 6 s of every 21 s); one CQC holds keeps CQC's bits.
-				const bool fooled = decoy::Fooled(false, Cqc::IsBossHp(foe.maxHp)) && !Cqc::IsHeld(foe.handle);
+				const bool fooled = decoy::Fooled(false, Cqc::IsBoss(foe.npcParam, foe.maxHp)) && !Cqc::IsHeld(foe.handle);
 				const float toSnake = combat::CapsuleDistance(foe.cap, snake);
 				// Walked into one: it pops (staring or not: a starer doesn't move, so it was there already -- it knocks it too).
 				Decoy*      best = nullptr;

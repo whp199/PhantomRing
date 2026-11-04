@@ -676,7 +676,10 @@ namespace phantom::guest::pump
 				const char* who = BuddyName(c.buddy);
 				auto        r = Call(a_ctx, std::format("return PhantomRing.Buddy('{}', {}, {}, {}, {}, {})", c.buddy, x, ry, z, yaw, c.buddyRevive));
 				if (r.starts_with("called")) {
-					state::HintBuddy({ x, ry, z }, 6.0f, 10000);  // where MGSV puts it, for its skin (no GetPosition)
+					// where MGSV puts it, for its skin (no GetPosition); D-Dog / Quiet come to Snake by themselves: anywhere near him (live
+					// 2026-11-03: an in-session D-Dog stood 5-7 m from the call spot, and its skin was found only by the next hint, 60 s on)
+					const bool comes = c.buddy == "dog" || c.buddy == "quiet";
+					state::HintBuddy(comes ? logic::Vec3{ fr.root.x, fr.root.y, fr.root.z } : logic::Vec3{ x, ry, z }, comes ? 12.0f : 6.0f, 10000);
 				}
 				if (r.starts_with("spawned") && lua.buddyPosValid) {
 					r = std::format("active (its skin at {:.1f},{:.1f},{:.1f})", lua.buddyPos.x, lua.buddyPos.y, lua.buddyPos.z);

@@ -23,8 +23,11 @@ namespace phantom::er
 		void        OnOrder(const proto::GuestEvent& a_event);  // kGEvBuddyOrder (FrameBegin, er/Events.cpp)
 		void        Tick(const Frame& a_frame);                 // FrameBegin, after the events
 		std::string Describe();
-		// The corner text for an order (pure: tests).
-		std::string OrderText(std::uint32_t a_command, std::uint32_t a_buddyType);
+		// The corner text for an order (pure: tests). a_dogTexts: D-Dog's own texts for its commands 8-16 ([Dog] order_text; else
+		// "Buddy order N" as before 0.8).
+		std::string OrderText(std::uint32_t a_command, std::uint32_t a_buddyType, bool a_dogTexts = true);
+		// The LB how-to for the buddy out (D-Walker, D-Dog), "" for others.
+		std::string HowToText(std::uint32_t a_buddyType);
 
 		// Pure (tests/test_host.cpp): the hint state of one LB hold.
 		class Hint

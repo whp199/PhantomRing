@@ -16,6 +16,7 @@
 
 #include "Addresses.h"
 #include "Config.h"
+#include "Dog.h"
 #include "Hold.h"
 #include "Hook.h"
 #include "Link.h"
@@ -93,6 +94,11 @@ namespace phantom::guest::proxy
 			std::uint64_t  frame{ 0 };
 			bool           ok{ false };
 			bool           readBack{ false };
+			// D-Dog holds him (HoldDedicated): MGSV's bite moves him now -- he goes along with the treadmill only (heldK: the offset
+			// he was last put by), never back onto the Elden Ring character's place (live 2026-11-04: each refresh put him back
+			// 0.3-1 m from where the bite had pushed him, and the dog on him snapped along 0.3-0.7 m in one frame).
+			bool           held{ false };
+			Vec3           heldK;
 		};
 
 		std::mutex                      g_lock;  // pool, slots, runtimes (game thread, Lua thread, console)
@@ -123,6 +129,29 @@ namespace phantom::guest::proxy
 		bool                            g_fullWasOn{ false };  // Cfg().proxies at the last LuaStep: an off -> on starts a fresh guard
 		std::uint32_t                   g_calms{ 0 }, g_sweeps{ 0 }, g_ownLost{ 0 };
 		std::atomic<std::uint64_t>      g_shotsTurned{ 0 };  // game thread (ShotSolver), read by the console
+		// D-Dog's order target (Dedicate, under g_lock): his slot is inert, on the ground, never parked for the buddy; the phase lock
+		// runs once one has been out (g_dogRan) and gives D-Dog's Attack up if it can't hold the phase.
+		std::uint64_t                   g_dedicated{ 0 };
+		bool                            g_dedPuppet{ true };
+		bool                            g_dogRan{ false };
+		Dedicated                       g_dedState;
+		std::atomic<bool>               g_dedHeld{ false };  // D-Dog's attack holds its soldier (HoldDedicated; game thread)
+		plan::SlipObserver              g_slipObs;           // Elden Ring's walls, seen in the characters around Snake (game thread)
+		std::uint32_t                   g_slipSeq{ 0 };
+		std::atomic<float>              g_slipX{ 0.0f }, g_slipZ{ 0.0f };
+		std::atomic<bool>               g_slipBegin{ false };
+		std::atomic<std::uint64_t>      g_heldMoves{ 0 }, g_heldSkips{ 0 };
+		// A soldier who stopped being a placed proxy (released, parked) stays drawn where he was a moment: until the Lua thread disables
+		// him, and a knocked-down one longer (his body, MGSV's own fade). His draws stay excluded there for kLingerMs (live 2026-11-03:
+		// right after D-Dog's release the soldier's draws were taken for the dog's, beside it -- still 1.5-3.2 s after the release
+		// with a 1.5 s linger). Game thread.
+		constexpr std::uint64_t                          kLingerMs = 5000;
+		std::array<std::pair<Vec3, std::uint64_t>, 8>   g_linger{};
+		// The slot soldiers' characters for HandleOfSoldier (its own lock: read from the soldier dog-attack detour, never held around a
+		// game call).
+		std::mutex                                               g_mapLock;
+		std::array<std::pair<std::uint16_t, std::uint64_t>, 32> g_map{};
+		std::size_t                                              g_mapCount{ 0 };
 
 		// The location objects and the soldier system, from a scan of MGSV's writable memory (background thread).
 		std::mutex                  g_scanLock;
@@ -439,11 +468,39 @@ namespace phantom::guest::proxy
 		}
 		const auto s = Settings();
 		const Vec3 kThen = g_k.At(g_tableSeenMs > static_cast<std::uint64_t>(s.tableLagMs) ? g_tableSeenMs - static_cast<std::uint64_t>(s.tableLagMs) : 0);
+		if (g_tableSeq != g_slipSeq) {
+			// The slip (plan::SlipObserver): every character's place in odometer space, at each new table. Not settled while k moved in
+			// the last 120 ms (a treadmill jump: the host's table and our k can disagree about it for a frame or two; the live
+			// wall test with 300 ms let the shown waiting dog lag the slip by up to 1.6 m around each jump).
+			g_slipSeq = g_tableSeq;
+			std::vector<plan::SlipSample> samples;
+			samples.reserve(g_recordCount);
+			for (std::uint32_t r = 0; r < g_recordCount; ++r) {
+				if (g_records[r].handle) {
+					samples.push_back({ g_records[r].handle, Vec3{ g_records[r].pos[0], g_records[r].pos[1], g_records[r].pos[2] } - kThen });
+				}
+			}
+			const bool settled = (g_k.At(a_nowMs > 120 ? a_nowMs - 120 : 0) - kNow).Length() < 0.05f;
+			const Vec3 odo{ static_cast<float>(a_odo[0]), static_cast<float>(a_odo[1]), static_cast<float>(a_odo[2]) };
+			if (g_slipBegin.exchange(false)) {
+				g_slipObs.Begin();
+				g_slipX.store(0.0f, std::memory_order_relaxed);
+				g_slipZ.store(0.0f, std::memory_order_relaxed);
+			}
+			if (g_slipObs.Update(samples, odo, settled)) {
+				const auto slip = g_slipObs.Level();
+				g_slipX.store(slip.x, std::memory_order_relaxed);
+				g_slipZ.store(slip.z, std::memory_order_relaxed);
+			}
+		}
 		auto       targets = plan::SelectTargets(g_records.data(), g_recordCount, a_root, kThen, kNow, s);
 		if (!Cfg().proxies) {
-			// [Fulton] Method = proxy with [Proxies] off: only sleeping characters get a proxy (MGSV's Fulton on him; no aim assist).
-			std::erase_if(targets, [](const plan::Target& t) { return !t.asleep; });
+			// [Fulton] Method = proxy with [Proxies] off: only sleeping characters get a proxy (MGSV's Fulton on him; no aim assist) --
+			// and D-Dog's order target (Dedicate), awake or not.
+			const bool fultonProxies = Cfg().FultonProxies();
+			std::erase_if(targets, [&](const plan::Target& t) { return t.handle != g_dedicated && !(t.asleep && fultonProxies); });
 		}
+		plan::PutDedicatedFirst(targets, g_dedicated);
 		if (!g_fultoned.empty()) {
 			std::erase_if(targets, [](const plan::Target& t) { return std::find(g_fultoned.begin(), g_fultoned.end(), t.handle) != g_fultoned.end(); });
 		}
@@ -456,6 +513,8 @@ namespace phantom::guest::proxy
 		std::array<Vec3, kMaxExcl>       excl{};
 		std::array<plan::Body, kMaxExcl> bodies{};
 		std::size_t                      exclCount = 0;
+		Dedicated                        ded;
+		ded.handle = g_dedicated;
 		for (std::size_t i = 0; i < g_slots.size(); ++i) {
 			const auto& slot = g_slots[i];
 			auto&       rt = g_rt[i];
@@ -469,10 +528,45 @@ namespace phantom::guest::proxy
 				}
 			}
 			if (!slot.proxy || rt.life != Life::kActive) {
+				if (rt.frame) {
+					// he was placed until now: his place stays excluded a moment (Lua disables him at its next step)
+					auto* oldest = &g_linger[0];
+					for (auto& l : g_linger) {
+						if (l.second < oldest->second) {
+							oldest = &l;
+						}
+					}
+					*oldest = { rt.pos, a_nowMs + kLingerMs };
+				}
 				rt.frame = 0;
 				continue;
 			}
-			if (!rt.frame || plan::NeedsPlace(rt.pos, rt.yaw, slot.pos, slot.yaw, g_frame - rt.frame, s)) {
+			const bool dogHeld = g_dedicated && slot.handle == g_dedicated && rt.frame && g_dedHeld.load(std::memory_order_relaxed);
+			if (dogHeld != rt.held) {
+				rt.held = dogHeld;
+				rt.heldK = kNow;
+				Log::Debug("proxy: soldier {:#x} {} by D-Dog's attack", slot.id, dogHeld ? "held" : "let go");
+			}
+			if (dogHeld) {
+				// The bite moves him (MGSV's paired animation, and the dog with him): only Snake's treadmill jumps move him now, by the
+				// offset's change since he was last put -- in the frame the dog's own shift lands (Dog.cpp), so the two stay together.
+				const Vec3 dk = kNow - rt.heldK;
+				if (dk.Length() > 0.05f) {
+					const auto at = LocationFeet(rt.loc);
+					const Vec3 to = (at ? *at : rt.pos) + dk;
+					rt.ok = hold::PlaceLocation(rt.loc, to + Vec3{ 0.0f, 0.8f, 0.0f }, logic::YawQuat(rt.yaw));
+					rt.pos = to;
+					rt.frame = g_frame;
+					rt.heldK = kNow;
+					++g_writes;
+					g_heldMoves.fetch_add(1, std::memory_order_relaxed);
+					if (!rt.ok) {
+						++g_writeFails;
+					}
+				} else {
+					g_heldSkips.fetch_add(1, std::memory_order_relaxed);
+				}
+			} else if (!rt.frame || plan::NeedsPlace(rt.pos, rt.yaw, slot.pos, slot.yaw, g_frame - rt.frame, s)) {
 				// The location's set-position takes the point 0.8 m above the feet (+0x20 for Snake and soldiers; +0x10 = the feet).
 				rt.ok = hold::PlaceLocation(rt.loc, slot.pos + Vec3{ 0.0f, 0.8f, 0.0f }, logic::YawQuat(slot.yaw));
 				rt.pos = slot.pos;
@@ -486,6 +580,35 @@ namespace phantom::guest::proxy
 			if (exclCount < kMaxExcl) {
 				bodies[exclCount] = { slot.pos, slot.real };
 				excl[exclCount++] = slot.pos;
+			}
+			if (g_dedicated && slot.handle == g_dedicated) {
+				// Ready once his location object stands where it was put (horizontally: the ground under a far proxy may differ).
+				const auto at = LocationFeet(rt.loc);
+				ded.soldier = slot.id;
+				ded.asleep = rt.asleep;
+				ded.pos = rt.held && at ? *at : slot.pos;  // held: where the bite has him
+				ded.real = slot.real;
+				ded.ready = rt.ok && at && (rt.held || (*at - slot.pos).LengthXZ() < 1.0f);
+				ded.at = at ? *at : Vec3{};
+				ded.atValid = at.has_value();
+				ded.placed = rt.frame == g_frame;
+				g_dogRan = true;
+			}
+		}
+		g_dedState = ded;
+		const std::size_t bodyCount = exclCount;
+		for (const auto& l : g_linger) {
+			if (l.second > a_nowMs && exclCount < kMaxExcl) {
+				excl[exclCount++] = l.first;
+			}
+		}
+		{
+			std::scoped_lock ml(g_mapLock);
+			g_mapCount = 0;
+			for (const auto& slot : g_slots) {
+				if (slot.handle && g_mapCount < g_map.size()) {
+					g_map[g_mapCount++] = { slot.id, slot.handle };
+				}
 			}
 		}
 		// Every 30 frames: a proxy wanted in the world stands where it was put, every other slot soldier is out of it (disabled).
@@ -515,7 +638,7 @@ namespace phantom::guest::proxy
 			g_excl = excl;
 			g_exclCount = exclCount;
 			g_bodies = bodies;
-			g_bodyCount = exclCount;
+			g_bodyCount = bodyCount;
 		}
 		if (Cfg().proxies && exclCount) {
 			g_fullRan = true;
@@ -531,7 +654,7 @@ namespace phantom::guest::proxy
 		void PhaseLock(std::uint64_t a_nowMs, const std::function<std::string(const std::string&)>& a_call)
 		{
 			const auto& c = Cfg();
-			if (!c.proxyPhaseLock || !(c.proxies || g_fullRan) || a_nowMs - g_phaseAt < 500) {
+			if (!c.proxyPhaseLock || !(c.proxies || g_fullRan || g_dogRan) || a_nowMs - g_phaseAt < 500) {
 				return;
 			}
 			g_phaseAt = a_nowMs;
@@ -574,6 +697,11 @@ namespace phantom::guest::proxy
 				if (g_calms <= 20 || g_calms % 30 == 0) {
 					Log::Info("proxy: phase lock: {} (#{})", r, g_calms);
 				}
+			}
+			if (step.giveUp && g_dogRan) {
+				// D-Dog's soldier was out this session: the dog can't attack here without MGSV's alert -- Attack off, his soldier released.
+				dog::DisableAttack(std::format("MGSV's alert phase still {} after {:.0f} s of phase lock with the dog's soldier out", phase, c.proxyAlertGiveUpSec));
+				g_dedicated = 0;
 			}
 			if (step.giveUp && c.proxies) {
 				// LuaStep stops before this lock once nothing runs proxies any more: it only keeps going with [Fulton] Method = proxy.
@@ -638,6 +766,10 @@ namespace phantom::guest::proxy
 			auto&      slot = g_slots[i];
 			auto&      rt = g_rt[i];
 			const auto in = a_nowMs - rt.since;
+			// D-Dog's order target is inert whatever [Proxies] says, a puppet unless [Dog] TargetPuppet is off (full proxies: always).
+			const bool dogSlot = g_dedicated && slot.handle == g_dedicated;
+			const bool inertSlot = inert || dogSlot;
+			const bool puppet = !dogSlot || g_dedPuppet || inert;
 			const auto enter = [&](Life a_l) {
 				rt.life = a_l;
 				rt.since = a_nowMs;
@@ -668,10 +800,10 @@ namespace phantom::guest::proxy
 			}
 			switch (rt.life) {
 			case Life::kDisabled:
-				if (inert) {
+				if (inertSlot) {
 					// Puppet and restrict-notice before the enable (they are in TppSoldier2's per-instance table, which SetEnabled
 					// leaves alone) and again right after: no update of live AI at his post (the likely start of the 2026-10-14 alert).
-					a_call(std::format("return PhantomRing.ProxyEnable({}, {})", slot.id, cfg.proxyNoAssignRoute ? "true" : "false"));
+					a_call(std::format("return PhantomRing.ProxyEnable({}, {}, {})", slot.id, cfg.proxyNoAssignRoute ? "true" : "false", puppet ? "true" : "false"));
 					rt.inertAt = a_nowMs;
 				} else {
 					a_call(std::format("return PhantomRing.FultonEnable({})", slot.id));
@@ -680,9 +812,11 @@ namespace phantom::guest::proxy
 				break;
 			case Life::kEnabling:
 				if (in >= 150) {
-					a_call(std::format("return PhantomRing.ProxyPuppet({})", slot.id));
-					if (inert) {
-						a_call(std::format("return PhantomRing.ProxyInert({}, true)", slot.id));
+					if (puppet) {
+						a_call(std::format("return PhantomRing.ProxyPuppet({})", slot.id));
+					}
+					if (inertSlot) {
+						a_call(std::format("return PhantomRing.ProxyInert({}, {})", slot.id, puppet ? "true" : "false"));
 					}
 					enter(Life::kPuppet);
 				}
@@ -713,9 +847,9 @@ namespace phantom::guest::proxy
 					rt.frame = 0;
 					rt.ownMiss = 0;
 					rt.ownedAt = a_nowMs;
-					if (inert) {
+					if (inertSlot) {
 						// (Re)realized: the flags are the instance's, but say them again before he is moved.
-						a_call(std::format("return PhantomRing.ProxyInert({}, {})", slot.id, rt.asleep ? "false" : "true"));
+						a_call(std::format("return PhantomRing.ProxyInert({}, {})", slot.id, rt.asleep || !puppet ? "false" : "true"));
 						rt.inertAt = a_nowMs;
 					}
 					enter(Life::kActive);
@@ -744,7 +878,7 @@ namespace phantom::guest::proxy
 					enter(Life::kLocating);  // unrealized under us: find it again
 					break;
 				}
-				if (cfg.proxies && !rt.asleep && a_nowMs - rt.ownedAt >= 1000) {
+				if ((cfg.proxies || dogSlot) && !rt.asleep && a_nowMs - rt.ownedAt >= 1000) {
 					// The pooled location object still carries him (20.6): else a reinforcement realized into it would be moved. Not
 					// while asleep: MGSV's balloon carries him away from both, and losing the object would lose the fulton's yank.
 					rt.ownedAt = a_nowMs;
@@ -760,10 +894,10 @@ namespace phantom::guest::proxy
 						break;
 					}
 				}
-				if (inert && a_nowMs - rt.inertAt >= 2000) {
+				if (inertSlot && a_nowMs - rt.inertAt >= 2000) {
 					// Refreshed (each is one flag bit in the instance table: idempotent). An asleep proxy keeps only restrict-notice:
 					// a puppet ignores ChangeLifeState (ProxySleep lifted it).
-					a_call(std::format("return PhantomRing.ProxyInert({}, {})", slot.id, rt.asleep ? "false" : "true"));
+					a_call(std::format("return PhantomRing.ProxyInert({}, {})", slot.id, rt.asleep || !puppet ? "false" : "true"));
 					rt.inertAt = a_nowMs;
 				}
 				const bool wantAsleep = (rt.recFlags & proto::kActorAsleep) != 0;
@@ -804,6 +938,81 @@ namespace phantom::guest::proxy
 				break;
 			}
 		}
+	}
+
+	void Dedicate(std::uint64_t a_handle, bool a_puppet)
+	{
+		std::scoped_lock lock(g_lock);
+		if (g_dedicated != a_handle) {
+			Log::Info("proxy: Elden Ring character {:#x} gets a soldier of his own for D-Dog's order ({})", a_handle, a_puppet ? "puppet" : "restrict-notice only");
+		}
+		g_dedicated = a_handle;
+		g_dedPuppet = a_puppet;
+		if (Cfg().proxyPhaseLock && !g_dogRan && !Cfg().proxies) {
+			// A fresh guard for the dog's first soldier (a give-up of the full proxies' earlier this session says nothing about him).
+			g_phase.Reset();
+			g_lastPhase = 0;
+			g_phaseAt = 0;
+		}
+	}
+
+	void RearmPhaseGuard(const char* a_why)
+	{
+		std::scoped_lock lock(g_lock);
+		const bool       gaveUp = g_phase.GaveUp();
+		g_phase.Reset();
+		g_lastPhase = 0;
+		g_phaseAt = 0;
+		Log::Info("proxy: phase lock: a fresh alert guard ({}; the last one {})", a_why, gaveUp ? "had given up" : "had not given up");
+	}
+
+	void HoldDedicated(bool a_held) { g_dedHeld.store(a_held, std::memory_order_relaxed); }
+
+	Vec3 Slip() { return { g_slipX.load(std::memory_order_relaxed), 0.0f, g_slipZ.load(std::memory_order_relaxed) }; }
+	void SlipBegin()
+	{
+		g_slipX.store(0.0f, std::memory_order_relaxed);
+		g_slipZ.store(0.0f, std::memory_order_relaxed);
+		g_slipBegin.store(true);
+	}
+	void SlipStop()
+	{
+		std::scoped_lock lock(g_lock);
+		g_slipObs.Stop();
+	}
+
+	void Release(const char* a_why)
+	{
+		g_dedHeld.store(false, std::memory_order_relaxed);
+		std::scoped_lock lock(g_lock);
+		if (g_dedicated) {
+			Log::Info("proxy: Elden Ring character {:#x}'s soldier released ({})", g_dedicated, a_why);
+		}
+		g_dedicated = 0;
+		g_dedState = {};
+	}
+
+	Dedicated DedicatedState()
+	{
+		std::scoped_lock lock(g_lock);
+		return g_dedicated && g_dedState.handle == g_dedicated ? g_dedState : Dedicated{ .handle = g_dedicated };
+	}
+
+	std::uint64_t HandleOfSoldier(std::uint16_t a_soldier)
+	{
+		std::scoped_lock ml(g_mapLock);
+		for (std::size_t i = 0; i < g_mapCount; ++i) {
+			if (g_map[i].first == a_soldier) {
+				return g_map[i].second;
+			}
+		}
+		return 0;
+	}
+
+	bool Fultoned(std::uint64_t a_handle)
+	{
+		std::scoped_lock lock(g_lock);
+		return a_handle && std::find(g_fultoned.begin(), g_fultoned.end(), a_handle) != g_fultoned.end();
 	}
 
 	std::string Fulton(std::uint64_t a_handle, bool a_ok, const char* a_why)
@@ -877,7 +1086,13 @@ namespace phantom::guest::proxy
 			g_pool.soldiers.size(), g_slots.size(), g_reserve.size(), g_tableSeq, g_recordCount, g_writes, g_writeFails,
 			g_readOk, g_readBad, g_scans.load(), locs, sys, g_fultonEvents);
 		const auto k = g_k.Latest();
-		out += std::format("treadmill offset k {:.2f},{:.2f},{:.2f}\n", k.x, k.y, k.z);
+		out += std::format("treadmill offset k {:.2f},{:.2f},{:.2f}; D-Dog's target {:#x} (soldier {:#x}{}{}, {}; while the dog held him: {} moves with the treadmill, "
+		                   "{} frames left where the bite put him)\n",
+			k.x, k.y, k.z, g_dedicated, g_dedState.soldier, g_dedState.ready ? " ready" : "", g_dedHeld.load() ? " HELD by the dog" : "",
+			g_dedPuppet ? "puppet" : "restrict-notice only", g_heldMoves.load(), g_heldSkips.load());
+		out += std::format("slip (Elden Ring's walls, seen in the characters around Snake){}: {:.2f},{:.2f} m over {:.1f} m of Snake's path, {} tables taken, {} "
+		                   "refused\n",
+			g_slipObs.Active() ? "" : " (not watched now)", g_slipX.load(), g_slipZ.load(), g_slipObs.Path(), g_slipObs.Taken(), g_slipObs.Refused());
 		const auto& c = Cfg();
 		out += std::format("inert {} (sites {}), height {} (y tolerance {:.1f}), aim height fix {} ({} rounds turned), phase lock {}: phase {}, {} alerts, {} calms, "
 		                   "{} sweeps{}, location objects lost {}\n",

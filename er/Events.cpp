@@ -1,9 +1,11 @@
 #include "Events.h"
 
+#include "Buddy.h"
 #include "BuddyOrders.h"
 #include "Combat.h"
 #include "Cqc.h"
 #include "Decoys.h"
+#include "Dog.h"
 #include "Fulton.h"
 #include "Host.h"
 #include "InputBridge.h"
@@ -17,6 +19,8 @@
 #include "Stealth.h"
 #include "Throw.h"
 #include "TimeSkip.h"
+
+#include <cstdint>
 
 namespace phantom::er::Events
 {
@@ -68,6 +72,8 @@ namespace phantom::er::Events
 				break;
 			case proto::kGEvBuddyOrder:
 				BuddyOrders::OnOrder(e);
+				Buddy::OnOrder(e.a, e.b);  // (0.8.0 polish) D-Dog's Wait pinned to its Elden Ring spot
+				Dog::OnOrder(a_f, e);      // (v17) D-Dog's style (pad[0]) and Bark
 				break;
 			case proto::kGEvFulton:
 				Fulton::OnEvent(a_f, e);
@@ -77,6 +83,10 @@ namespace phantom::er::Events
 				break;
 			case proto::kGEvCqc:
 				Cqc::OnEvent(a_f, e);  // (v13) CQC holds and throws (er/Cqc.h)
+				break;
+			case proto::kGEvDogAttack:
+				Dog::OnAttack(a_f, e);  // (v17) D-Dog's attack on an Elden Ring target (er/Dog.h; only logged with [Dog] enabled = false)
+				Buddy::OnDogAttack(static_cast<std::uint32_t>(proto::DogAttackPhase(e.a)));  // an order taken from Wait ends the pin
 				break;
 			case proto::kGEvLog:
 				Log::Info("guest message {}", e.a);
@@ -97,6 +107,7 @@ namespace phantom::er::Events
 		Marking::Tick(a_f);  // protocol v13 kGuestBinoculars
 		TimeSkip::Tick(a_f);
 		Cqc::Tick(a_f);
+		Dog::Tick(a_f);  // (v17) D-Dog: spotting, the pick, its holds and stares (after Cqc: a hold that just ended is seen)
 	}
 
 	unsigned long long Count() { return g_count; }

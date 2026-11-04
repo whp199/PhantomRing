@@ -80,6 +80,11 @@ namespace phantom::er::params
 	// (seconds), +0x9 u8 type, +0xA bits (bit0 heard by hostiles), +0xB rank, +0x10 priority.
 	inline constexpr Spec kAiSoundParam{ L"AiSoundParam", "AI_SOUND_PARAM_ST", 0x20, 37 };
 	inline constexpr std::uint32_t kNpcGetSoul = 0x2C;  // u32 get_soul (tools/re/er_params.py fields NPC_PARAM_ST; soldier 30003214: 114)
+	// u8 bits_15d, bit 0 isSoulGetByBoss (fromsoftware-rs NPC_PARAM_ST): the runes come from the boss's defeat, not a drop. Set on
+	// all 315 boss rows of this regulation (Godrick 47500014, the dungeons' 9xx rows, get_soul 0) and on no soldier (30003214,
+	// 30001014, 30200014, 42101014) nor big ordinary enemy (46000014, 1210 runes): Cqc::IsBoss (tests/test_host_combat checks it).
+	inline constexpr std::uint32_t kNpcBossBits = 0x15D;
+	inline constexpr std::uint8_t  kNpcIsSoulGetByBoss = 0x01;
 
 	class Table
 	{

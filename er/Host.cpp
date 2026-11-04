@@ -965,7 +965,8 @@ namespace phantom::er::Host
 			proto::HostState s{};
 			auto bit = [](bool a_on, std::uint32_t a_flag) { return a_on ? a_flag : 0u; };
 			s.flags = bit(f.inGame, proto::kHostInGame) | bit(f.menuOpen, proto::kHostMenuOpen) | bit(f.loading, proto::kHostLoading) |
-			          bit(Puppet::Active(), proto::kHostPuppeting) | bit(f.dead || Puppet::Dying(), proto::kHostPlayerDead) | bit(f.cutscene, proto::kHostCutscene);
+			          bit(Puppet::Active(), proto::kHostPuppeting) | bit(f.dead || Puppet::Dying(), proto::kHostPlayerDead) | bit(f.cutscene, proto::kHostCutscene) |
+			          bit(Cfg().dog.enabled, proto::kHostDogLayer);  // (v17) the guest takes D-Dog's attack orders over only while it is set
 			s.frame = f.index;
 			s.qpc = Link::Qpc();
 			s.timeOfDayHours = game::TimeOfDay();

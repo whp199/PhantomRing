@@ -195,6 +195,44 @@ namespace phantom::er
 		bool operator==(const NoiseConfig&) const = default;
 	};
 
+	// [Dog] D-Dog as a battle buddy in Elden Ring (docs/research/ddog.md §3, §5; protocol v17 kActorDogTarget / kGEvDogAttack /
+	// kBuddyEngaged; er/Dog.h). On by default since the 0.8.0 polish (the pick kept through the click, D-Dog's place and body guarded,
+	// a waiting dog pinned to its Elden Ring spot); it does nothing at all while D-Dog isn't out (`dog all off` for a session).
+	struct DogConfig
+	{
+		bool        enabled{ true };             // the whole layer (off: D-Dog as in 0.7.0, kGEvDogAttack only logged, no pick, and
+		                                         // neither step_guard nor wait_pin runs -- review 0.8.0)
+		bool        spot{ true };                // provisional marks on hostile Elden Ring characters near the dog (§3.1)
+		float       spotRange{ 40.0f };          // m from the dog
+		float       spotHeight{ 8.0f };          // m, vertical
+		float       spotLinger{ 10.0f };         // s a provisional mark stays after he leaves the range
+		float       spotTextEvery{ 8.0f };       // s between two "D-Dog: Found enemy" lines
+		float       targetRange{ 25.0f };        // m from Snake: the attack order's candidates (§3.3)
+		float       targetMin{ 3.5f };           // m from Snake: nearer ones are CQC's (= the guest's [Proxies] SnakeClearance)
+		float       targetConeDeg{ 10.0f };      // degrees off the view centre
+		bool        targetMarkedFirst{ true };   // marked enemies (binoculars or dog) win the pick
+		bool        clearRun{ true };            // refuse a target the dog can't run to in a straight line on Elden Ring's ground
+		float       runStepMax{ 0.8f };          // m: a step between two ground samples of that run larger than this refuses it
+		bool        indicator{ true };          // a paw marker over the pick while LB (MGSV's call menu) is held
+		std::string bosses{ "off" };             // off: never a target | stagger: one stagger (CQC's rule), 20 s cooldown
+		float       busyHold{ 6.0f };            // s "Keep 'em busy" holds the bitten one (no attack / no move)
+		float       busyFlinchEvery{ 1.5f };     // s between flinches during that hold
+		float       killShareMult{ 1.0f };       // x MGSV's damage share of the dog's knife (kGEvDogAttack b)
+		float       killShareFallback{ 1.2f };   // lives of his reference HP when MGSV's share is unknown (b = 0)
+		float       woundShare{ 1.0f };          // share of his reference HP "wound" takes (never below 1 HP: an ordinary enemy is left at 1)
+		float       knockoutSleep{ 1.1f };       // share of his sleep resistance the stun knife builds up
+		bool        bark{ true };               // Bark (command 10): enemies near the dog stop and stare at it
+		float       barkRange{ 20.0f };          // m from the dog
+		float       barkStare{ 5.0f };           // s
+		float       barkCooldown{ 15.0f };       // s before the same enemy stares again
+		bool        orderText{ true };          // corner texts for D-Dog's orders 8-16
+		int         pickLatchMs{ 500 };          // ms the shown pick stays the pick after the rules stop choosing him (er/DogLogic.h PickLatch)
+		bool        stepGuard{ true };           // D-Dog's place and drawn body never follow a one-frame jump (er/BuddyGuard.h StepGuard)
+		bool        waitPin{ true };             // a waiting D-Dog stays on its Elden Ring spot (er/BuddyGuard.h WaitPin)
+
+		bool operator==(const DogConfig&) const = default;
+	};
+
 	struct Config
 	{
 		// [Link]
@@ -607,6 +645,7 @@ namespace phantom::er
 		OverlayConfig overlay;
 		MarkingConfig marking;  // [Marking]
 		NoiseConfig   noise;    // [Noise]
+		DogConfig     dog;      // [Dog] (protocol v17; scaffolding, off)
 
 		bool Load(const std::wstring& a_path);
 	};

@@ -415,6 +415,35 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(shipped.overlay == d.overlay);
 	CHECK(shipped.noise == d.noise);  // [Noise]
 	CHECK(shipped.keyboard == d.keyboard);  // [Keyboard]: the shipped ini spells out the defaults
+	// [Dog] (protocol v17): spelled out; on by default since the 0.8.0 polish (the pick latch, the step guard, the Wait pin) -- a player
+	// who never touches the ini gets it, a boss is still never a target
+	CHECK(shipped.dog == d.dog && d.dog.enabled && d.dog.spot && d.dog.indicator && d.dog.bark && d.dog.orderText && d.dog.bosses == "off" &&
+	      d.dog.clearRun && d.dog.targetMin == 3.5f && d.dog.woundShare == 1.0f && d.dog.pickLatchMs == 500 && d.dog.stepGuard && d.dog.waitPin);
+}
+
+// [Dog] from an ini (protocol v17 scaffolding; docs/research/ddog.md §5): values, the bosses rule, clamps.
+static void TestDogConfig()
+{
+	if (FILE* f = std::fopen("test_dog.ini", "wb")) {
+		std::fputs("[Dog]\nenabled = true\nspot = true\nspot_range = 30\ntarget_cone_deg = 500\nbosses = stagger\nbusy_hold = -2\n"
+		           "kill_share_fallback = 0.8\nbark = true\norder_text = true\nindicator = false\npick_latch_ms = 99999\nstep_guard = false\nwait_pin = false\n",
+			f);
+		std::fclose(f);
+	}
+	Config c;
+	c.Load(L"test_dog.ini");
+	const Config d;
+	CHECK(c.dog.enabled && c.dog.spot && c.dog.spotRange == 30.0f && c.dog.targetConeDeg == 90.0f && c.dog.bosses == "stagger" && c.dog.busyHold == 0.0f &&
+	      c.dog.killShareFallback == 0.8f && c.dog.bark && c.dog.orderText && c.dog.spotHeight == d.dog.spotHeight && !c.dog.indicator &&
+	      c.dog.pickLatchMs == 5000 && !c.dog.stepGuard && !c.dog.waitPin);
+	if (FILE* f = std::fopen("test_dog.ini", "wb")) {
+		std::fputs("[Dog]\nbosses = always\n", f);
+		std::fclose(f);
+	}
+	Config b;
+	b.Load(L"test_dog.ini");
+	CHECK(b.dog.bosses == "off" && b.dog == d.dog);  // anything but off|stagger is off: a boss is never the dog's target by mistake
+	std::remove("test_dog.ini");
 }
 
 // An Elden Ring interaction started with the prompt button (er/Interaction.h).
@@ -588,7 +617,13 @@ static void TestBuddyOrders()
 	CHECK(OrderText(25, 4).starts_with("D-Walker: Search Mode"));
 	CHECK(OrderText(21, 4).starts_with("D-Walker: Normal Mode"));
 	CHECK(OrderText(20, 4).starts_with("D-Walker: Whistle"));
-	CHECK(OrderText(9, 2) == "Buddy order 9");
+	CHECK(OrderText(9, 2, false) == "Buddy order 9");  // [Dog] order_text off: as before
+	CHECK(OrderText(9, 2).starts_with("D-Dog: Wait") && OrderText(10, 2).starts_with("D-Dog: Bark") && OrderText(11, 2).starts_with("D-Dog: Keep 'em busy"));
+	CHECK(OrderText(12, 2).find("kill") != std::string::npos && OrderText(13, 2).find("knock out") != std::string::npos &&
+	      OrderText(14, 2).find("wound") != std::string::npos && OrderText(15, 2).starts_with("D-Dog: Get it") && OrderText(8, 2).starts_with("D-Dog: Whistle"));
+	CHECK(OrderText(16, 2).starts_with("D-Dog: DD") && OrderText(30, 2) == "D-Dog: order 30" && OrderText(25, 4).starts_with("D-Walker"));
+	using phantom::er::BuddyOrders::HowToText;
+	CHECK(HowToText(4).starts_with("D-Walker orders") && HowToText(2).starts_with("D-Dog orders") && HowToText(1).empty());
 	Hint h;
 	using Say = Hint::Say;
 	// A tap of LB: nothing.
@@ -842,6 +877,7 @@ int main(int argc, char** argv)
 	TestJumpUphill();
 	TestNearerOf();
 	TestNoise();
+	TestDogConfig();
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

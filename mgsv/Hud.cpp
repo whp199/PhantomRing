@@ -2,6 +2,7 @@
 
 #include "Addresses.h"
 #include "Config.h"
+#include "DogLogic.h"
 #include "Hook.h"
 #include "Link.h"
 #include "Log.h"
@@ -36,6 +37,9 @@ namespace phantom::guest::capture::hud
 		ExecuteFn g_execute{ nullptr };
 
 		thread_local int t_ui = 0;
+		// The UI job this thread runs now (Execute's info and task): `!capture probe` names it per UI draw (which job draws what).
+		thread_local void* t_info = nullptr;
+		thread_local void* t_task = nullptr;
 
 		std::atomic<bool>          g_hooked{ false };
 		std::atomic<bool>          g_enabled{ true };
@@ -50,6 +54,8 @@ namespace phantom::guest::capture::hud
 		constexpr std::uint64_t    kNvgOverlayPs = 0xae282a7fe2bdbdd9;
 		std::atomic<bool>          g_nightVision{ false };
 		std::atomic<bool>          g_frozen{ false };  // a staged climb (Climb.h): nothing new is published
+		std::atomic<bool>          g_hideDogMarkers{ false };  // D-Dog's order: MGSV's green / red markers left out (SetHideDogMarkers)
+		std::atomic<std::uint64_t> g_dogMarkersLeftOut{ 0 };
 		std::atomic<std::uint64_t> g_frozenSkipped{ 0 };
 		std::atomic<std::uint64_t> g_nvgLeftOut{ 0 };
 		// The binoculars' (and scopes') lens: a UI draw (a mesh ring, idx 216) whose pixel shader samples MGSV's whole picture
@@ -65,8 +71,14 @@ namespace phantom::guest::capture::hud
 		std::uintptr_t Execute(void* a_renderer, void* a_info, void* a_task, std::uint32_t a_worker)
 		{
 			++t_ui;
+			void* const info = t_info;
+			void* const task = t_task;
+			t_info = a_info;
+			t_task = a_task;
 			g_jobs.fetch_add(1, std::memory_order_relaxed);
 			const auto r = g_execute(a_renderer, a_info, a_task, a_worker);
+			t_info = info;
+			t_task = task;
 			--t_ui;
 			return r;
 		}
@@ -386,6 +398,16 @@ namespace phantom::guest::capture::hud
 			g_lensLeftOut.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
+		if (g_hideDogMarkers.load(std::memory_order_relaxed) && a_s.vsInfo) {
+			// MGSV's markers of the dog and its target soldier while the dog carries out an order: their colour (cVSLight[1].rgb).
+			if (const auto* cb = a_s.vsInfo->CBufferNamed("cVSLight"); cb && cb->slot < d3d::kVsCbSlots) {
+				float c[8]{};
+				if (d3d::ReadConstants(a_s, a_s.vsCb[cb->slot], 0, c, sizeof(c)) && dog::plan::IsMgsvMarkerColor(c[4], c[5], c[6])) {
+					g_dogMarkersLeftOut.fetch_add(1, std::memory_order_relaxed);
+					return;
+				}
+			}
+		}
 		auto* t = TargetFor(rt.width, rt.height, rt.formats[0]);
 		if (!t) {
 			return;
@@ -492,6 +514,7 @@ namespace phantom::guest::capture::hud
 
 	void SetNightVision(bool a_on) { g_nightVision.store(a_on, std::memory_order_relaxed); }
 	void SetFrozen(bool a_frozen) { g_frozen.store(a_frozen, std::memory_order_relaxed); }
+	void SetHideDogMarkers(bool a_hide) { g_hideDogMarkers.store(a_hide, std::memory_order_relaxed); }
 
 	std::string Command(std::string_view a_args)
 	{
@@ -518,11 +541,11 @@ namespace phantom::guest::capture::hud
 		const auto  main = g_mainSize.load();
 		return std::format("hud: hooked {} enabled {} failed {} every {}; ui jobs {} ui draws {} mirrored {} (other targets {}); main target {}x{}; layer {}; "
 		                   "published {} (empty skipped {}, copies not ready {}); night vision {} ({} overlay draws left out); lens draws of MGSV's picture left "
-		                   "out {}; dev skip ps {:#x} ({} left out)",
+		                   "out {}; D-Dog's order: MGSV's markers {} ({} draws left out); dev skip ps {:#x} ({} left out)",
 			g_hooked.load(), g_enabled.load(), g_failed.load(), g_every.load(), g_jobs.load(), g_uiDraws.load(), g_mirrored.load(), g_skippedTarget.load(), main >> 32,
 			main & 0xFFFFFFFF, t ? std::format("{}x{} {}", t->width, t->height, d3d::FormatName(t->rtvFormat)) : std::string("none"), g_published.load(),
-			g_skippedEmpty.load(), g_notReady.load(), g_nightVision.load() ? "on" : "off", g_nvgLeftOut.load(), g_lensLeftOut.load(), g_skipPs.load(),
-			g_skippedPs.load());
+			g_skippedEmpty.load(), g_notReady.load(), g_nightVision.load() ? "on" : "off", g_nvgLeftOut.load(), g_lensLeftOut.load(),
+			g_hideDogMarkers.load() ? "LEFT OUT now" : "shown", g_dogMarkersLeftOut.load(), g_skipPs.load(), g_skippedPs.load());
 	}
 
 	std::string ProbeLine(const d3d::ContextState& a_s, const d3d::DrawArgs& a_a)
@@ -565,8 +588,25 @@ namespace phantom::guest::capture::hud
 				}
 			}
 		}
-		return std::format("  UI tid {} ctx#{}{} rt {} {}x{} {} n{} dsv {} {} {} inst {} vs {:#018x} ps {:#018x} blend [{}] {}\n", ::GetCurrentThreadId(), a_s.index,
+		// The job: its info and task objects' first qwords (vtables) and the task's next three -- which UI job a draw belongs to.
+		const auto q = [](void* a_p, int a_i) { return a_p ? SafeRead<std::uint64_t>(static_cast<const std::uint8_t*>(a_p) + a_i * 8).value_or(0) : 0; };
+		auto job = std::format("job info {} [{:#x}] task {} [{:#x} {:#x} {:#x} {:#x}]", t_info, q(t_info, 0), t_task, q(t_task, 0), q(t_task, 1), q(t_task, 2),
+			q(t_task, 3));
+		// Its vertex shader's constant buffers by name, the first 16 floats of each (where on screen it draws).
+		if (a_s.vsInfo) {
+			for (const auto& cb : a_s.vsInfo->cbuffers) {
+				float f[16]{};
+				if (cb.slot < d3d::kVsCbSlots && d3d::ReadConstants(a_s, a_s.vsCb[cb.slot], 0, f, std::min<std::uint32_t>(sizeof(f), cb.size ? cb.size : sizeof(f)))) {
+					job += std::format(" {}=[", cb.name);
+					for (int i = 0; i < 16; ++i) {
+						job += std::format("{}{:.3g}", i ? "," : "", f[i]);
+					}
+					job += "]";
+				}
+			}
+		}
+		return std::format("  UI tid {} ctx#{}{} rt {} {}x{} {} n{} dsv {} {} {} inst {} vs {:#018x} ps {:#018x} blend [{}] {}{}\n", ::GetCurrentThreadId(), a_s.index,
 			a_s.deferred ? "d" : "i", static_cast<void*>(res), a_s.rt.width, a_s.rt.height, d3d::FormatName(a_s.rt.formats[0]), a_s.rt.count, a_s.dsv != nullptr,
-			a_a.indexed ? "idx" : "plain", a_a.indexCount, a_a.instances, a_s.vsInfo ? a_s.vsInfo->hash : 0, a_s.psInfo ? a_s.psInfo->hash : 0, blend, tex);
+			a_a.indexed ? "idx" : "plain", a_a.indexCount, a_a.instances, a_s.vsInfo ? a_s.vsInfo->hash : 0, a_s.psInfo ? a_s.psInfo->hash : 0, blend, tex, job);
 	}
 }

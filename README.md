@@ -1,7 +1,7 @@
 # PhantomRing
 
 Play Elden Ring as Venom Snake. MGSV runs hidden in the background and supplies Snake himself:
-his movement, stances, CQC, weapons, animation, life and his battle buddy (D-Walker first). Elden
+his movement, stances, CQC, weapons, animation, life and his battle buddy (D-Walker, D-Horse, D-Dog). Elden
 Ring runs its world, enemies, bosses, quests and saves, and draws everything.
 
 Neither game is rewritten. An Elden Ring plugin and an MGSV plugin talk to each other through shared
@@ -206,7 +206,7 @@ Elden Ring's quick item):
 | D-pad | tap up: primary weapons (by default an SVG-76 assault rifle at the hip and an FB MR R-LAUNCHER rocket launcher on the back: hold up and push the right stick to switch), down: handgun (a WU S.PISTOL with tranquilizer darts), right: support items (grenades, mines, C4: Y sets it off), left: items -- hold it and push the right stick to pick one (the cardboard box, the night-vision goggles), a quick tap uses the one picked |
 | RB (while aiming) | first person / down the scope: you aim with the gun's own sights (MGSV shows no reticle there) |
 | RB (hold, not aiming) | MGSV's binoculars (right stick looks, zoom as in MGSV): keep an Elden Ring character near the middle for half a second to **mark** him (below) |
-| LB (hold) | MGSV's call menu: D-Walker's orders (below) |
+| LB (hold) | MGSV's call menu: D-Walker's or D-Dog's orders (below); with D-Dog out an amber paw marks the enemy he would take |
 | **Start** | **Elden Ring's** menu (equipment, items, system, quit) |
 | **View, tapped** | **Elden Ring's** map (and fast travel from it) |
 | **View, held (let go after 0.4 s, or held 1 s)** | **MGSV's iDroid** (supply drops, buddy support, Mother Base); while it is open MGSV has the whole pad; Start closes it |
@@ -246,8 +246,8 @@ time you use the keyboard (`virtual_pad = auto`), so the first key press may tak
 front of Snake (within ~1.6 m) answers: **hold RT** next to him and he is caught and held in place for a few seconds; **keep
 holding** and Snake chokes him to sleep (2.5 s); **LB** while holding interrogates him (he says something in the corner);
 **let go** to release him; **RT with the stick pushed toward him** throws him to the ground. Apart from a token 1 HP (so
-Elden Ring plays the flinch) none of it does damage of its own (MGSV's punch that comes with the press does). Bosses (and
-anything with 2000 HP or more) can't be grabbed: they only stagger. Once let go, the same enemy can't be held again for 8
+Elden Ring plays the flinch) none of it does damage of its own (MGSV's punch that comes with the press does). Bosses (Elden Ring's own mark of one,
+or 2000 HP or more) can't be grabbed: they only stagger. Once let go, the same enemy can't be held again for 8
 seconds (grabbing him only makes him flinch).
 
 **Tarnished mode.** Everything Snake can't do yet, the Tarnished does: hold **View + Start together for a second** and the
@@ -300,13 +300,44 @@ few times you hold LB it also shows how, and it tells you when you let go withou
   flamethrower; hold Y to get off. If D-Walker is ever destroyed in MGSV's world, PhantomRing has MGSV bring it back
   after ~10 s (not yet seen live).
 
+**Ordering D-Dog** (new in 0.8.0, run live with both games, **on by default**; nothing of it runs while D-Dog isn't out). Deploy
+D-Dog from the iDroid (below). He follows Snake as in MGSV, without jumping when MGSV's world moves under Snake or when MGSV's own leap
+snaps him onto his target (what Elden Ring shows of him never moves more than half a metre a frame), and he works on Elden Ring's
+enemies:
+- **He smells them.** Hostile enemies within ~40 m of the dog get a **hollow red mark** (seen through walls, the distance only near the
+  middle of the view), and the corner says "D-Dog: Found enemy (3 nearby)". The binoculars still mark one for good.
+- **Attack orders.** Look at the enemy (near the middle of the view, 3.5-25 m away, in sight, with a straight run for the dog), hold
+  **LB** -- an amber **paw** shows over the one he will take -- push the **right stick** to the attack entry (right; its name is his
+  equipment's), **let the stick go**, then **click it in**. MGSV's dog runs, leaps and bites with its own animation, and Elden Ring's
+  enemy gets:
+
+  | His equipment (iDroid > Missions > Buddy Support > Change Equipment) | The order | In Elden Ring |
+  |---|---|---|
+  | Naked | Keep 'em busy | held in place 6 s (no attack, no move), flinching: walk up and CQC him, or slip past |
+  | Sneaking suit, knife | Do it (kill enemy) | MGSV's knife share: an ordinary soldier dies |
+  | Sneaking suit, stun knife | Do it (knock out enemy) | asleep (then fulton him, or let D-Dog's "Get it" do it) |
+  | Battledress | Do it (wound enemy) | knocked down to 1 HP |
+  | Tactical vest (Fulton) | Get it | a **sleeping** enemy fultoned by the dog: he goes up under MGSV's balloon, you get his runes |
+
+  The one the paw showed over stays his for a moment while you let the stick go and click, even if he steps behind a post. No one
+  to take: the corner says why ("he is out of sight", "he is too close -- CQC him", "D-Dog can't run to him straight (a wall in the
+  way)", "D-Dog: look at an enemy (25 m)"), and the dog stays with you.
+- **Never a friend.** Only enemies Elden Ring makes the Tarnished's are ever picked, bitten or barked at: never a merchant, a quest
+  character, a spirit summon or a neutral one (live: one lying 1 m from a soldier, dead centre, was never picked; the soldier was).
+  **Never a boss**: Elden Ring's own boss mark (every boss, even a small catacomb one) or 2000+ HP.
+- **Wait** (the entry just above the attack one): he stays where he is, in Elden Ring too, while you run on -- even where Elden Ring's
+  walls stop Snake and MGSV's Snake runs on; **Whistle** (between Wait and the top) brings him back; **DD** (below the attack one) calls him over. **Bark**, if your save has it: enemies within 20 m of
+  him stop and stare at him for 5 s.
+- Elden Ring's enemies don't attack the dog (yet). Changing his equipment costs GMP in memory only: MGSV never saves.
+- Switches: `[Dog]` in `PhantomRingHost.ini` (the marks, the pick, the bite, Bark, the texts, the step guard, the Wait pin) and in
+  `PhantomRingGuest.ini` (the treadmill, the attack orders, the shown speed, Wait in Elden Ring's terms); with the host's `[Dog] enabled
+  = false` (or `tools/pr er "dog all off"` for one session) the call menu's orders are MGSV's own, as in 0.7.0.
+
 **Changing or dismissing the buddy** (MGSV's own menu): hold View for the iDroid, RB to **Missions** > **Buddy Support**: pick
 **D-Horse**, **D-Dog** or **D-Walker** and confirm the drop point (A; GMP is spent in memory only, MGSV never saves), or **Dismiss**
 the one that is out. MGSV sends the old one away (a dismissed D-Horse leaves under a Fulton balloon, in Elden Ring's sky too) and
 the new one arrives in 10-30 s; the corner says "Buddy: D-Dog is out" / "D-Walker dismissed -- no buddy now". With no buddy out
-nothing is drawn or placed. D-Dog follows Snake, but doesn't fight or mark Elden Ring's enemies yet (its "D-Dog: Found enemy" is MGSV
-talking about MGSV's own sandbox; D-Dog as a real battle buddy is the next step, [docs/research/ddog.md](docs/research/ddog.md));
-Quiet is untested. The next
+nothing is drawn or placed. D-Dog: [Ordering D-Dog](#how-to-play) above (before 0.8.0 he only followed Snake). Quiet is untested. The next
 launch deploys the ini's buddy again (`[Buddy] Type`).
 
 **D-Horse instead of D-Walker** (optional): set `[Buddy] Type = horse` in `PhantomRingGuest.ini` (in MGSV's folder) before
@@ -538,8 +569,8 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
 - Decoys are thrown (LT, then RT); a popped or dropped one stays standing in MGSV's own sandbox (`DecoyPopInMgsv` off), which
   holds 32 placed objects (live: 9 decoys out, still throwing).
 - CQC holds, throws and chokes are Elden Ring's own reactions (a hold in place, a knockdown, sleep), not MGSV's paired
-  animations: Snake grabs the air in MGSV. Bosses are told apart by their HP only, so a small field boss (under 2000 HP) can
-  be held. The punch that comes with each RT press was seen twice (0.4.0) to cost a held or guarding soldier a second ~25 HP a
+  animations: Snake grabs the air in MGSV. Since 0.8.0 a boss is told by Elden Ring's own mark (its NpcParam row) as well as by its
+  HP, so a small field or catacomb boss can no longer be held. The punch that comes with each RT press was seen twice (0.4.0) to cost a held or guarding soldier a second ~25 HP a
   moment later; chased in 0.6.0 (one melee event per strike, one hit per bullet, HP read ~14 times a second after each punch, free
   and held soldiers, the real MGSV's punches: 27 each, nothing after) and not reproduced. The hold and the throw take 1 HP.
 - After loading a save Elden Ring wrote while the Tarnished was dying (the game killed during or right after a death, not quit
@@ -593,6 +624,13 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   Anything that stopped Snake's control in a death's first frames (a stray View + Start, MGSV's heartbeat) showed him; live with
   both games after the fix, a console death, a 36 m fall and four kills by Godrick soldiers: Snake lying where he died, never the
   Tarnished, until the respawn. Tell us if you still see it (`build/PhantomRingHost.log` has a "death trace" line for each death).
+- D-Dog (on by default since 0.8.0's integration run with both games: two 10-minute runs, 40 orders, every suit, 0 MGSV alerts,
+  0 warnings; the dog as drawn at most 0.49 m a frame): MGSV's green marker over the dog (with its distance) still shows now and then
+  while it bites. Elden Ring's enemies don't attack the dog, and whether Snake's MGSV rounds hurt it while it bites is untested. An
+  order can still be refused at the click when the enemy steps out of sight or within 3.5 m before the paw shows ("he is too close --
+  CQC him"); clutter (barrels, spikes, rubble) refuses many straight runs; the corner says why. Indoors under a low arch the dog can be
+  drawn on top of it for a moment. "D-Dog: Found enemy" is PhantomRing's line (MGSV's own announcement isn't used). Not tried live:
+  `[Dog] bosses = stagger`, a real Elden Ring dog as the target. Turn it off with `[Dog] enabled = false` in `PhantomRingHost.ini`.
 - D-Horse: galloping in Limgrave's broken ground often ends at a wall or off a cliff (three fall deaths around Agheel Lake in
   pass B); the road east from Gatefront is a good 300 m run. Quiet is untested.
 - At a ladder's top, walking into the hole drops Snake down the shaft (press Y on "Descend" instead).
@@ -684,7 +722,25 @@ run the offline tests above first, and keep to the project's rules:
 | 6 | MGSV collision from Elden Ring (vault, climb, cover), proxies for native MGSV combat | done, live (0.5.0): climb up / vault over Elden Ring's ledges and Snake on its ladders with MGSV's own moves; Fulton of sleeping enemies done; cover not yet; full proxies experimental, off |
 | 7 | Windows players ([docs/WINDOWS.md](docs/WINDOWS.md)) | built, tested under Wine; not yet run on Windows |
 | 8 | Seamless Co-op | planned |
-| -- | D-Dog as a real battle buddy (orders on Elden Ring's enemies, its bite) | next: design study [docs/research/ddog.md](docs/research/ddog.md) |
+| -- | D-Dog as a real battle buddy (spotting, Bark, Wait, the attack orders and Get it on Elden Ring's enemies with MGSV's own bite) | done, live (0.8.0), on by default: [Ordering D-Dog](#how-to-play), [docs/research/ddog.md](docs/research/ddog.md) |
+
+## What's new in 0.8.0
+
+The player's next ask, D-Dog as a battle buddy, run live with both games and on by default ([Ordering D-Dog](#how-to-play)):
+- **D-Dog stays beside Snake, smoothly.** MGSV's world moves under Snake as he runs; the dog is now moved with it (it used to jump
+  ~6 m in Elden Ring every few seconds), comes along to MGSV's ladders and ledges, and never moves more than half a metre a frame in
+  Elden Ring -- his leap onto an enemy is a leap, not a snap. **Wait** keeps him on his Elden Ring spot while you run on, even where
+  Elden Ring's walls stop Snake; **Whistle** brings him back.
+- **He smells Elden Ring's enemies** within ~40 m: hollow red marks through walls, "D-Dog: Found enemy (N nearby)".
+- **Attack orders on the enemy you look at**, with MGSV's own run, leap and bite: hold LB (an amber paw marks the one he will take),
+  pick the attack entry, let the stick go, click -- the one the paw showed over stays his through the click. Keep 'em busy (held
+  6 s), Do it: kill / knock out / wound, as his equipment has it, and **Get it** (he
+  fultons a sleeping enemy; runes as from Snake's Fulton). Never a friendly or neutral character, a merchant, a spirit summon or a
+  boss. **Bark** makes the enemies near him stop and stare.
+- **Bosses are now told by Elden Ring's own mark** (their NpcParam row), not only by HP: a small catacomb or evergaol boss can no
+  longer be held by CQC, made to stare by a decoy or the box poster, or fultoned.
+- D-Walker after D-Dog follows at once again (D-Dog's orders used to pause its following until a whistle).
+- Protocol v17: both plugins must come from this release.
 
 ## What's new in 0.7.0
 
@@ -749,6 +805,27 @@ From the feedback on the video ("Snake can't jump", "it switches back to the Tar
 - Protocol v15: both plugins must come from this release.
 
 ## Changes
+
+**0.8.0-alpha (2026-11-04).** D-Dog as a battle buddy (protocol v17: `kActorDogTarget`, `kBuddyEngaged`, `kGEvDogAttack`,
+`kHostDogLayer`, D-Dog's style in buddyFlags; [What's new in 0.8.0](#whats-new-in-080)): the dog moved with MGSV's treadmill, and
+spotting, the pick and its paw, Bark, Wait, the attack orders and Get it on Elden Ring's enemies (on by default). Fixes of the round's code
+review: the guest takes the attack orders over only while the host's layer is on (it whistled the dog back with nothing on screen),
+D-Dog's style published every frame ("Get it" picked awake enemies), the player's Wait / DD no longer undone by our whistle, the dog's
+stand-in soldier kept when Snake walks up to the held enemy, a data race on the dog job's texts, the alert guard re-armed, bosses by
+NpcParam's boss bit, no bite on an enemy under a Fulton balloon or in Snake's hold, a second busy bite no longer lets go, nothing applied
+while D-Dog isn't live, LB while MGSV's menu is up, no failure text after the player's own whistle, the floor search capped at 30 m.
+Found in the integration run and fixed: the stun knife and the knife were swapped (the stun knife was applied as a kill), a missed kill
+or wound bullet now still deals its damage, the dog system forgotten while no dog is out (400 garbage style reads in one re-equip),
+D-Dog's orders no longer pause D-Walker's following. Its polish (each side live, then together with both games): the bitten stand-in
+soldier held, what Elden Ring is shown of the dog never faster than it runs, MGSV's undone moves given again, the dog taken along to
+MGSV's ladders and ledges, Wait in Elden Ring's terms (the guest's slip from the characters around Snake, the host's from Snake's own),
+MGSV's order markers out of the HUD layer, the shown pick kept through the click, the dog's place and drawn body guarded against
+one-frame jumps. Fixes of the polish's review: MGSV's markers no longer stay hidden after an order cut short; the slip's baseline only
+from a settled table, a patrol or a teleport no longer taken for it; a bite from Wait lands on its enemy (the Wait's correction goes
+with the dog's run, and an attack order ends the host's pin); the latch re-checks the clear run; a far jump never glides in view; an
+Elden Ring shove no longer resets the guards; `[Dog] enabled = false` turns all of it off. Found in the integration run and fixed: the
+host's draw guard watched an estimate of the dog's place that jumped metres as the dog turned, and moved the real body by it; it now
+watches the dog's published place. Run live with both games on Elden Ring 1.17.2 ([docs/STATUS.md](docs/STATUS.md)).
 
 **0.7.0-alpha (2026-11-03).** The sleep pistol's suppressor and shots heard by Elden Ring's enemies (protocol v16:
 `kGuestSuppressorOn`, `kFireSuppressed`), the one-press quick item, the controls card, Elden Ring's bars hidden for Snake, the

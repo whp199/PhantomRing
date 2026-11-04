@@ -36,6 +36,14 @@ namespace phantom::er::cqc
 		return combat::Bigness(a_maxHp, a_s) >= a_r.bossBigness;
 	}
 
+	bool IsBoss(std::int32_t a_maxHp, std::optional<bool> a_npcBoss, const combat::Scaling& a_s, const Rules& a_r)
+	{
+		if (a_npcBoss.value_or(false) || IsBoss(a_maxHp, a_s, a_r)) {
+			return true;
+		}
+		return !a_npcBoss && combat::Bigness(a_maxHp, a_s) > 0.0f;
+	}
+
 	bool NeedsHold(proto::CqcAction a_action) { return a_action == proto::kCqcChoke || a_action == proto::kCqcInterrogate || a_action == proto::kCqcHold; }
 
 	Response Respond(proto::CqcAction a_action, const Situation& a_s)

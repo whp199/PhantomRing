@@ -1,5 +1,6 @@
 #include "WorldShift.h"
 
+#include "Buddy.h"
 #include "Explosion.h"
 #include "Fulton.h"
 #include "Game.h"
@@ -58,6 +59,7 @@ namespace phantom::er::WorldShift
 			Decoys::OnWorldShift(*d);
 			Rounds::OnWorldShift(*d);
 			Puppet::OnWorldShift(*d);
+			Buddy::OnWorldShift(*d);
 			Explosion::OnWorldShift(*d);
 			Fulton::OnWorldShift(*d);
 			Host::OnWorldShift(*d);

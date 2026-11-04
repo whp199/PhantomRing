@@ -23,6 +23,9 @@ namespace phantom::guest::capture
 	void NoteFrame(std::uint64_t a_frame, const float a_root[3], float a_yaw, const float a_camPos[3]);
 	// Snake's deployed buddy (Frame.cpp): where to look for its draws.
 	void NoteBuddy(bool a_present, const float a_pos[3]);
+	// D-Dog (Frame.cpp, every frame it is out, after NoteFrame): its draws of that frame are published moved by a_offset (MGSV world)
+	// -- the difference between where the guest publishes it (Dog.h Display, Snake's staging) and where MGSV has it.
+	void NoteBuddyOffset(std::uint64_t a_frame, const float a_offset[3]);
 
 	// MGSV's real vertical field of view (rad), from the projection matrix its G-buffer draws use
 	// (cVSScene.m_projection); 0 until one has been seen. Exact, unlike the focal-length estimate.

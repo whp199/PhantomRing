@@ -28,7 +28,7 @@
 namespace phantom::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x47524850;  // "PHRG"
-	inline constexpr std::uint32_t kVersion = 16;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
+	inline constexpr std::uint32_t kVersion = 17;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
 	                                              // v5: kGEvThrow, kGEvPlaced, kGEvPlacedGone, kHEvDetonate;
 	                                              // v6: GuestState aimThrow* (0xA8..0xC4) + kGuestThrowAim; v7: kGEvBuddyOrder;
 	                                              // v8: kGuestInBox, kGuestBoxPoster, kGEvFire pad[1] = MGSV damage share;
@@ -40,7 +40,10 @@ namespace phantom::proto
 	                                              //      kOwnerProjectile;
 	                                              // v14: kGuestJumping;
 	                                              // v15: kGuestClimbing, kGuestMantling, kHEvClimb, kHEvMantle;
-	                                              // v16: kGuestSuppressorOn, kFireSuppressed (kGEvFire b)
+	                                              // v16: kGuestSuppressorOn, kFireSuppressed (kGEvFire b);
+	                                              // v17: kActorDogTarget, kBuddyEngaged, kGEvDogAttack + DogPhase / DogStyle,
+	                                              //      kGEvBuddyOrder pad[0] = D-Dog's style, kHostDogLayer, buddyFlags'
+	                                              //      kBuddyDogStyleMask (docs/research/ddog.md §4)
 	inline constexpr wchar_t       kDefaultMapping[] = L"file:Z:\\dev\\shm\\phantomring_v1";
 
 	// ---- region offsets ---------------------------------------------------------------------
@@ -119,6 +122,9 @@ namespace phantom::proto
 		kHostPuppeting = 1u << 3,   // MGSV drives the Elden Ring player right now
 		kHostPlayerDead = 1u << 4,  // the Elden Ring player is dead (death screen / respawn)
 		kHostCutscene = 1u << 5,
+		kHostDogLayer = 1u << 6,    // (v17) the host's D-Dog layer is on ([Dog] enabled): it picks D-Dog's target (kActorDogTarget) and
+		                            // applies its bites. Only while this is set does the guest take the player's attack orders (11-15)
+		                            // over for an Elden Ring enemy; otherwise they keep MGSV's own meaning (0.7.0's D-Dog)
 	};
 
 	struct HostState
@@ -234,7 +240,14 @@ namespace phantom::proto
 		kBuddyRidden = 1u << 2,    // Snake is riding it (D-Walker, D-Horse)
 		kBuddyLoading = 1u << 3,   // MGSV is loading/calling it
 		kBuddyMissing = 1u << 4,   // configured but not available in this save (not developed / dead)
+		kBuddyEngaged = 1u << 5,   // (v17) the buddy carries out an attack/fetch order on an Elden Ring target: set from kGEvDogAttack
+		                           // kDogConnected until its kDogReleased (D-Dog only so far)
 	};
+	// (v17) buddyFlags bits 8-15 while D-Dog is out: its DogStyle + 1 (what its equipment makes of the attack orders 11-15), 0 =
+	// unknown or another buddy. Published every frame, so the host picks for the right style before any order ("Get it" takes
+	// sleepers only).
+	inline constexpr std::uint32_t kBuddyDogStyleShift = 8;
+	inline constexpr std::uint32_t kBuddyDogStyleMask = 0xFFu << kBuddyDogStyleShift;
 
 	// ---- pad @0x400 (host -> guest, seqlock) ------------------------------------------------------
 	// The real controller as Elden Ring's XInput sees it; the guest returns it from its own
@@ -320,7 +333,10 @@ namespace phantom::proto
 		// v7: the player gave the buddy an order through MGSV's own call menu (hold LB, right stick, click it). MGSV answers in
 		// its own way (a voice line, its HUD's log); the host shows it plainly too, so a player can tell an order was given.
 		kGEvBuddyOrder = 11,   // a = MGSV buddy command (20 whistle D-Walker, 21 Normal, 24 Stealth, 25 Search, 26 Intercept Mode,
-		                       // others: other buddies; docs/GUEST.md 18.3), b = MGSV buddy type (BuddyType: 4 = D-Walker)
+		                       // 8-16 D-Dog: 8 whistle, 9 wait, 10 bark, 11-15 its attack/fetch, 16 DD; others: other buddies;
+		                       // docs/GUEST.md 18.3, docs/research/ddog.md §2.1), b = MGSV buddy type (BuddyType: 4 = D-Walker,
+		                       // 2 = D-Dog); (v17) pad[0] = DogStyle + 1 for D-Dog's orders (b == 2: the style its equipment gives
+		                       // commands 11-15), 0 = unknown or another buddy
 		kGEvFulton = 12,       // (v12) Snake fultoned the MGSV proxy soldier that stood in for an Elden Ring character (ActorProxy):
 		                       // pad[0] | pad[1] << 32 = that character's ActorRecord handle, v0 = the proxy's position (MGSV world),
 		                       // a = 1 the balloon went up (MGSV's own fulton succeeded), 0 = it failed/was cancelled; the host
@@ -330,7 +346,58 @@ namespace phantom::proto
 		kGEvCqc = 14,          // (v13) a CQC grab/hold/throw/choke/interrogate/release began: a = CqcAction, v0 = Snake (MGSV world),
 		                       // v1 = his facing (unit), b = range (mm) of the grab; pad[0] = MGSV's raw CQC action id; pad[1] = the
 		                       // target: a proxy's ER handle low 32 bits if the grab is on a proxy (ActorProxy), else 0
+		kGEvDogAttack = 15,    // (v17) D-Dog and an Elden Ring target (docs/research/ddog.md §3.5): a = DogPhase | DogStyle << 8 | MGSV
+		                       // attack id << 16 (TppDamage ATK_DDogBite 144 / Knife 145 / StunKnife 146 / BodyAttack 147; 0 =
+		                       // unknown); b = MGSV's damage share of that attack in 1/10000 of a standard soldier's life (as kGEvFire
+		                       // pad[1]; 0 = unknown: the host uses its per-style values); v0 = the dog's feet (MGSV world); v1 = unit
+		                       // direction dog -> target (MGSV world; 0,0,0 = unknown); pad[0] | pad[1] << 32 = the target's
+		                       // ActorRecord handle (0 = none: kDogRefused without a target)
 	};
+
+	enum DogPhase : std::uint32_t  // (v17) kGEvDogAttack a & 0xFF
+	{
+		kDogOrdered = 0,    // MGSV took the order on the target's proxy (the dog runs)
+		kDogConnected = 1,  // the bite / knife landed (MGSV's soldier accepted the dog's attack): the host applies the style's effect
+		kDogReleased = 2,   // the dog let go (or the guest's BusyMaxMs ran out): the host releases its hold
+		kDogRefused = 3,    // nothing happened: no target (handle 0), no proxy in time, or the dog can't take orders now
+		kDogLost = 4,       // ordered but never connected (out of reach, the target gone): the dog is whistled back
+	};
+
+	// (v17) kGEvDogAttack (a >> 8) & 0xFF; kGEvBuddyOrder pad[0] - 1; buddyFlags' kBuddyDogStyleMask - 1. The values are semantic
+	// (what the host applies), not MGSV's style byte (dog system +0xD4 = vars.buddyDogEquipType): raw 0 naked = kDogBusy, 1 Fulton
+	// vest = kDogFetch, 2 stun knife = kDogKnockOut, 3 battledress = kDogWound, 4 knife = kDogKill, 5-7 bite (kDogBusy) -- live
+	// 2026-11-04 with MGSV's own equipment and call-menu labels, docs/research/ddog.md §2.10 #5.
+	enum DogStyle : std::uint32_t
+	{
+		kDogBusy = 0,             // naked: "Keep 'em busy" (bite and pin)
+		kDogFetch = 1,            // Fulton vest: "Get it" (fulton a sleeping one)
+		kDogKill = 2,             // knife (raw style byte 4): "Do it (kill enemy)"
+		kDogKnockOut = 3,         // stun knife (raw style byte 2): "Do it (knock out enemy)"
+		kDogWound = 4,            // battledress (raw style byte 3): "Do it (wound enemy)"
+		kDogStyleUnknown = 0xFF,  // the guest couldn't read it
+	};
+
+	// (v17) kGEvDogAttack a, packed and unpacked.
+	[[nodiscard]] constexpr std::uint32_t DogAttackA(DogPhase a_phase, DogStyle a_style, std::uint32_t a_attackId = 0)
+	{
+		return (static_cast<std::uint32_t>(a_phase) & 0xFFu) | (static_cast<std::uint32_t>(a_style) & 0xFFu) << 8 | (a_attackId & 0xFFFFu) << 16;
+	}
+	[[nodiscard]] constexpr DogPhase      DogAttackPhase(std::uint32_t a_a) { return static_cast<DogPhase>(a_a & 0xFFu); }
+	[[nodiscard]] constexpr DogStyle      DogAttackStyle(std::uint32_t a_a) { return static_cast<DogStyle>((a_a >> 8) & 0xFFu); }
+	[[nodiscard]] constexpr std::uint32_t DogAttackId(std::uint32_t a_a) { return a_a >> 16; }
+	static_assert(DogAttackA(kDogConnected, kDogKill, 145) == 0x00910201u && DogAttackStyle(0x00910201u) == kDogKill && DogAttackId(0x00910201u) == 145);
+	// (v17) buddyFlags' D-Dog style: kDogStyleUnknown when none is published.
+	[[nodiscard]] constexpr std::uint32_t BuddyDogStyleBits(DogStyle a_style)
+	{
+		return a_style <= kDogWound ? (static_cast<std::uint32_t>(a_style) + 1u) << kBuddyDogStyleShift : 0u;
+	}
+	[[nodiscard]] constexpr DogStyle BuddyDogStyle(std::uint32_t a_buddyFlags)
+	{
+		const std::uint32_t v = (a_buddyFlags & kBuddyDogStyleMask) >> kBuddyDogStyleShift;
+		return v >= 1 && v - 1 <= kDogWound ? static_cast<DogStyle>(v - 1) : kDogStyleUnknown;
+	}
+	static_assert(BuddyDogStyle(BuddyDogStyleBits(kDogWound) | kBuddyEngaged) == kDogWound && BuddyDogStyle(kBuddyPresent) == kDogStyleUnknown &&
+	              BuddyDogStyleBits(kDogStyleUnknown) == 0);
 
 	enum CqcAction : std::uint32_t  // (v13) kGEvCqc a
 	{
@@ -438,6 +505,8 @@ namespace phantom::proto
 		kActorBoss = 1u << 2,
 		kActorInCombat = 1u << 3,
 		kActorAsleep = 1u << 4,
+		kActorDogTarget = 1u << 5,  // (v17) the host's pick for D-Dog's next attack/fetch order: hostile, alive, in range, near the view
+		                            // centre, a clear run from the dog, never a boss while [Dog] bosses = off. At most one record.
 	};
 
 	struct ActorRecord

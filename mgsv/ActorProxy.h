@@ -69,7 +69,14 @@ namespace phantom::guest::proxy
 			float         yaw{ 0 };
 			float         distance{ 0 };  // horizontal, from Snake's root
 			bool          asleep{ false }; // kActorAsleep: its proxy sleeps and stays even beside Snake (MGSV's Fulton wants him there)
+			bool          dedicated{ false };  // D-Dog's order target (Dedicate): first to get a soldier, on the ground, never parked for the
+			                                   // buddy's clearance (the dog has to reach him) nor for Snake's (review 0.8.0: Snake walking up
+			                                   // to the enemy the dog holds -- to CQC or fulton him -- disabled the soldier, ended MGSV's
+			                                   // bite and so the host's hold; the pick keeps CQC-range enemies out by target_min instead)
 		};
+
+		// D-Dog's target first (stable otherwise: nearest first, as SelectTargets sorted them); marks it dedicated. Nothing if absent.
+		void PutDedicatedFirst(std::vector<Target>& a_targets, std::uint64_t a_handle);
 
 		// The treadmill offset k = root - odometer over the last ~2 s. It changes only when the guest moves Snake (a
 		// treadmill warp, a native placement, a teleport left out of the odometer); between those it is constant.
@@ -98,6 +105,52 @@ namespace phantom::guest::proxy
 
 		// k = root - odometer, in doubles first (the odometer runs to kilometres; floats would lose centimetres).
 		Vec3 TreadmillOffset(const Vec3& a_root, const double a_odo[3]);
+
+		// Elden Ring's walls stop the puppet where MGSV's flat sandbox lets Snake run on (the "slip": what the odometer asked for
+		// minus what Elden Ring did, in MGSV's axes). The guest isn't told -- but the host maps every Elden Ring character into
+		// MGSV's world through Snake's place in both games, so a character standing still in Elden Ring moves in odometer space
+		// (his MGSV place minus k) by exactly the slip. From Begin() on, each new table: every character's move since then; the
+		// slip so far is their median when most of them agree (within a_agree), at least 2 do, and it is no longer than Snake's own
+		// path meanwhile (a wall takes at most what he ran) -- and each change of it no longer than his path since the last level
+		// taken, never against his motion: characters walking together (a patrol) while Snake stands or runs another way are not
+		// the slip. One character, a table torn or around a treadmill jump add nothing (the last level holds; the baseline waits for
+		// a settled table); a character first seen later counts from then on as still; everyone jumping at once by more than Snake's
+		// MGSV motion between two tables is Elden Ring teleporting Snake (counted anew from there, the level kept). Used to keep
+		// a waiting D-Dog where Elden Ring saw it wait (Dog.cpp; docs/research/ddog.md §9).
+		struct SlipSample
+		{
+			std::uint64_t handle{ 0 };
+			Vec3          q;  // the character's MGSV place minus k at the table's time
+		};
+		class SlipObserver
+		{
+		public:
+			void Begin() { m_pending = true; }
+			void Stop() { m_begun = m_pending = false; }
+			// One new table. a_settled = false (k changed lately: a treadmill jump, a placement) keeps the level as it is, and the
+			// baseline waits for the first settled table. A new level is taken only when it changed by no more than Snake's path since
+			// the last one taken (+0.1 m) and not against his motion: walls only take back what he just ran.
+			bool Update(const std::vector<SlipSample>& a_samples, const Vec3& a_odo, bool a_settled, float a_agree = 0.15f);
+			[[nodiscard]] Vec3          Level() const { return m_level; }  // the slip since Begin (horizontal)
+			[[nodiscard]] bool          Active() const { return m_begun; }
+			[[nodiscard]] float         Path() const { return m_path; }
+			[[nodiscard]] std::uint64_t Taken() const { return m_taken; }
+			[[nodiscard]] std::uint64_t Refused() const { return m_refused; }
+			[[nodiscard]] std::uint64_t Rebased() const { return m_rebased; }  // teleports seen (the characters counted anew)
+
+		private:
+			std::vector<SlipSample> m_base;  // each character's q when first seen (minus the level then)
+			bool                    m_pending{ false }, m_begun{ false };
+			Vec3                    m_level, m_lastOdo;
+			float                   m_path{ 0.0f };
+			float                   m_levelPath{ 0.0f };  // m_path when the level was last taken
+			Vec3                    m_levelOdo;           // the odometer then
+			Vec3                    m_prevM;              // the last settled table's median move (a teleport: it jumps)
+			float                   m_prevPath{ 0.0f };   // m_path at that table
+			bool                    m_havePrev{ false };
+			std::uint64_t           m_rebased{ 0 };
+			std::uint64_t           m_taken{ 0 }, m_refused{ 0 };
+		};
 
 		// The hostile, living, finite records of a table, corrected for the treadmill warps since the table was built
 		// (pos + kNow - kThen), within maxDistance of Snake, nearest first.
@@ -234,6 +287,44 @@ namespace phantom::guest::proxy
 	// Every pool soldier and hostage read back where it was put (proxies and parked alike): nothing disabled stands around.
 	[[nodiscard]] bool AllPlaced();
 	std::string Describe();  // `!proxy`
+
+	// D-Dog's attack orders (Dog.cpp, docs/research/ddog.md §3.5): one Elden Ring character gets a slot soldier of his own for the
+	// order's length -- awake or asleep, [Proxies] on or off (the pool exists whenever ProxiesRun) -- enabled inert (restrict-notice,
+	// and puppet unless a_puppet is false: [Dog] TargetPuppet) before his first update, standing on the sandbox ground at the
+	// character's x/z, never parked for the buddy's clearance (the dog has to reach him); MGSV's alert phase is held at 0 while he is
+	// out (the phase lock; if it can't be held, dog::DisableAttack). Release() ends it (the soldier goes back to what the slot is
+	// without it: disabled, or a sleeping / full proxy). Lua thread or console.
+	void Dedicate(std::uint64_t a_handle, bool a_puppet);
+	void Release(const char* a_why);
+	// D-Dog's attack has its soldier (Dog.cpp, game thread, every frame before OnFrame): from the bite's start to its end MGSV's paired
+	// animation moves him and the dog together, so he is no longer put back onto the character's place -- only moved along with Snake's
+	// treadmill jumps (the dog is moved by the same jump in the same frame).
+	void HoldDedicated(bool a_held);
+	// The slip (plan::SlipObserver; horizontal, MGSV axes) since SlipBegin: what Elden Ring's walls kept Snake from doing of his MGSV
+	// motion, as seen in the characters around him. SlipBegin / SlipStop: game thread (D-Dog's Wait). Slip: any thread.
+	void        SlipBegin();
+	void        SlipStop();
+	logic::Vec3 Slip();
+	// A fresh alert guard (the phase lock's give-up is latched once per guard): `!dog attack on` after a give-up turned Attack off,
+	// so that a later alert MGSV can't calm turns it off again. Lua thread or console.
+	void RearmPhaseGuard(const char* a_why);
+	struct Dedicated
+	{
+		std::uint64_t handle{ 0 };       // 0: none
+		std::uint16_t soldier{ 0xFFFF }; // his slot soldier (0xFFFF: no slot yet)
+		bool          ready{ false };    // realized, placed where he should be (the order may go)
+		bool          asleep{ false };
+		logic::Vec3   pos;               // where the soldier is put (MGSV world, on the sandbox ground)
+		logic::Vec3   real;              // where the character is (MGSV world)
+		logic::Vec3   at;                // where his location object's feet were at the last OnFrame (atValid)
+		bool          atValid{ false };
+		bool          placed{ false };   // the last OnFrame put him there (his setter called)
+	};
+	Dedicated DedicatedState();
+	// The Elden Ring character a slot soldier stands in for (0: none). Any thread, no game call under its lock (the dog-attack detour).
+	std::uint64_t HandleOfSoldier(std::uint16_t a_soldier);
+	// MGSV's balloon took this character's proxy (kGEvFulton a=1 sent) this session.
+	bool Fultoned(std::uint64_t a_handle);
 
 	// Fulton (protocol v12 kGEvFulton): Snake's fulton of the proxy soldier that stands in for Elden Ring character a_handle
 	// succeeded (a_ok) or failed. Sends the event (v0 = where the proxy stood, else the character's ActorTable position, else

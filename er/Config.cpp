@@ -799,6 +799,42 @@ namespace phantom::er
 		nf("per_second", nz.perSecond);
 		nz.wornNote = ini.GetBool("Noise", "worn_note", nz.wornNote);
 		nz.wornWindowMs = static_cast<int>(ini.GetInt("Noise", "worn_window_ms", nz.wornWindowMs));
+
+		// [Dog] (protocol v17, docs/research/ddog.md §5; er/Dog.h)
+		auto& dg = dog;
+		const auto df = [&](const char* a_key, float& a_value) { a_value = std::max(0.0f, static_cast<float>(ini.GetFloat("Dog", a_key, a_value))); };
+		dg.enabled = ini.GetBool("Dog", "enabled", dg.enabled);
+		dg.spot = ini.GetBool("Dog", "spot", dg.spot);
+		df("spot_range", dg.spotRange);
+		df("spot_height", dg.spotHeight);
+		df("spot_linger", dg.spotLinger);
+		df("spot_text_every", dg.spotTextEvery);
+		df("target_range", dg.targetRange);
+		df("target_min", dg.targetMin);
+		dg.targetConeDeg = std::clamp(static_cast<float>(ini.GetFloat("Dog", "target_cone_deg", dg.targetConeDeg)), 0.5f, 90.0f);
+		dg.targetMarkedFirst = ini.GetBool("Dog", "target_marked_first", dg.targetMarkedFirst);
+		dg.clearRun = ini.GetBool("Dog", "clear_run", dg.clearRun);
+		df("run_step_max", dg.runStepMax);
+		dg.indicator = ini.GetBool("Dog", "indicator", dg.indicator);
+		dg.bosses = ini.Get("Dog", "bosses", dg.bosses);
+		if (dg.bosses != "off" && dg.bosses != "stagger") {
+			Log::Warn("[Dog] bosses = {} is not off|stagger; using off", dg.bosses);
+			dg.bosses = "off";
+		}
+		df("busy_hold", dg.busyHold);
+		df("busy_flinch_every", dg.busyFlinchEvery);
+		df("kill_share_mult", dg.killShareMult);
+		df("kill_share_fallback", dg.killShareFallback);
+		df("wound_share", dg.woundShare);
+		df("knockout_sleep", dg.knockoutSleep);
+		dg.bark = ini.GetBool("Dog", "bark", dg.bark);
+		df("bark_range", dg.barkRange);
+		df("bark_stare", dg.barkStare);
+		df("bark_cooldown", dg.barkCooldown);
+		dg.orderText = ini.GetBool("Dog", "order_text", dg.orderText);
+		dg.pickLatchMs = std::clamp(static_cast<int>(ini.GetInt("Dog", "pick_latch_ms", dg.pickLatchMs)), 0, 5000);
+		dg.stepGuard = ini.GetBool("Dog", "step_guard", dg.stepGuard);
+		dg.waitPin = ini.GetBool("Dog", "wait_pin", dg.waitPin);
 		return found;
 	}
 }

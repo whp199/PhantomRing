@@ -50,10 +50,15 @@ namespace phantom::er
 			std::uint64_t   handle{ 0 };
 			Quat            orientation;
 			std::int32_t    maxHp{ 0 };
+			std::int32_t    npcParam{ 0 };
 		};
 		std::vector<Foe> HostilesNear(const Frame& a_frame, const Vec3& a_centre, float a_radius);
 		// Is a character of that team hostile to the Tarnished (Elden Ring's team relation table, the rule every hit uses)?
 		bool HostileToPlayer(const Frame& a_frame, std::uint8_t a_team);
+		// The same for a character (a validated ChrIns) by the team Elden Ring's GetTeamType gives him -- the read every hit's
+		// target list uses, which may differ from his raw ChrIns+0x6C byte. D-Dog (er/Dog.cpp) asks both: either one saying "not
+		// hostile" keeps him out of its pick, its bite and its bark.
+		bool HostileChr(const Frame& a_frame, std::uint8_t* a_chr);
 		// Is the character asleep (Elden Ring's sleep status: a sleep build-up row, stateInfo 436, still on it next to the
 		// "helpless" row, stateInfo 434, that comes with the proc; live 2026-10-14, a Stormveil soldier slept by our ladder:
 		// 25019 (436) and 54 (434) from 0.9 s to 4.4 s, both gone when he woke at ~5 s; 434 alone is a stance break)?

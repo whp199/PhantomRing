@@ -29,8 +29,9 @@ namespace phantom::er
 			kDot,   // emissive soft disc facing the camera (arc dots, a mine's light)
 			kBall,  // a small lit ball facing the camera (a grenade, a mine's body)
 			kRing,  // emissive ring lying on a surface (the landing marker)
-			kTriangle,  // a flat triangle pointing down, dark-edged, facing the camera (MGSV's mark over a character)
-			kGlyph,     // a seven-segment digit facing the camera, dark-edged: inner = 0..9, 10 = 'm' (a marker's distance)
+			kTriangle,  // a flat triangle pointing down, dark-edged, facing the camera (MGSV's mark over a character); inner > 0:
+			            // hollow, a band that wide (corner units: D-Dog's provisional marks)
+			kGlyph,     // a seven-segment digit facing the camera, dark-edged: inner = 0..9, 10 = 'm' (a marker's distance), 11 = a paw
 		};
 		Shape shape{ Shape::kDot };
 		Vec3  pos;                 // ER world (Havok space)
@@ -52,6 +53,7 @@ namespace phantom::er
 			kFulton,  // MGSV's Fulton balloon over an Elden Ring enemy (er/Fulton.h)
 			kMarking, // binocular marks over Elden Ring characters (er/Marking.h)
 			kDecoys,  // Snake's decoys (er/Decoys.h)
+			kDog,     // D-Dog's paw over the enemy its next attack order takes, while LB is held (er/Dog.h)
 			kCount,
 		};
 		void Set(Owner a_owner, std::vector<Marker> a_markers);
