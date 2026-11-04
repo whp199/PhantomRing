@@ -82,7 +82,13 @@ namespace phantom::er::InputBridge
 		// (er/QuickItem.h), and those presses kept out of MGSV's pad until released (X: MGSV's dive, D-pad down: its handgun).
 		std::atomic<std::uint32_t> g_itemUses{ 0 };
 		std::atomic<std::uint32_t> g_itemCycles{ 0 };
+		std::atomic<std::uint32_t> g_helpPresses{ 0 };
 		std::atomic<std::uint16_t> g_itemMask{ 0 };
+		// (0.7.0) The controls card's A (er/Hud.cpp): kept out of MGSV's pad from the press that closed the card until released.
+		std::atomic<bool>          g_cardUp{ false };
+		std::atomic<std::uint32_t> g_cardCloses{ 0 };
+		std::uint16_t              g_cardHeld{ 0 };   // Publish only (under g_publishLock)
+		std::uint16_t              g_cardPrev{ 0 };
 		// PressErButtons: Elden Ring alone sees these buttons pressed, each until its own deadline (the hidden Tarnished uses / cycles
 		// his quick item; er/ErPresses.h).
 		ErPresses g_erPresses;
@@ -104,12 +110,14 @@ namespace phantom::er::InputBridge
 			p.chordMs = c.chordMs;
 			p.chordWindowMs = c.chordWindowMs;
 			p.itemShift = c.flask && (c.flaskButton | c.flaskCycleButton) != 0;
+			p.helpShift = c.overlay.cardButton != 0 && c.overlay.controlsCard != "off";
 			PadGate::Input in;
 			in.nowMs = ::GetTickCount64();
 			in.start = (a_buttons & XINPUT_GAMEPAD_START) != 0;
 			in.view = (a_buttons & XINPUT_GAMEPAD_BACK) != 0;
 			in.item = c.flaskButton && (a_buttons & c.flaskButton) != 0;
 			in.cycle = c.flaskCycleButton && (a_buttons & c.flaskCycleButton) != 0;
+			in.help = c.overlay.cardButton && (a_buttons & c.overlay.cardButton) != 0;
 			in.mode = static_cast<PadGate::Mode>(g_padMode.load(std::memory_order_relaxed));
 			const auto o = g_gate.Update(in, p);
 			if (!in.view) {
@@ -139,7 +147,11 @@ namespace phantom::er::InputBridge
 			if (o.itemCycles) {
 				g_itemCycles.fetch_add(static_cast<std::uint32_t>(o.itemCycles), std::memory_order_relaxed);
 			}
-			g_itemMask.store(static_cast<std::uint16_t>((o.guestMaskItem ? c.flaskButton : 0) | (o.guestMaskCycle ? c.flaskCycleButton : 0)),
+			if (o.helpPresses) {
+				g_helpPresses.fetch_add(static_cast<std::uint32_t>(o.helpPresses), std::memory_order_relaxed);
+			}
+			g_itemMask.store(static_cast<std::uint16_t>((o.guestMaskItem ? c.flaskButton : 0) | (o.guestMaskCycle ? c.flaskCycleButton : 0) |
+			                                            (o.guestMaskHelp ? c.overlay.cardButton : 0)),
 				std::memory_order_relaxed);
 			g_erStart.store(o.erStart, std::memory_order_relaxed);
 			g_erBack.store(o.erView, std::memory_order_relaxed);
@@ -208,6 +220,16 @@ namespace phantom::er::InputBridge
 					g_rtHeldOver = g_rtHeldOver && g.bRightTrigger >= kTriggerDown;
 				}
 				pad.buttons = static_cast<std::uint16_t>(g.wButtons & ~g_heldOver);
+				constexpr std::uint16_t kCardClose = XINPUT_GAMEPAD_A;
+				g_cardHeld &= g.wButtons;
+				if (g_cardUp.load(std::memory_order_relaxed) && !g_guestMenu.load(std::memory_order_relaxed) && (g.wButtons & kCardClose) &&
+					!(g_cardPrev & kCardClose)) {
+					g_cardHeld |= kCardClose;
+					g_cardUp.store(false, std::memory_order_relaxed);  // one close per press; the game thread says again next frame
+					g_cardCloses.fetch_add(1, std::memory_order_relaxed);
+				}
+				g_cardPrev = g.wButtons;
+				pad.buttons &= static_cast<std::uint16_t>(~g_cardHeld);
 				if (g_backHeldOver.load(std::memory_order_relaxed)) {
 					pad.buttons &= static_cast<std::uint16_t>(~XINPUT_GAMEPAD_BACK);
 				}
@@ -251,6 +273,7 @@ namespace phantom::er::InputBridge
 				pad.thumbRX = g.sThumbRX;
 				pad.thumbRY = g.sThumbRY;
 			} else {
+				g_cardHeld = g_cardPrev = 0;
 				pad.buttons = 0;
 				pad.leftTrigger = pad.rightTrigger = 0;
 				pad.thumbLX = pad.thumbLY = pad.thumbRX = pad.thumbRY = 0;
@@ -635,6 +658,7 @@ namespace phantom::er::InputBridge
 	void PressErButtons(std::uint16_t a_buttons, unsigned a_ms) { g_erPresses.Press(a_buttons, ::GetTickCount64() + a_ms); }
 	std::uint32_t ItemUses() { return g_itemUses.load(std::memory_order_relaxed); }
 	std::uint32_t ItemCycles() { return g_itemCycles.load(std::memory_order_relaxed); }
+	std::uint32_t HelpPresses() { return g_helpPresses.load(std::memory_order_relaxed); }
 	void HoldLeftStickUntilReleased() { g_lstickHoldWanted.store(true, std::memory_order_relaxed); }
 	void SetPadMode(PadGate::Mode a_mode) { g_padMode.store(static_cast<int>(a_mode), std::memory_order_relaxed); }
 	std::uint32_t Chords() { return g_chords.load(std::memory_order_relaxed); }
@@ -646,6 +670,8 @@ namespace phantom::er::InputBridge
 	std::uint32_t GuestMenuCloses() { return g_guestMenuCloses.load(std::memory_order_relaxed); }
 
 	std::uint16_t LastButtons() { return g_lastButtons.load(std::memory_order_relaxed); }
+	void          SetCardUp(bool a_up) { g_cardUp.store(a_up, std::memory_order_relaxed); }
+	std::uint32_t CardCloses() { return g_cardCloses.load(std::memory_order_relaxed); }
 	std::int16_t  LastRightStickX() { return g_lastRx.load(std::memory_order_relaxed); }
 	std::uint32_t MenuPresses() { return g_menuPresses.load(std::memory_order_relaxed); }
 	std::uint32_t PromptPresses() { return g_promptPresses.load(std::memory_order_relaxed); }

@@ -838,7 +838,23 @@ local function weaponIds(primary, primary2, secondary)
 	return names, ids
 end
 
-function PR.PreLoadout(primary, primary2, secondary)
+-- [Loadout] Suppressors (docs/GUEST.md 18.18): 'sleep' (the guns firing tranquilizer darts: bullet 10 BL_HgTranq / 11 BL_HgTranqP,
+-- the WU S.PISTOL's, and the other tranquilizer bullets of logic::KindOfBullet), 'all' (every [Loadout] gun; the setup turns it off again on a gun that takes none), 'none'; '' = leave the
+-- suppressor vars alone (MGSV's saves aren't blocked, or the guest can't finish the job natively). vars.isUseSuppressor[slot] /
+-- suppressorLives[slot] are what the mission load builds the slot's suppressor from; the life written here is provisional
+-- (PR.SUPPRESSOR_PROVISIONAL): the setup sets MGSV's own full value for that gun natively (mgsv/Suppressor.cpp), which isn't
+-- known before the gun's parameters load with the mission.
+PR.SUPPRESSOR_PROVISIONAL = 254
+PR.SLEEP_BULLETS = { [10] = true, [11] = true, [26] = true, [30] = true, [34] = true, [40] = true, [49] = true, [67] = true, [98] = true }
+
+local function wantsSuppressor(mode, id)
+	if mode == 'all' then return true end
+	if mode ~= 'sleep' then return false end
+	local okInfo, bullet = pcall(function() return TppEquip.GetAmmoInfo(id) end)
+	return okInfo and PR.SLEEP_BULLETS[tonumber(bullet) or -1] == true
+end
+
+function PR.PreLoadout(primary, primary2, secondary, suppress)
 	if type(vars) ~= 'table' or type(TppEquip) ~= 'table' then return 'no vars', 0 end
 	local names, ids = weaponIds(primary, primary2, secondary)
 	local out, changed = {}, 0
@@ -861,6 +877,14 @@ function PR.PreLoadout(primary, primary2, secondary)
 				end)
 				if okSet then changed = changed + 1 end
 				out[#out + 1] = names[i] .. '(' .. id .. ')=' .. (okSet and ('slot ' .. slot .. ' was ' .. tostring(have)) or ('failed ' .. tostring(err)))
+			end
+			if type(suppress) == 'string' and suppress ~= '' then
+				local want = wantsSuppressor(suppress, id)
+				local okSup, err = pcall(function()
+					vars.isUseSuppressor[slot] = want and 1 or 0
+					vars.suppressorLives[slot] = want and PR.SUPPRESSOR_PROVISIONAL or 0
+				end)
+				out[#out + 1] = 'suppressor ' .. slot .. '=' .. (okSup and (want and 'on' or 'off') or ('failed ' .. tostring(err)))
 			end
 		end
 	end

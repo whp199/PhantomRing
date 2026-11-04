@@ -51,6 +51,54 @@ namespace
 static void TestQuickItem()
 {
 	using M = PadGate::Mode;
+	{  // (0.7.0) spirit ashes: summoned when Elden Ring's HUD counts more spirits or an ally appeared; refused after kSpiritWaitMs
+		using phantom::er::quickitem::SpiritCheck;
+		using SO = phantom::er::quickitem::SpiritOutcome;
+		CHECK(SpiritCheck(0, 0, 0, 1000) == SO::kWaiting);
+		CHECK(SpiritCheck(0, 1, 0, 2600) == SO::kSummoned);
+		CHECK(SpiritCheck(-1, -1, 2, 2600) == SO::kSummoned);   // the HUD count unreadable: the allies tell
+		CHECK(SpiritCheck(1, 1, 0, 4499) == SO::kWaiting);
+		CHECK(SpiritCheck(1, 1, 0, 4500) == SO::kRefused);
+		CHECK(SpiritCheck(-1, 3, 0, 5000) == SO::kRefused);     // no count before: a later count proves nothing
+	}
+	{  // (0.7.0) View + D-pad up: the controls card again; kept from MGSV; View opens nothing; not in Tarnished mode
+		PadGate         gate;
+		PadGate::Params p;
+		p.helpShift = true;
+		std::uint64_t t = 1000;
+		int           help = 0;
+		bool          mask = false, erView = false;
+		auto step = [&](bool a_view, bool a_help, std::uint64_t a_ms, M a_mode) {
+			for (std::uint64_t e = 0; e < a_ms; e += 5) {
+				PadGate::Input in;
+				in.nowMs = t;
+				in.view = a_view;
+				in.help = a_help;
+				in.mode = a_mode;
+				const auto o = gate.Update(in, p);
+				help += o.helpPresses;
+				mask = o.guestMaskHelp;
+				erView |= o.erView;
+				t += 5;
+			}
+		};
+		step(true, false, 80, M::kSnake);
+		step(true, true, 100, M::kSnake);
+		CHECK(help == 1 && mask);
+		step(false, false, 300, M::kSnake);
+		CHECK(help == 1 && !mask && !erView);  // no map with it
+		step(false, true, 100, M::kSnake);      // D-pad up alone: MGSV's primary weapon, no card
+		step(false, false, 100, M::kSnake);
+		CHECK(help == 1);
+		step(true, false, 80, M::kTarnished);
+		step(true, true, 100, M::kTarnished);
+		CHECK(help == 1 && !mask);
+		step(false, false, 300, M::kTarnished);
+		p.helpShift = false;                    // [Overlay] controls_card = off / card_button = none
+		step(true, false, 80, M::kSnake);
+		step(true, true, 100, M::kSnake);
+		CHECK(help == 1 && !mask);
+	}
 	{  // View, then X 100 ms later: one use; X stays out of MGSV's pad until released; View opens no map and no iDroid
 		ShiftRun r;
 		r.Step(true, false, false, 100);

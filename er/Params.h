@@ -76,6 +76,9 @@ namespace phantom::er::params
 	inline constexpr Spec kNpcParam{ L"NpcParam", "NPC_PARAM_ST", 0x2E0, 6 };
 	// Read only (er/QuickItem.h: whether the quick item opens a screen, is an empty flask, is used up; SoloParam index 3).
 	inline constexpr Spec kEquipParamGoods{ L"EquipParamGoods", "EQUIP_PARAM_GOODS_ST", 0xB0, 3 };
+	// Read only (er/Noise.h: the AI sound row's radius; fromsoftware-rs SoloParam index 37). +0x0 f32 radius, +0x4 f32 lifeFrame
+	// (seconds), +0x9 u8 type, +0xA bits (bit0 heard by hostiles), +0xB rank, +0x10 priority.
+	inline constexpr Spec kAiSoundParam{ L"AiSoundParam", "AI_SOUND_PARAM_ST", 0x20, 37 };
 	inline constexpr std::uint32_t kNpcGetSoul = 0x2C;  // u32 get_soul (tools/re/er_params.py fields NPC_PARAM_ST; soldier 30003214: 114)
 
 	class Table
@@ -143,6 +146,9 @@ namespace phantom::er::params
 		inline constexpr std::uint32_t kDmgLevel = 0x72;             // u8
 		inline constexpr std::uint32_t kAtkSuperArmor = 0x84;        // f32 (poise damage)
 		inline constexpr std::uint32_t kAtkSuperArmorCorrection = 0x1B0;  // f32 (%)
+		// AiSoundParam rows the attack emits as it appears / where it hits (er/Noise.h; -1 = none): the Throwing Dagger's 2100 / 2000.
+		inline constexpr std::uint32_t kAppearAiSoundId = 0x90;     // i32
+		inline constexpr std::uint32_t kHitAiSoundId = 0x94;        // i32
 		// The object-only attack (er/ExplosionLogic.h MakeObjectOnlyAttack).
 		inline constexpr std::uint32_t kKnockbackDist = 0x10;       // f32
 		inline constexpr std::uint32_t kAtkMag = 0x52;              // u16

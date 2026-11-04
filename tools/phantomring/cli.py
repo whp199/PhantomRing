@@ -177,7 +177,7 @@ def console_cmd(args, which: str) -> int:
 
 def cmd_launch(args) -> int:
 	opts = L.LaunchOptions(mgsv=not args.er_only, er=not args.mgsv_only, dry_run=args.dry_run, width=args.width,
-		height=args.height, wait=args.wait, seed_save=args.seed_save, keep_backups=args.keep_backups)
+		height=args.height, wait=args.wait, seed_save=args.seed_save, keep_backups=args.keep_backups, keep_logs=args.keep_logs)
 	if args.er_headless:
 		w, _, h = args.er_headless.partition("x")
 		opts.er_headless = (int(w), int(h))
@@ -278,9 +278,10 @@ def cmd_backup(args) -> int:
 	if running["eldenring"] or running["mgsvtpp"]:
 		print(f"close the games first (running: {running})", file=sys.stderr)
 		return EXIT_ERROR
-	dest = L.backup_saves(L.Machine(), L.timestamp(), not args.mgsv_only, not args.er_only)
+	dest = L.backup_saves(L.Machine(), L.timestamp(), not args.mgsv_only, not args.er_only, origin=L.ORIGIN_MANUAL)
 	L.verify_backup(dest)
-	print(f"backup verified: {dest}")
+	L.first_backups()
+	print(f"backup verified: {dest} (made by hand: pr launch never prunes it)")
 	return EXIT_OK
 
 
@@ -383,8 +384,11 @@ def main(argv=None) -> int:
 		"lets separate test setups run side by side")
 	p.add_argument("--seed-save", metavar="NAME", help="the Elden Ring save PhantomRing0000.sl2 is first copied from (a file name "
 		"in the save dir or a path; default $PHANTOMRING_SEED_SAVE, else ER0000.sl2). Only used while PhantomRing0000.sl2 doesn't exist")
-	p.add_argument("--keep-backups", type=int, metavar="N", help=f"save backups to keep under backups/ (default "
-		f"$PHANTOMRING_KEEP_BACKUPS or {L.KEEP_BACKUPS}; the oldest and *-pre-restore are always kept; 0 keeps all)")
+	p.add_argument("--keep-backups", type=int, metavar="N", help=f"save backups to keep per game under backups/ (default "
+		f"$PHANTOMRING_KEEP_BACKUPS or {L.KEEP_BACKUPS}; the first, every *-pre-restore and every pr backup-saves one are always kept; "
+		"0 keeps all)")
+	p.add_argument("--keep-logs", type=int, metavar="N", help=f"launch session folders to keep under logs/ (default "
+		f"$PHANTOMRING_KEEP_LOGS or {L.KEEP_LOGS}; the current one and running launches are always kept; 0 keeps all)")
 	p.set_defaults(fn=cmd_launch)
 
 	p = sub.add_parser("stop", help="SIGTERM the process trees pr launch started")

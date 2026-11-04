@@ -133,4 +133,12 @@ namespace phantom::er::quickitem
 		}
 		return Outcome::kPending;
 	}
+
+	SpiritOutcome SpiritCheck(int a_countBefore, int a_countNow, int a_newAllies, std::uint64_t a_waitedMs)
+	{
+		if ((a_countBefore >= 0 && a_countNow > a_countBefore) || a_newAllies > 0) {
+			return SpiritOutcome::kSummoned;
+		}
+		return a_waitedMs >= kSpiritWaitMs ? SpiritOutcome::kRefused : SpiritOutcome::kWaiting;
+	}
 }

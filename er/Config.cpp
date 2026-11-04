@@ -123,6 +123,7 @@ namespace phantom::er
 		ladderPressDelayMs = static_cast<int>(ini.GetInt("Input", "ladder_press_delay_ms", ladderPressDelayMs));
 		ladderWaitMs = static_cast<int>(ini.GetInt("Input", "ladder_wait_ms", ladderWaitMs));
 		ladderSettleMs = static_cast<int>(ini.GetInt("Input", "ladder_settle_ms", ladderSettleMs));
+		ladderHomeSettleMs = static_cast<int>(ini.GetInt("Input", "ladder_home_settle_ms", ladderHomeSettleMs));
 		ladderSnake = ini.Get("Ladder", "snake", ladderSnake);
 		if (ladderSnake != "on" && ladderSnake != "auto" && ladderSnake != "off") {
 			Log::Warn("[Ladder] snake = {} is not on|auto|off; using on", ladderSnake);
@@ -162,6 +163,8 @@ namespace phantom::er
 		fallWatchSeconds = static_cast<float>(ini.GetFloat("Puppet", "fall_watch_seconds", fallWatchSeconds));
 		fallWatchDrop = static_cast<float>(ini.GetFloat("Puppet", "fall_watch_drop", fallWatchDrop));
 		hitHook = ini.GetBool("Puppet", "hit_hook", hitHook);
+		respawnHide = ini.GetBool("Puppet", "respawn_hide", respawnHide);
+		respawnHideMaxMs = static_cast<int>(ini.GetInt("Puppet", "respawn_hide_max_ms", respawnHideMaxMs));
 		noDead = ini.GetBool("Puppet", "nodead", noDead);
 		noDamage = ini.GetBool("Puppet", "nodamage", noDamage);
 		mirrorLife = ini.GetBool("Puppet", "mirror_life", mirrorLife);
@@ -293,6 +296,7 @@ namespace phantom::er
 			flaskPressMs = std::clamp(static_cast<int>(ini.GetInt("Flask", "press_ms", flaskPressMs)), 40, 1000);
 			flaskConfirmMs = std::clamp(static_cast<int>(ini.GetInt("Flask", "confirm_ms", flaskConfirmMs)), 500, 10000);
 			flaskWhileRiding = ini.GetBool("Flask", "while_riding", flaskWhileRiding);
+			flaskWakeHud = ini.GetBool("Flask", "wake_hud", flaskWakeHud);
 			if (flaskButton & 0x0030) {
 				Log::Warn("[Flask] button can't be Start or View (View is its shift); no quick item use");
 				flaskButton = 0;
@@ -469,7 +473,9 @@ namespace phantom::er
 		f("muzzle_per_second", muzzlePerSecond);
 		f("muzzle_life", muzzleLife);
 		f("muzzle_ahead", muzzleAhead);
-		muzzleTranq = ini.GetBool("Combat", "muzzle_tranq", muzzleTranq);
+		// (v16) muzzle_suppressed: a flash for shots through a suppressor too; before v16 the guest couldn't tell, and
+		// muzzle_tranq stood for it (MGSV's darts are suppressed): an old ini's key still counts.
+		muzzleSuppressed = ini.GetBool("Combat", "muzzle_suppressed", ini.GetBool("Combat", "muzzle_tranq", muzzleSuppressed));
 
 		{
 			auto cf = [&](const char* a_key, float& a_value) { a_value = static_cast<float>(ini.GetFloat("Cqc", a_key, a_value)); };
@@ -572,6 +578,7 @@ namespace phantom::er
 		r.drawOther = ini.GetBool("Render", "draw_other", r.drawOther);
 		r.projectileMeshes = ini.GetBool("Render", "projectile_meshes", r.projectileMeshes);
 		r.projectileSpin = static_cast<float>(ini.GetFloat("Render", "projectile_spin", r.projectileSpin));
+		r.projectileStore = ini.GetBool("Render", "projectile_store", r.projectileStore);
 		r.latencyFrames = static_cast<int>(ini.GetInt("Render", "latency_frames", r.latencyFrames));
 		r.cull = ini.Get("Render", "cull", r.cull);
 		r.frontCcw = ini.GetBool("Render", "front_ccw", r.frontCcw);
@@ -658,6 +665,7 @@ namespace phantom::er
 		Floats(ini.Get("Render", "velocity_bias"), r.velocityBias, 2);
 		Floats(ini.Get("Render", "near_fade"), r.nearFade, 2);
 		Floats(ini.Get("Render", "near_fade_other"), r.nearFadeOther, 2);
+		r.nearFadeCell = std::clamp(static_cast<int>(ini.GetInt("Render", "near_fade_cell", r.nearFadeCell)), 1, 8);
 		r.occluderFade = static_cast<float>(ini.GetFloat("Render", "occluder_fade", r.occluderFade));
 		r.occluderRadius = static_cast<float>(ini.GetFloat("Render", "occluder_radius", r.occluderRadius));
 		r.uploadMbPerFrame = static_cast<int>(ini.GetInt("Render", "upload_mb_per_frame", r.uploadMbPerFrame));
@@ -703,6 +711,41 @@ namespace phantom::er
 		Floats(ini.Get("Overlay", "hud_weapon_offset"), o.hudWeaponOffset, 2);
 		Floats(ini.Get("Overlay", "hud_notify_region"), o.hudNotifyRegion, 4);
 		Floats(ini.Get("Overlay", "hud_notify_offset"), o.hudNotifyOffset, 2);
+		o.erBars = ini.Get("Overlay", "er_bars", o.erBars);
+		if (o.erBars != "auto" && o.erBars != "none" && o.erBars != "all") {
+			Log::Warn("[Overlay] er_bars = {} is not auto|none|all; using auto", o.erBars);
+			o.erBars = "auto";
+		}
+		o.controlsCard = ini.Get("Overlay", "controls_card", o.controlsCard);
+		if (o.controlsCard != "first" && o.controlsCard != "always" && o.controlsCard != "off") {
+			Log::Warn("[Overlay] controls_card = {} is not first|always|off; using first", o.controlsCard);
+			o.controlsCard = "first";
+		}
+		o.cardSeconds = std::clamp(static_cast<float>(ini.GetFloat("Overlay", "card_seconds", o.cardSeconds)), 2.0f, 120.0f);
+		o.cardScale = std::clamp(static_cast<float>(ini.GetFloat("Overlay", "card_scale", o.cardScale)), 0.3f, 4.0f);
+		{
+			const auto b = ini.Get("Overlay", "card_button", "");
+			struct Named
+			{
+				const char*   name;
+				std::uint16_t bit;
+				const char*   shown;
+			};
+			static constexpr Named kCardButtons[] = { { "dpad_up", 0x0001, "D-pad up" }, { "dpad_left", 0x0004, "D-pad left" },
+				{ "dpad_right", 0x0008, "D-pad right" }, { "lb", 0x0100, "LB" }, { "rb", 0x0200, "RB" }, { "y", 0x8000, "Y" }, { "a", 0x1000, "A" },
+				{ "b", 0x2000, "B" }, { "none", 0, "none" }, { "off", 0, "none" } };
+			bool known = b.empty();
+			for (const auto& n : kCardButtons) {
+				if (b == n.name) {
+					o.cardButton = n.bit;
+					o.cardButtonName = n.shown;
+					known = true;
+				}
+			}
+			if (!known) {
+				Log::Warn("[Overlay] card_button = {} is not dpad_up|dpad_left|dpad_right|lb|rb|y|a|b|none; kept D-pad up", b);
+			}
+		}
 		if (o.corner != "top_right" && o.corner != "top_left" && o.corner != "bottom_right" && o.corner != "bottom_left") {
 			Log::Warn("[Overlay] corner = {} is not top_right|top_left|bottom_right|bottom_left; using top_right", o.corner);
 			o.corner = "top_right";
@@ -734,6 +777,28 @@ namespace phantom::er
 		mk.size = static_cast<float>(ini.GetFloat("Marking", "size", mk.size));
 		mk.textSize = static_cast<float>(ini.GetFloat("Marking", "text_size", mk.textSize));
 		mk.height = static_cast<float>(ini.GetFloat("Marking", "height", mk.height));
+		mk.above = static_cast<float>(ini.GetFloat("Marking", "above", mk.above));
+
+		// [Noise] (er/Noise.h)
+		auto& nz = noise;
+		nz.mode = ini.Get("Noise", "mode", nz.mode);
+		if (nz.mode != "sound" && nz.mode != "heard" && nz.mode != "off") {
+			Log::Warn("[Noise] mode = {} is not sound|heard|off; using sound", nz.mode);
+			nz.mode = "sound";
+		}
+		nz.soundRow = static_cast<int>(ini.GetInt("Noise", "sound_row", nz.soundRow));
+		auto nf = [&](const char* a_key, float& a_value) { a_value = std::max(0.0f, static_cast<float>(ini.GetFloat("Noise", a_key, a_value))); };
+		nf("pistol", nz.radii.pistol);
+		nf("rifle", nz.radii.rifle);
+		nf("sniper", nz.radii.sniper);
+		nf("shotgun", nz.radii.shotgun);
+		nf("launcher", nz.radii.launcher);
+		nf("flame", nz.radii.flame);
+		nf("suppressed", nz.radii.suppressed);
+		nf("impact", nz.impact);
+		nf("per_second", nz.perSecond);
+		nz.wornNote = ini.GetBool("Noise", "worn_note", nz.wornNote);
+		nz.wornWindowMs = static_cast<int>(ini.GetInt("Noise", "worn_window_ms", nz.wornWindowMs));
 		return found;
 	}
 }

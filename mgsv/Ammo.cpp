@@ -5,6 +5,7 @@
 #include "Log.h"
 #include "Logic.h"
 #include "State.h"
+#include "Suppressor.h"
 #include "Vars.h"
 #include "Verify.h"
 
@@ -257,6 +258,8 @@ namespace phantom::guest::ammo
 		}
 		const bool ok = line.find("magazines") != std::string::npos;
 		Log::Info("ammo: refill ({})", line);
+		// v16: the suppressors too (MGSV's full life for every gun that has one: Suppressor.h), here on the Lua thread
+		suppressor::RefillOnLuaThread(why == "respawn" ? "respawn" : why == "rest" ? "rest" : "console");
 		std::scoped_lock lock(g_lock);
 		(ok ? g_done : g_failed) += 1;
 		g_last = std::move(line);
@@ -267,6 +270,14 @@ namespace phantom::guest::ammo
 		std::scoped_lock lock(g_lock);
 		return std::format("ammo: {}; {} asked, {} refilled, {} failed{}; last {}", g_ok.load() ? "refill ready" : "refill OFF (addresses differ)", g_requested, g_done,
 			g_failed, g_pending.empty() ? "" : std::format(", '{}' pending", g_pending), g_last);
+	}
+
+	std::optional<ComponentRef> FindComponent(std::string& a_why)
+	{
+		if (const auto c = Find(a_why)) {
+			return ComponentRef{ c->self, c->player };
+		}
+		return std::nullopt;
 	}
 
 	std::string Drain()

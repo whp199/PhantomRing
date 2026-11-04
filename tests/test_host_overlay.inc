@@ -230,4 +230,44 @@ static void TestOverlay()
 	}
 	CHECK(phantom::er::OverlayArt::TextPanel("a long line that has to wrap because it is wider than the box allows for", 0xE6463C, 36, 400, img));
 	CHECK(img.width <= 400 + 64 && img.height > 70);
+
+	// (0.7.0) The controls card: in, up until its time or a press that starts after every button was let go, then out.
+	{
+		using phantom::er::Hud::CardTimer;
+		CardTimer c;
+		CHECK(c.Update(0.0, false, 12.0f) == 0.0f && !c.Showing());
+		c.Show(10.0);
+		CHECK(Near(c.Update(10.15, true, 12.0f), 0.5f));   // fading in; View still held from the press that showed it
+		CHECK(c.Update(11.0, true, 12.0f) == 1.0f);         // still held: no close
+		CHECK(c.Update(12.0, false, 12.0f) == 1.0f);        // let go
+		CHECK(Near(c.Update(13.0, true, 12.0f), 1.0f));     // a press: it starts fading out
+		CHECK(Near(c.Update(13.3, false, 12.0f), 0.5f));
+		CHECK(c.Update(13.7, false, 12.0f) == 0.0f && !c.Showing());
+		c.Show(20.0);
+		CHECK(c.Update(25.0, false, 12.0f) == 1.0f);
+		CHECK(c.Update(32.0, false, 12.0f) == 1.0f);        // its time is up: out from here
+		CHECK(Near(c.Update(32.3, false, 12.0f), 0.5f));
+		CHECK(c.Update(32.7, false, 12.0f) == 0.0f);
+		c.Show(40.0);
+		CHECK(c.Update(45.0, false, 12.0f) == 1.0f);
+		c.Show(46.0);                                       // again while up: no new fade in, its time starts again
+		CHECK(c.Update(46.01, false, 12.0f) == 1.0f && c.Update(57.0, false, 12.0f) == 1.0f);
+		// Review 0.7.0: a card shown where it can't be drawn (a takeover at a grace's menu, View + D-pad up into a cutscene) keeps
+		// its time and ignores the presses made meanwhile; A (InputBridge::CardCloses) closes it like any press.
+		c.Close(60.0);
+		CHECK(c.Update(61.0, false, 12.0f) == 0.0f && !c.Showing());
+		c.Show(100.0);
+		CHECK(c.Update(100.0, false, 12.0f, false) == 0.0f && c.Open());
+		CHECK(c.Update(130.0, true, 12.0f, false) == 0.0f && c.Open());   // 30 s in a menu, buttons pressed: still up, unseen
+		CHECK(Near(c.Update(130.1, true, 12.0f, true), 0.1f / CardTimer::kIn));  // seen now: fading in; the menu's press still held
+		CHECK(c.Update(131.0, false, 12.0f, true) == 1.0f && c.Open());
+		CHECK(c.Update(141.0, false, 12.0f, true) == 1.0f && c.Open());   // 11 s seen in all: still up
+		c.Close(141.5);
+		CHECK(!c.Open() && Near(c.Update(141.8, false, 12.0f, true), 0.5f));
+		CHECK(c.Update(142.2, false, 12.0f, false) == 0.0f && !c.Showing());  // a closing card fades out whether seen or not
+		const auto text = phantom::er::Hud::ControlsCardText("R3", "X", "D-pad down", "D-pad up");
+		CHECK(text.find("R3: jump") != std::string::npos && text.find("View + X: flask") != std::string::npos &&
+		      text.find("View + Start held 1 s: Tarnished mode") != std::string::npos && text.find("View + D-pad up: this card again") != std::string::npos && text.find("A: close") != std::string::npos);
+		CHECK(phantom::er::OverlayArt::TextPanel(text, 0x5AC85A, 40, 1500, img) && img.height > 7 * 40);  // seven lines
+	}
 }

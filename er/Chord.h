@@ -60,6 +60,7 @@ namespace phantom::er
 			int chordMs{ 1000 };        // Start + View held together this long = the chord; 0 = no chord (and no wait)
 			int chordWindowMs{ 700 };   // Start this soon after View is the chord even after View's iDroid hold went to MGSV
 			bool itemShift{ false };    // [Flask]: View + the item / cycle button is Elden Ring's quick item (kSnake only)
+			bool helpShift{ false };    // (0.7.0) [Overlay] controls_card_button: View + it shows the controls card again (kSnake only)
 		};
 
 		struct Input
@@ -69,6 +70,7 @@ namespace phantom::er
 			bool          view{ false };
 			bool          item{ false };   // [Flask] button (X) down
 			bool          cycle{ false };  // [Flask] cycle_button (D-pad down) down
+			bool          help{ false };   // [Overlay] controls_card_button (D-pad up) down
 			Mode          mode{ Mode::kOff };
 		};
 
@@ -88,6 +90,8 @@ namespace phantom::er
 			int  itemCycles{ 0 };           // View + the cycle button: Elden Ring's next quick item
 			bool guestMaskItem{ false };    // MGSV's pad must not carry the item button (a shift press, until released)
 			bool guestMaskCycle{ false };   // ...nor the cycle button
+			int  helpPresses{ 0 };          // (0.7.0) View + the controls card button: show the card
+			bool guestMaskHelp{ false };    // ...and that button stays out of MGSV's pad until released
 		};
 
 		static constexpr std::uint64_t kTapMs = 120;  // a synthesized press: a few of Elden Ring's polls
@@ -129,5 +133,6 @@ namespace phantom::er
 		std::uint64_t guestCloseUntil_{ 0 };   // the Start tap that closes it
 		bool          itemDown_{ false }, cycleDown_{ false };   // the item / cycle button last poll
 		bool          itemHeld_{ false }, cycleHeld_{ false };   // ...went down as a shift press: out of MGSV's pad until released
+		bool          helpDown_{ false }, helpHeld_{ false };
 	};
 }

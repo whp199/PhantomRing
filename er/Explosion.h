@@ -46,8 +46,8 @@ namespace phantom::er::Explosion
 
 	// (roadmap 5.4) A muzzle flash at a shot: explosion_muzzle's effect, cut after [Combat] muzzle_life s, a little in front of
 	// a_muzzle along a_dir (Elden Ring world); rate-limited (muzzle_per_second); none while muzzle_flash is off, or for a
-	// tranquilizer round (a_tranq) without muzzle_tranq.
-	void Muzzle(const Frame& a_frame, const Vec3& a_muzzle, const Vec3& a_dir, bool a_tranq);
+	// suppressed shot (a_quiet: protocol v16 kFireSuppressed -- MGSV shows none) without muzzle_suppressed.
+	void Muzzle(const Frame& a_frame, const Vec3& a_muzzle, const Vec3& a_dir, bool a_quiet);
 
 	// The object-only attack at a_at (a shot's impact, a strike that hit no one, a bump): breaks a destructible asset
 	// there, nothing else. a_dir: where it came from (the sphere is put a little back along it, on the surface).

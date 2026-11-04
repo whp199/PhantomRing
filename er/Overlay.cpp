@@ -154,7 +154,7 @@ float4 PSMain(VSOut i) : SV_Target
 		// Read by the console (task thread) while the Present thread works: atomics only.
 		std::atomic<std::uint64_t> g_framesDrawn{ 0 }, g_hudUploads{ 0 }, g_panelsMade{ 0 }, g_skipped{ 0 }, g_hudFrame{ 0 };
 		std::atomic<std::uint32_t> g_hudW{ 0 }, g_hudH{ 0 }, g_panelsCached{ 0 }, g_reticlePx{ 0 };
-		bool          g_loggedFirst[3]{};
+		bool          g_loggedFirst[4]{};
 
 		void TurnOff(std::string_view a_why)
 		{
@@ -610,6 +610,7 @@ float4 PSMain(VSOut i) : SV_Target
 		for (const auto& l : m.lines) {
 			anyText |= l.opacity > 0.0f;
 		}
+		anyText |= m.cardOpacity > 0.0f && !m.card.empty();
 		const bool shot = g_shotWanted.load(std::memory_order_acquire);
 		if (!showHud && m.reticleOpacity <= 0.0f && !anyText && !shot) {
 			return;
@@ -723,6 +724,27 @@ float4 PSMain(VSOut i) : SV_Target
 			quads.push_back({ &t, x, y, w, h, l.opacity, false, false });
 			y = bottom ? y - gap : y + h + gap;
 			LogFirst(2, std::format("text panel (\"{}\", {} px)", l.text, px));
+		}
+		// 4. (0.7.0) The controls card, centred near the top (er/Hud.h CardTimer): one larger panel.
+		if (m.cardOpacity > 0.0f && !m.card.empty()) {
+			const int         cpx = std::clamp(static_cast<int>(std::lround(H * 0.021f * std::max(0.3f, cfg.cardScale))), 14, 200);
+			const std::string key = std::format("card\x1f{}\x1f{}", m.card, cpx);
+			auto              it = g_text.find(key);
+			if (it == g_text.end()) {
+				OverlayArt::Image img;
+				Tex               tex;
+				if (OverlayArt::TextPanel(m.card, Accent(Hud::Tone::kGood), cpx, static_cast<int>(W * 0.62f), img) && UploadImage(tex, img, ctx)) {
+					++g_panelsMade;
+					it = g_text.emplace(key, std::move(tex)).first;
+				}
+			}
+			if (it != g_text.end()) {
+				Tex& t = it->second;
+				t.lastUsed = g_frame;
+				const float w = static_cast<float>(t.width), h = static_cast<float>(t.height);
+				quads.push_back({ &t, std::floor((W - w) * 0.5f), std::floor(H * 0.14f), w, h, m.cardOpacity, false, false });
+				LogFirst(3, std::format("controls card ({} px, {:.0f}x{:.0f})", cpx, w, h));
+			}
 		}
 		// Panels unused for a while go (the GPU may still read one this frame: kept with the frame).
 		for (auto it = g_text.begin(); it != g_text.end();) {

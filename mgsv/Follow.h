@@ -39,6 +39,9 @@ namespace phantom::guest::follow
 	// Any thread: auto-follow acts on D-Walker right now (Normal Mode or a FollowModes one, following on, no player hold, not
 	// ridden, Snake not busy, parked or staged) -- the condition for Walker.cpp's lead. Stale after 1 s without an Update.
 	bool LeadAllowed();
+	// D-Walker's AI state byte (05 idle, 06 settling, 09 turning, 0A walking, 0C stopping) as read in the last 0.5 s, else -1: whether
+	// its legs walk (the lead's leg gate, Walker.cpp).
+	int WalkerLegs();
 	// MGSV's Lua thread: D-Horse's whistle at once (boot, before the sandbox is ready); false if its checks failed.
 	bool WhistleHorseNow(const char* a_why);
 	void SetEnabled(bool a_on);

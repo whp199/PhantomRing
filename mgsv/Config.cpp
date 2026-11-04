@@ -173,6 +173,12 @@ namespace phantom::guest
 		buddyWalkerLeadMaxSpeed = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadMaxSpeed", buddyWalkerLeadMaxSpeed)), 1.0f, 25.0f);
 		buddyWalkerLeadAcquire = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadAcquire", buddyWalkerLeadAcquire)), 1.0f, 30.0f);
 		buddyWalkerLeadTurnRate = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadTurnRate", buddyWalkerLeadTurnRate)), 0.0f, 30.0f);
+		buddyWalkerLeadLegs = ini.GetBool("Buddy", "WalkerLeadLegs", buddyWalkerLeadLegs);
+		buddyWalkerLeadLegSpeed = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadLegSpeed", buddyWalkerLeadLegSpeed)), 0.5f, 25.0f);
+		buddyWalkerLeadIdleSpeed = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadIdleSpeed", buddyWalkerLeadIdleSpeed)), 0.0f, 25.0f);
+		buddyWalkerLeadAccel = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadAccel", buddyWalkerLeadAccel)), 0.0f, 100.0f);
+		buddyWalkerLeadOrderAhead = std::clamp(static_cast<float>(ini.GetFloat("Buddy", "WalkerLeadOrderAhead", buddyWalkerLeadOrderAhead)), 0.0f, 30.0f);
+		buddyWalkerLeadReorderMs = std::clamp(static_cast<int>(ini.GetInt("Buddy", "WalkerLeadReorderMs", buddyWalkerLeadReorderMs)), 100, 10000);
 		buddyWalkerTreadmill = ini.GetBool("Buddy", "WalkerTreadmill", buddyWalkerTreadmill);
 
 		const auto hold = Lower(ini.Get("Motion", "Hold", "native_treadmill"));
@@ -214,6 +220,7 @@ namespace phantom::guest
 		climb = ini.GetBool("Climb", "Enabled", climb);
 		Floats(ini.Get("Climb", "Ladder", ""), climbLadder, 4, "[Climb] Ladder", "x, y, z, yaw");
 		climbSeamless = ini.GetBool("Climb", "Seamless", climbSeamless);
+		climbHudThawMs = std::clamp(static_cast<int>(ini.GetInt("Climb", "HudThawMs", climbHudThawMs)), 0, 2000);
 		mantle = ini.GetBool("Mantle", "Enabled", mantle);
 		Floats(ini.Get("Mantle", "Vault", ""), mantleVault, 5, "[Mantle] Vault", "x, y, z, yaw, cm");
 		Floats(ini.Get("Mantle", "Low", ""), mantleLow, 5, "[Mantle] Low", "x, y, z, yaw, cm");
@@ -287,6 +294,9 @@ namespace phantom::guest
 		loadoutPrimary2 = ini.Get("Loadout", "Primary2", loadoutPrimary2);
 		loadoutSecondary = ini.Get("Loadout", "Secondary", loadoutSecondary);
 		loadoutSupport = ini.Get("Loadout", "Support", loadoutSupport);
+		if (const auto sup = ini.Get("Loadout", "Suppressors", loadoutSuppressors); sup == "sleep" || sup == "all" || sup == "none") {
+			loadoutSuppressors = sup;
+		}
 		boxPoster = ini.Get("Loadout", "BoxPoster", boxPoster);
 		box = ini.Get("Loadout", "Box", box);
 

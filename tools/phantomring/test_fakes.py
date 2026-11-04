@@ -87,6 +87,22 @@ def main() -> int:
 		check(r.returncode == 0 and gs is not None and gs.flags & proto.GuestFlags.Binoculars and gs.flags & proto.GuestFlags.FirstPerson,
 			"`!binoculars on` sets GuestFlags.Binoculars", (r.stdout + r.stderr).strip())
 		pr(path, "lua", "!binoculars off")
+		# v16: a suppressor on the weapon in hand (GuestFlags.SuppressorOn), worn out by its last suppressed shot
+		r = pr(path, "lua", "!suppressor on 2")
+		time.sleep(0.2)
+		gs = link.guest_state()
+		check(r.returncode == 0 and gs is not None and gs.flags & proto.GuestFlags.SuppressorOn, "`!suppressor on` sets GuestFlags.SuppressorOn",
+			(r.stdout + r.stderr).strip())
+		r1 = pr(path, "lua", "!fire tranq")
+		r2 = pr(path, "lua", "!fire tranq")
+		time.sleep(0.2)
+		gs = link.guest_state()
+		check("suppressed" in r1.stdout and "wore out" in r2.stdout and gs is not None and not gs.flags & proto.GuestFlags.SuppressorOn,
+			"two suppressed shots wear `!suppressor on 2` out (the flag drops)", (r1.stdout + r2.stdout).strip())
+		r = pr(path, "lua", "!fire rifle 1 0 0 0 suppressed")
+		check(r.returncode == 0 and "suppressed" in r.stdout, "`!fire ... suppressed` without a suppressor still marks the shot", r.stdout.strip())
+		r = pr(path, "lua", "!fire rifle")
+		check(r.returncode == 0 and "suppressed" not in r.stdout, "a plain `!fire` with no suppressor is loud", r.stdout.strip())
 		r = pr(path, "er", "ping")
 		check(r.returncode == 0 and "pong" in r.stdout, "`pr er` round trip", (r.stdout + r.stderr).strip())
 		r = pr(path, "er", "frobnicate")

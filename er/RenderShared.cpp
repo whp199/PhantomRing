@@ -129,6 +129,7 @@ namespace phantom::er::render
 		a_c.mat[1] = rc.glossBias;
 		a_c.mat[2] = rc.metalScale;
 		a_c.mat[3] = rc.alphaRef;
+		a_c.fade[0] = static_cast<float>(std::clamp(rc.nearFadeCell, 1, 8));
 		a_c.fade[2] = rc.velocityScale[0];
 		a_c.fade[3] = rc.velocityScale[1];
 		a_c.misc[0] = rc.velocityBias[0];
@@ -314,6 +315,9 @@ namespace phantom::er::render
 
 		const std::uint32_t mats = (d.flags & proto::kDrawRigid) ? 1u : std::min(d.matrixCount, Shaders::kMaxBones);
 		const std::size_t   first = std::size_t(d.firstMatrix) * 12;
+		if (first + std::size_t(mats) * 12 > a_s.matrices.size()) {
+			return BindResult::kBad;  // its matrices aren't all there (review 0.7.0: a rigid draw of 0 matrices read past the end)
+		}
 		const auto          bones = a_rec.Upload(a_s.matrices.data() + first, std::uint64_t(mats) * 48);
 		const auto*         prevSrc = a_s.prevMatrices.size() == a_s.matrices.size() ? a_s.prevMatrices.data() : a_s.matrices.data();
 		const auto          prev = bones ? a_rec.Upload(prevSrc + first, std::uint64_t(mats) * 48) : 0;

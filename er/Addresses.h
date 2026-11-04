@@ -104,6 +104,18 @@ namespace phantom::er
 		VtTeamTypeRival,
 		VtGameRend,          // FieldArea+0x20: its +0x18 CSPersCam is the camera ER's HUD compass reads (2.7.1.0: MoveMapStep 0xB01FC0 -> 0x7774A0)
 		VtSnipeCollector,    // CS::CSClosestHitCollectorForSnipe (game::CastRayKeep copies it, addHit replaced)
+		// Elden Ring's AI sounds (er/Noise.h; docs/HOST.md "Noise"): what its enemies hear -- a Tarnished's weapon hits, pots,
+		// footsteps -- and what Snake's unsuppressed shots now make at the muzzle.
+		WorldAiManager,      // CS::CSWorldAiManager singleton slot; +0x7628 = its AI sound system (a vector of 0x90-byte sounds)
+		AiSoundEmit,         // CSWorldAiManager::AddAiSound(this, pos, owner, atk, &id): proves +0x7628 and the two calls below
+		AiSoundAdd,          // the sound system's add(sys, request): merges into a sound of the same id nearby or appends one
+		AiSoundRequest,      // the request builder (req, pos, owner, atk, &id): AiSoundParam row id, radius scale, owner's handle
+		VtTargetingSystem,   // CS::CSTargetingSystem (an NPC AI's: its search slots and the last AI sound it heard)
+		VtAiTargetingOwner,  // CS::CSAiTargetingSystemOwner (its owner: battle / search state getters, the ChrIns)
+		VtTargetSearchSys,   // CS::CSTargetSearchSys (embedded at the targeting system's +0x10)
+		AiOwnerIsBattle,     // CSAiTargetingSystemOwner vtable slot 14 (+0x70): is_battle_state(owner) (er/Noise.cpp ReadAi calls it only through
+		                     // a vtable slot equal to this verified function)
+		AiOwnerNoSearch,     // ... slot 15 (+0x78): is_not_in_any_search_state(owner)
 		Count
 	};
 

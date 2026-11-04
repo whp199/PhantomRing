@@ -119,6 +119,7 @@ namespace phantom::er::combat
 		bool         fire{ false };    // the damage is Elden Ring fire damage (atkFire), not physical
 		bool         nonLethal{ false };  // stun / sleep: never takes the target below 1 HP (our part of it)
 		std::uint16_t correction{ 0 };    // the bullet's AtkParam correction (%); 0 = chosen per target (TopUp / sleep_correction)
+		bool          quiet{ false };     // (v16) a suppressed shot: its hit bullet makes no AI sound (its AtkParam's appear / hit ids -1)
 	};
 
 	struct HitRules
@@ -269,7 +270,8 @@ namespace phantom::er::combat
 	};
 	// A key no real row has (a correction above 100 can't be written): a hit with it flies only when nothing else does.
 	inline constexpr std::uint64_t kUniqueKey = ~0ull;
-	std::uint64_t HitKey(std::uint16_t a_amount, std::uint16_t a_correction, bool a_fire, float a_poise, std::uint8_t a_dmgLevel, std::int32_t a_sleep = 0);
+	std::uint64_t HitKey(std::uint16_t a_amount, std::uint16_t a_correction, bool a_fire, float a_poise, std::uint8_t a_dmgLevel, std::int32_t a_sleep = 0,
+		bool a_quiet = false);
 	bool          MayFly(const std::vector<InFlight>& a_inFlight, const void* a_chr, std::uint64_t a_key, bool a_hp);
 
 	// The bullet route's damage, completed. Elden Ring takes a player bullet's damage from the Tarnished's own weapon

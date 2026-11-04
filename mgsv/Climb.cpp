@@ -34,9 +34,9 @@ namespace phantom::guest::climb
 		constexpr std::uint16_t kNullId = 0xFFFF;
 		constexpr std::uint16_t kActionButton = 0x8000;  // XInput Y: MGSV's ACTION (ladders, climb-ups, vaults)
 		constexpr unsigned      kActionPulseMs = 150;
-		// After the move the HUD layer stays frozen this long (its copies lag a few frames) and the odometer still (live: he settled
-		// 0.5-0.9 m forward right after the placement home, which Elden Ring's puppet would have walked)
-		constexpr std::uint64_t kHudThawMs = 300;
+		// After the move the odometer stays still this long (live: he settled 0.5-0.9 m forward right after the placement home, which
+		// Elden Ring's puppet would have walked). MGSV's HUD layer has its own, shorter thaw: [Climb] HudThawMs (150).
+		constexpr std::uint64_t kSettleMs = 300;
 		// Elden Ring gone (no heartbeat) this long, or a new host session, while a ladder climb plays: it ends here (no a = 0 will
 		// ever come: Elden Ring crashed or was restarted; MGSV runs on for [Link] QuitWithoutHostSec). And no ladder climb runs
 		// longer than kMaxClimbMs whatever happens (Elden Ring's longest ladders take well under a minute).
@@ -88,8 +88,11 @@ namespace phantom::guest::climb
 		std::uint64_t g_startedMs{ 0 };
 		std::uint64_t g_thawAt{ 0 };
 		bool          g_frozen{ false };
+		// MGSV's HUD layer: frozen from the move's start until [Climb] HudThawMs after it (its own, apart from the odometer's settle)
+		std::uint64_t g_hudThawAt{ 0 };
+		bool          g_hudFrozen{ false };
 		// The odometer still (Frame.cpp): from the move's start until plan::OdoThaw says so after it -- the player's stick, or the
-		// settle's kHudThawMs. MGSV's HUD layer stays frozen the full kHudThawMs either way.
+		// settle's kSettleMs. MGSV's HUD layer thaws on its own, [Climb] HudThawMs after the move.
 		std::atomic<bool> g_odoStill{ false };
 		plan::OdoThaw     g_odoThaw;
 		std::atomic<std::uint64_t> g_odoStickThaws{ 0 };
@@ -186,6 +189,7 @@ namespace phantom::guest::climb
 			g_odoThaw.Cancel();
 			capture::hud::SetFrozen(true);
 			g_frozen = true;
+			g_hudFrozen = true;
 			if (a_lua.flags & (state::kLSquat | state::kLCrawl)) {
 				state::QueueCommand("stance 1");  // on his feet first: MGSV's action at a ladder or a wall is a standing one
 			}
@@ -212,11 +216,12 @@ namespace phantom::guest::climb
 			g_lastPhase = plan::Phase::kIdle;
 			g_endedMs.store(a_now, std::memory_order_relaxed);
 			g_active.store(false, std::memory_order_release);
-			pad::SetOwned(false);  // the player's pad again; state::Staged() (the odometer still) until kHudThawMs: he settles there
+			pad::SetOwned(false);  // the player's pad again; state::Staged() (the odometer still) until kSettleMs: he settles there
 			if (!g_camKeep.empty()) {
 				state::QueueCommand(g_camKeep);
 			}
-			g_thawAt = a_now + kHudThawMs;
+			g_thawAt = a_now + kSettleMs;
+			g_hudThawAt = a_now + static_cast<std::uint64_t>(Cfg().climbHudThawMs);
 			g_odoThaw.Start(a_now);
 		}
 
@@ -371,7 +376,7 @@ namespace phantom::guest::climb
 			ladder_rung::Prepare();  // once: the search for MGSV's ladder system (a worker thread)
 		}
 		if (g_kind == Kind::kNone && g_odoThaw.Active()) {
-			// The player's own stick ends the odometer's stillness at once (plan::OdoThaw); else the settle's kHudThawMs.
+			// The player's own stick ends the odometer's stillness at once (plan::OdoThaw); else the settle's kSettleMs.
 			int lx = 0, ly = 0;
 			proto::PadState pad{};
 			if (link::HostAlive() && link::ReadPad(pad) && (pad.flags & proto::kPadConnected) && !(pad.flags & proto::kPadNeutral)) {
@@ -383,16 +388,19 @@ namespace phantom::guest::climb
 				g_odoStill.store(false, std::memory_order_release);
 				if (why == plan::OdoThaw::Why::kStick) {
 					++g_odoStickThaws;
-					Log::Info("climb: the player's stick {} ms after the move -- Snake's motion counts again (the HUD stays frozen to {} ms)",
-						g_odoThaw.EndedAfterMs(), kHudThawMs);
+					Log::Info("climb: the player's stick {} ms after the move -- Snake's motion counts again (MGSV's HUD thaws at {} ms)",
+						g_odoThaw.EndedAfterMs(), Cfg().climbHudThawMs);
 				}
 			}
 		}
+		if (g_hudFrozen && g_kind == Kind::kNone && now >= g_hudThawAt) {
+			capture::hud::SetFrozen(false);  // MGSV's HUD live again ([Climb] HudThawMs after the move: its last prompt gone by then)
+			g_hudFrozen = false;
+		}
 		if (g_frozen && g_kind == Kind::kNone && now >= g_thawAt) {
-			capture::hud::SetFrozen(false);
 			g_frozen = false;
 			g_odoStill.store(false, std::memory_order_release);
-			state::SetStaged(false);  // the odometer counts again (he settled for kHudThawMs after the placement home)
+			state::SetStaged(false);  // the odometer counts again (he settled for kSettleMs after the placement home)
 		}
 		if (g_kind == Kind::kNone) {
 			return out;
@@ -564,6 +572,16 @@ namespace phantom::guest::climb
 		// !climb up|down [speed] | off
 		if (w.empty()) {
 			return Describe();
+		}
+		if (w == "hudthaw") {
+			// !climb hudthaw <ms>: [Climb] HudThawMs for this session (0 = MGSV's HUD live again the moment the move ends)
+			int ms = -1;
+			if (!(ss >> ms) || ms < 0 || ms > 2000) {
+				return std::format("usage: !climb hudthaw <0..2000 ms> (now {})", Cfg().climbHudThawMs);
+			}
+			MutableCfg().climbHudThawMs = ms;
+			Log::Info("climb: MGSV's HUD layer thaws {} ms after a move (console)", ms);
+			return std::format("climb: hudthaw {} ms", ms);
 		}
 		if (w == "off" || w == "end" || w == "stop" || w == "0") {
 			r.kind = Request::Kind::kClimbStop;

@@ -518,10 +518,10 @@ namespace phantom::er::Explosion
 		}
 	}
 
-	void Muzzle(const Frame& a_f, const Vec3& a_muzzle, const Vec3& a_dir, bool a_tranq)
+	void Muzzle(const Frame& a_f, const Vec3& a_muzzle, const Vec3& a_dir, bool a_quiet)
 	{
 		const auto& c = Cfg();
-		if (!c.muzzleFlash || (a_tranq && !c.muzzleTranq) || !Finite(a_muzzle) || !Finite(a_dir) || Length(a_dir) < 0.5f || !Ready(a_f)) {
+		if (!c.muzzleFlash || (a_quiet && !c.muzzleSuppressed) || !Finite(a_muzzle) || !Finite(a_dir) || Length(a_dir) < 0.5f || !Ready(a_f)) {
 			return;
 		}
 		g_muzzleLimiter.Configure(std::max(0.5f, c.muzzlePerSecond), std::max(1.0f, c.muzzlePerSecond / 4.0f));

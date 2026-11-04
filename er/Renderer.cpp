@@ -1261,7 +1261,7 @@ namespace phantom::er::Renderer
 			return "render set <key> <value>: stage (gbuffer|post|present) debug_view (0 lit,1 albedo,2 normals,3 uv,4 facing,5 bones,6 srm; stage C: 1 grey albedo, 2 no normal map, 6 srm as albedo) "
 				   "latency_frames cull (back|front|none) front_ccw flip_x xray (0..1 opacity) er_depth er_depth_bias er_depth_near day_night exposure light_intensity "
 				   "draw_player draw_buddy albedo_srgb normal_xy (auto|rg|ag) enabled gbuffer_depth (finite|infinite) gbuffer_stencil gbuffer_point (0 last, k = k-th) gbuffer_light_set gbuffer_ao "
-				   "gbuffer_translucency albedo_scale min_ambient gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref role_guard (off|log|on) poster_check (off|log|on) velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b) "
+				   "gbuffer_translucency albedo_scale min_ambient gloss_scale gloss_bias metal_scale alpha_test (auto|flag) alpha_ref role_guard (off|log|on) poster_check (off|log|on) velocity view_constants shadows velocity_scale (x,y) velocity_bias (x,y) near_fade (a,b) near_fade_other (a,b) near_fade_cell "
 				   "nvg nvg_gain nvg_curve nvg_floor nvg_tint (r,g,b) nvg_grain nvg_vignette nvg_scanlines nvg_fade_ms";
 		}
 		if (verb != "set" || key.empty()) {
@@ -1329,6 +1329,7 @@ namespace phantom::er::Renderer
 		else if (key == "velocity_bias") f2(r.velocityBias);
 		else if (key == "near_fade") f2(r.nearFade);
 		else if (key == "near_fade_other") f2(r.nearFadeOther);
+		else if (key == "near_fade_cell") r.nearFadeCell = std::clamp(std::atoi(std::string(value).c_str()), 1, 8);
 		else if (key == "occluder_fade") r.occluderFade = f();
 		else if (key == "occluder_radius") r.occluderRadius = f();
 		else if (key == "debug_offset") {

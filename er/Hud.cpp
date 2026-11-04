@@ -1,6 +1,9 @@
 #include "Hud.h"
 
+#include "ErBars.h"
 #include "Host.h"
+#include "Ini.h"
+#include "InputBridge.h"
 #include "Link.h"
 #include "Log.h"
 #include "Overlay.h"
@@ -8,6 +11,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <cstdlib>
 #include <format>
 #include <mutex>
@@ -39,6 +44,82 @@ namespace phantom::er::Hud
 		std::atomic<std::uint64_t> g_hudFrames{ 0 };
 		int                 g_aimOverride{ -1 };  // console: -1 MGSV's flag, 0 never, 1 always
 		std::vector<std::pair<std::string, Tone>> g_pending;  // console messages for the next Tick
+		// (0.7.0) The controls card.
+		CardTimer           g_card;
+		std::string         g_cardWanted;       // why it should show from the next Tick on ("" = not asked)
+		bool                g_cardSessionDone{ false };  // shown at Snake's first takeover this session (or not due: seen before)
+		std::uint32_t       g_helpSeen{ 0 };    // InputBridge::HelpPresses() last Tick
+		std::uint32_t       g_cardClosesSeen{ 0 };  // InputBridge::CardCloses() last Tick
+		bool                g_cardMarkPending{ false };  // the first-run card: PhantomRingHost.firstrun once it was drawn
+		std::uint64_t       g_cardShows{ 0 };
+		std::filesystem::path FirstRunPath() { return std::filesystem::path(ModuleDir()) / L"PhantomRingHost.firstrun"; }
+	}
+
+	void CardTimer::Show(double a_now)
+	{
+		// Up already: stays up (no new fade in), its time starts again.
+		shownAt_ = shownAt_ >= 0.0 && closeAt_ < 0.0 ? a_now - kIn : a_now;
+		closeAt_ = -1.0;
+		lastNow_ = a_now;
+		released_ = false;
+	}
+
+	void CardTimer::Close(double a_now)
+	{
+		if (Open()) {
+			closeAt_ = a_now;
+		}
+	}
+
+	float CardTimer::Update(double a_now, bool a_buttons, float a_seconds, bool a_visible)
+	{
+		const double dt = lastNow_ >= 0.0 ? std::max(0.0, a_now - lastNow_) : 0.0;
+		lastNow_ = a_now;
+		if (shownAt_ < 0.0) {
+			return 0.0f;
+		}
+		if (!a_visible && closeAt_ < 0.0) {
+			shownAt_ += dt;     // unseen: its time stands still
+			released_ = false;  // a press made meanwhile (a menu's) must be let go first
+			return 0.0f;
+		}
+		if (!a_buttons) {
+			released_ = true;
+		} else if (released_ && closeAt_ < 0.0) {
+			closeAt_ = a_now;  // any press closes it
+		}
+		if (closeAt_ < 0.0 && a_now - shownAt_ >= a_seconds) {
+			closeAt_ = a_now;
+		}
+		const float in = std::clamp(static_cast<float>((a_now - shownAt_) / kIn), 0.0f, 1.0f);
+		if (closeAt_ < 0.0) {
+			return in;
+		}
+		const float out = 1.0f - static_cast<float>((a_now - closeAt_) / kOut);
+		if (out <= 0.0f) {
+			shownAt_ = closeAt_ = -1.0;
+			return 0.0f;
+		}
+		return std::min(in, out);
+	}
+
+	std::string ControlsCardText(const std::string& a_jump, const std::string& a_item, const std::string& a_cycle, const std::string& a_card)
+	{
+		return std::format(
+			"Snake's controls (PhantomRing)\n"
+			"{}: jump    Y: climb up / vault / ladders, Elden Ring's prompts\n"
+			"View + {}: flask (Elden Ring's quick item)    View + {}: next item\n"
+			"View tapped: map    View held: MGSV's iDroid\n"
+			"View + Start held 1 s: Tarnished mode (and back)\n"
+			"LB held: buddy orders (right stick, then click it)\n"
+			"View + {}: this card again    A: close",
+			a_jump, a_item, a_cycle, a_card);
+	}
+
+	void ShowControlsCard(const char* a_why)
+	{
+		std::scoped_lock lock(g_lock);
+		g_cardWanted = a_why ? a_why : "asked";
 	}
 
 	void Brain::Message(std::string a_text, Tone a_tone, double a_now, float a_seconds)
@@ -186,6 +267,52 @@ namespace phantom::er::Hud
 		const bool wasShown = g_model.hudOpacity > 0;
 		g_brain.Update(in, Cfg().overlay, a_f.dt);
 		g_model = g_brain.Out();
+		// (0.7.0) The controls card: at Snake's first takeover (once per install, or every session), on View + card_button, on `hud card`.
+		// Only where it can be drawn (review 0.7.0): a takeover while Elden Ring's grace menu, a cutscene or MGSV's menu is up waits
+		// for Snake's screen, and the first-run marker is written once the card was drawn, never for a card nobody saw.
+		const auto& oc = Cfg().overlay;
+		const bool  cardScreen = Puppet::Active() && !a_f.menuOpen && !a_f.cutscene && !a_f.loading && !a_f.dead && !Puppet::Dying() &&
+		                        !(a_f.guestReady && (a_f.guest.flags & proto::kGuestInMenu));
+		if (Puppet::Active() && cardScreen && !g_cardSessionDone && oc.enabled && oc.controlsCard != "off" && a_f.guestReady) {
+			g_cardSessionDone = true;
+			std::error_code ec;
+			if (oc.controlsCard == "always" || !std::filesystem::exists(FirstRunPath(), ec)) {
+				g_cardWanted = "Snake's first takeover";
+				g_cardMarkPending = oc.controlsCard != "always";
+			}
+		}
+		const auto help = InputBridge::HelpPresses();
+		if (help != g_helpSeen) {
+			g_helpSeen = help;
+			if (Puppet::Active() && oc.controlsCard != "off") {
+				g_cardWanted = std::format("View + {}", oc.cardButtonName);
+			}
+		}
+		if (!g_cardWanted.empty()) {
+			g_card.Show(in.now);
+			++g_cardShows;
+			Log::Info("overlay: the controls card ({}; it fades after {:.0f} s or at a press)", g_cardWanted, oc.cardSeconds);
+			g_cardWanted.clear();
+		}
+		const auto closes = InputBridge::CardCloses();
+		if (closes != g_cardClosesSeen) {
+			g_cardClosesSeen = closes;
+			g_card.Close(in.now);
+			Log::Info("overlay: the controls card closed with A (that A kept from MGSV until let go)");
+		}
+		const bool  anyButton = InputBridge::LastButtons() != 0;
+		const float card = g_card.Update(in.now, anyButton, oc.cardSeconds, cardScreen);
+		g_model.cardOpacity = cardScreen ? card : 0.0f;
+		InputBridge::SetCardUp(g_model.cardOpacity > 0.0f && g_card.Open());
+		if (g_model.cardOpacity > 0.0f) {
+			g_model.card = ControlsCardText(Cfg().jumpButtonName, Cfg().flaskButtonName, Cfg().flaskCycleName, oc.cardButtonName);
+			if (g_cardMarkPending) {
+				g_cardMarkPending = false;
+				std::ofstream(FirstRunPath()) << "PhantomRing: the controls card was shown here once ([Overlay] controls_card = first). "
+				                                 "Delete this file to see it again at the next takeover.\n";
+				Log::Info("overlay: the first controls card is on screen -- {} written", FirstRunPath().filename().string());
+			}
+		}
 		// The iDroid fills MGSV's screen: moving its bottom-right part up with the weapon box cut it (VERIFIED live).
 		g_model.guestMenu = a_f.guestReady && (a_f.guest.flags & proto::kGuestInMenu) != 0;
 		if (wasShown != (g_model.hudOpacity > 0)) {
@@ -230,7 +357,7 @@ namespace phantom::er::Hud
 		for (const auto& l : m.lines) {
 			s += std::format("  [{:.2f}] {}\n", l.opacity, l.text);
 		}
-		return s + Overlay::Describe();
+		return s + Overlay::Describe() + "\n" + ErBars::Describe();
 	}
 
 	namespace
@@ -281,6 +408,14 @@ namespace phantom::er::Hud
 			std::scoped_lock lock(g_lock);
 			g_pending.emplace_back(text, tone);
 			return "message queued: " + text;
+		}
+		if (verb == "bars") {
+			return ErBars::SetMode(key.empty() ? "status" : key);
+		}
+		if (verb == "card") {
+			ShowControlsCard("the console");
+			return std::format("controls card shown ({} so far; [Overlay] controls_card = {}, {}: {})", g_cardShows + 1, o.controlsCard,
+				FirstRunPath().filename().string(), std::filesystem::exists(FirstRunPath()) ? "present (seen)" : "absent");
 		}
 		if (verb == "aim") {
 			g_aimOverride = key == "on" ? 1 : key == "off" ? 0 : -1;

@@ -56,6 +56,17 @@ namespace phantom::guest::walker
 		std::uint64_t     g_leads{ 0 }, g_leadFrames{ 0 }, g_leadLost{ 0 }, g_leadStops{ 0 };
 		std::uint64_t     g_lostAt[3]{};         // the last three "lost" times: three within 20 s = MGSV fights the lead, off this session
 		float             g_maxStep{ 0.0f };     // the largest per-frame move the lead made (m)
+		// The glide (legs standing while the lead moves it), per lead and in all: when it started, when its legs first walked, how
+		// long / how far it moved with them standing (before they first walked: the start's glide)
+		struct LeadGlide
+		{
+			std::uint64_t startMs{ 0 }, legsMs{ 0 };
+			float         glideS{ 0.0f }, glideM{ 0.0f }, startGlideS{ 0.0f }, ledS{ 0.0f };
+			int           legsAtStart{ -1 };
+		};
+		LeadGlide          g_glide;
+		float              g_glideTotalS{ 0.0f }, g_glideTotalM{ 0.0f }, g_ledTotalS{ 0.0f };
+		std::vector<float> g_legDelays;  // s from each lead's start to its legs walking (a lead that ended first: its length)
 		std::string       g_last{ "none" };
 		std::optional<Vec3> g_feet;              // this frame's, while confirmed
 		// A treadmill / Fulton-anchor shift is applied at the next frame: Snake's own placement shows in his root (and his draws)
@@ -235,6 +246,10 @@ namespace phantom::guest::walker
 			s.maxSpeed = c.buddyWalkerLeadMaxSpeed;
 			s.acquire = c.buddyWalkerLeadAcquire;
 			s.turnRate = c.buddyWalkerLeadTurnRate;
+			s.legGate = c.buddyWalkerLeadLegs;
+			s.legSpeed = c.buddyWalkerLeadLegSpeed;
+			s.idleSpeed = c.buddyWalkerLeadIdleSpeed;
+			s.accel = c.buddyWalkerLeadAccel;
 			return s;
 		}
 
@@ -244,12 +259,30 @@ namespace phantom::guest::walker
 			const auto& c = Cfg();
 			std::string text = std::format(
 				"walker: object {:#x} {} (feet {}), {} scans; treadmill {} ({} moved, {} failed); lead {} (side {:.1f} ahead {:.1f} tau {:.2f} max {:.1f} m/s "
-				"turn {:.1f} acquire {:.1f}): {} now, {} leads, {} frames, {} stopped, {} lost, largest step {:.3f} m{}; last: {}",
+				"turn {:.1f} acquire {:.1f}; legs gate {} {:.1f}/{:.1f} m/s, accel {:.1f}): {} now, {} leads, {} frames, {} stopped, {} lost, largest step {:.3f} m{}; "
+				"glide {:.1f} s / {:.1f} m of {:.1f} s led, legs walking {} after the starts (median {:.2f} s); last: {}",
 				loc, g_tracker.Confirmed() ? "confirmed" : loc ? "candidate" : "none",
 				g_feet ? std::format("{:.2f},{:.2f},{:.2f}", g_feet->x, g_feet->y, g_feet->z) : std::string("-"), g_scans, c.buddyWalkerTreadmill ? "on" : "off",
 				g_shifts, g_shiftFails, c.buddyWalkerLead ? "on" : "off", c.buddyWalkerLeadSide, c.buddyWalkerLeadAhead, c.buddyWalkerLeadTau,
-				c.buddyWalkerLeadMaxSpeed, c.buddyWalkerLeadTurnRate, c.buddyWalkerLeadAcquire, g_lead.Active() ? "leading" : "idle", g_leads, g_leadFrames,
-				g_leadStops, g_leadLost, g_maxStep, g_unmovable ? " -- UNMOVABLE this session" : "", g_last);
+				c.buddyWalkerLeadMaxSpeed, c.buddyWalkerLeadTurnRate, c.buddyWalkerLeadAcquire, c.buddyWalkerLeadLegs ? "on" : "off", c.buddyWalkerLeadIdleSpeed,
+				c.buddyWalkerLeadLegSpeed, c.buddyWalkerLeadAccel, g_lead.Active() ? "leading" : "idle", g_leads, g_leadFrames,
+				g_leadStops, g_leadLost, g_maxStep, g_unmovable ? " -- UNMOVABLE this session" : "", g_glideTotalS, g_glideTotalM, g_ledTotalS,
+				[] {
+					std::string d;
+					for (std::size_t i = g_legDelays.size() > 12 ? g_legDelays.size() - 12 : 0; i < g_legDelays.size(); ++i) {
+						d += std::format("{}{:.2f}", d.empty() ? "" : " ", g_legDelays[i]);
+					}
+					return d.empty() ? std::string("-") : d;
+				}(),
+				[] {
+					if (g_legDelays.empty()) {
+						return 0.0f;
+					}
+					auto v = g_legDelays;
+					std::nth_element(v.begin(), v.begin() + v.size() / 2, v.end());
+					return v[v.size() / 2];
+				}(),
+				g_last);
 			std::scoped_lock lock(g_describeLock);
 			g_describe = std::move(text);
 		}
@@ -408,7 +441,41 @@ namespace phantom::guest::walker
 			}
 			in.walkerYaw = logic::QuatYaw(rotNow.data());
 		}
+		in.legs = follow::WalkerLegs();
+		const bool wasActive = g_lead.Active();
 		const auto out = g_lead.Update(in, Settings());
+		if (out.started) {
+			g_glide = LeadGlide{ .startMs = a_in.nowMs, .legsAtStart = in.legs };
+		}
+		if (g_lead.Active() || out.stopped) {
+			// the glide's measure (whatever the gate): time and distance moved with its legs standing
+			if (g_lead.Active()) {
+				g_glide.ledS += a_in.dt;
+				if (in.legs >= 0 && plan::LegsMove(in.legs) && !g_glide.legsMs) {
+					g_glide.legsMs = a_in.nowMs;
+				}
+				if (out.glide) {
+					g_glide.glideS += a_in.dt;
+					g_glide.glideM += out.speed * a_in.dt;
+					if (!g_glide.legsMs) {
+						g_glide.startGlideS += a_in.dt;
+					}
+				}
+			}
+			if (out.stopped && wasActive && g_glide.startMs) {
+				const float delay = g_glide.legsMs ? (g_glide.legsMs - g_glide.startMs) / 1000.0f : g_glide.ledS;
+				g_legDelays.push_back(delay);
+				g_glideTotalS += g_glide.glideS;
+				g_glideTotalM += g_glide.glideM;
+				g_ledTotalS += g_glide.ledS;
+				Log::Info("walker: lead #{}: {:.1f} s led, its legs {} (AI state {:#x} at the start); glided {:.2f} s / {:.1f} m{} (legs gate {})", g_leads,
+					g_glide.ledS, g_glide.legsMs ? std::format("walking {:.2f} s after the start", delay) : std::string("never walked"),
+					g_glide.legsAtStart & 0xFF, g_glide.glideS, g_glide.glideM,
+					g_glide.startGlideS > 0.0f ? std::format(", {:.2f} s of it before they walked", g_glide.startGlideS) : std::string(),
+					Cfg().buddyWalkerLeadLegs ? "on" : "off");
+				g_glide = {};
+			}
+		}
 		if (out.started) {
 			++g_leads;
 			Log::Debug("walker: lead #{} from {:.1f} m off its spot (Snake {:.1f} m/s)", g_leads, (in.walker - plan::LeadSpot(in, Settings())).LengthXZ(),
@@ -426,6 +493,10 @@ namespace phantom::guest::walker
 		}
 		if (out.stopped && !out.lost) {
 			++g_leadStops;
+		}
+		if (out.farBehind) {
+			Log::Info("walker: the lead let D-Walker go -- {:.1f} m behind its spot, legs standing {} ms: Follow's catch-up takes it",
+				(in.walker - plan::LeadSpot(in, Settings())).LengthXZ(), Settings().farReleaseMs);
 		}
 		bool placed = false;
 		if (out.place && feet) {
@@ -473,6 +544,29 @@ namespace phantom::guest::walker
 		}
 		if (a_args == "lead on" || a_args == "lead off") {
 			g_leadSwitch.store(a_args == "lead on" ? 1 : 0);
+			return "walker: " + a_args;
+		}
+		if (a_args.starts_with("reorder ")) {
+			int ms = 0;
+			if (std::sscanf(a_args.c_str() + 8, "%d", &ms) != 1) {
+				return "usage: !walker reorder <ms>";
+			}
+			MutableCfg().buddyWalkerLeadReorderMs = std::clamp(ms, 100, 10000);
+			Log::Info("walker: a new order when its AI stood {} ms while led (console)", MutableCfg().buddyWalkerLeadReorderMs);
+			return std::format("walker: reorder {} ms", MutableCfg().buddyWalkerLeadReorderMs);
+		}
+		if (a_args.starts_with("orderahead ")) {
+			float m = 0;
+			if (std::sscanf(a_args.c_str() + 11, "%f", &m) != 1) {
+				return "usage: !walker orderahead <m>   (0 = the follow spot)";
+			}
+			MutableCfg().buddyWalkerLeadOrderAhead = std::clamp(m, 0.0f, 30.0f);
+			Log::Info("walker: orders when Snake starts {:.1f} m ahead of him (console)", MutableCfg().buddyWalkerLeadOrderAhead);
+			return std::format("walker: orderahead {:.1f}", MutableCfg().buddyWalkerLeadOrderAhead);
+		}
+		if (a_args == "legs on" || a_args == "legs off") {
+			MutableCfg().buddyWalkerLeadLegs = a_args == "legs on";
+			Log::Info("walker: lead legs gate {} (console)", a_args == "legs on" ? "on" : "off");
 			return "walker: " + a_args;
 		}
 		if (a_args == "treadmill on" || a_args == "treadmill off") {

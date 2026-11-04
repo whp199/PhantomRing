@@ -26,6 +26,7 @@
 #include "Placed.h"
 #include "Skeleton.h"
 #include "State.h"
+#include "Suppressor.h"
 #include "Throw.h"
 #include "Vars.h"
 #include "Walker.h"
@@ -258,6 +259,7 @@ namespace phantom::guest::frame
 						life = a_vars.lifeMax;
 					}
 					g_regenGate = false;
+					suppressor::NoteRest();  // its stock rises aren't a supply drop's
 					ammo::Request(e.a ? "respawn" : "rest");
 					Log::Info("rested: {} -- life {}/{}, ammo refill requested", e.a ? "respawn" : "grace rest", life, a_vars.lifeMax);
 					break;
@@ -952,6 +954,16 @@ namespace phantom::guest::frame
 			f |= proto::kGuestNvg;
 		}
 		capture::hud::SetNightVision((lf & state::kLNvg) != 0);
+		// v16: the weapon in hand has a suppressor on that isn't worn out -- MGSV's own reading (Suppressor.h), every frame; a
+		// weapon slot's ammo stock rising outside a rest (a supply drop picked up) refills that gun's suppressor
+		suppressor::NoteStocks(v.stockCounts, v.valid);
+		{
+			const auto sup = suppressor::InHand(combat::Character(), combat::SnakeIndex());
+			suppressor::NoteInHand(sup);
+			if (sup.Working()) {
+				f |= proto::kGuestSuppressorOn;
+			}
+		}
 		// v13: Snake looks through his binoculars (RB held): MGSV's PlayerStatus BINOCLE, the status kGuestFirstPerson already
 		// reads (GuestScript PR.Flags). The host marks the Elden Ring characters he looks at (er/Marking.h). UNVERIFIED live.
 		if (lf & state::kLBinocle) {

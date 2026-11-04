@@ -240,6 +240,12 @@ class FakeHost:
 				st["vehicleIdsSeen"].append(gs.vehicleId)
 			st["buddyFlagsSeen"] |= gs.buddyFlags
 			st["buddyAmmoLast"] = gs.buddyAmmo
+			# v16: the weapon in hand's working suppressor, logged as it comes and goes (with the weapon and its rounds)
+			sup = bool(gs.flags & proto.GuestFlags.SuppressorOn)
+			if self.guest_last is None or sup != bool(self.guest_last.flags & proto.GuestFlags.SuppressorOn):
+				self.log(f"guest: suppressor {'ON' if sup else 'off'} (kGuestSuppressorOn) -- weapon {gs.weaponId:#x} {gs.ammoInClip}/{gs.ammoStock}")
+				if self.trace:
+					self.trace.write(f"# suppressor {'on' if sup else 'off'} weapon={gs.weaponId} clip={gs.ammoInClip} t={time.monotonic() - self.t0:.4f}\n")
 			self.guest_last = gs
 			self.on_guest_frame(gs)
 			if self.trace:
@@ -272,11 +278,16 @@ class FakeHost:
 			st["events"][name] = st["events"].get(name, 0) + 1
 			self.on_guest_event(ev)
 			if self.trace:
-				self.trace.write(f"# event {name} a={ev.a:#x} b={ev.b} pad0={ev.pad[0]:#x} frame={ev.frame} "
+				self.trace.write(f"# event {name} a={ev.a:#x} b={ev.b}{' suppressed' if ev.type in (GuestEventType.Fire, GuestEventType.BuddyFire) and ev.b & proto.FIRE_SUPPRESSED else ''} "
+					f"pad0={ev.pad[0]:#x} frame={ev.frame} "
 					f"v0={ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f} v1={ev.v1[0]:.2f},{ev.v1[1]:.2f},{ev.v1[2]:.2f} pad1={ev.pad[1]}\n")
 			if ev.type in (GuestEventType.Fire, GuestEventType.BuddyFire):
 				who = "D-Walker" if ev.type == GuestEventType.BuddyFire else "Snake"
-				self.log(f"{who} fired: weapon {ev.a & 0xFFFF:#06x} ammo {proto.enum_name(ev.a >> 16, proto.AmmoKind)} "
+				# v16: b = pellets (low 16 bits) | FIRE_SUPPRESSED (the round went through a working suppressor)
+				suppressed = bool(ev.b & proto.FIRE_SUPPRESSED)
+				st["firesSuppressed" if suppressed else "firesUnsuppressed"] = st.get("firesSuppressed" if suppressed else "firesUnsuppressed", 0) + 1
+				self.log(f"{who} fired: weapon {ev.a & 0xFFFF:#06x} ammo {proto.enum_name(ev.a >> 16, proto.AmmoKind)} x{ev.b & 0xFFFF}"
+					f"{' SUPPRESSED' if suppressed else ''} "
 					f"from ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f}) dir ({ev.v1[0]:.2f},{ev.v1[1]:.2f},{ev.v1[2]:.2f})")
 			elif ev.type == GuestEventType.Explosion:
 				self.log(f"explosion: {proto.enum_name(ev.a, proto.AmmoKind)} r {ev.b / 1000:.1f} m at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f}) "

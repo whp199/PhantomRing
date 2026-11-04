@@ -41,6 +41,8 @@ namespace phantom::guest::vars
 			kSupportIndex,
 			kStockCounts,
 			kItemIndex,
+			kSuppressorLives,
+			kIsUseSuppressor,
 			kCount
 		};
 
@@ -48,7 +50,8 @@ namespace phantom::guest::vars
 			&addr::kVarPlayerPosY, &addr::kVarPlayerPosZ, &addr::kVarPlayerLifeMax, &addr::kVarPlayerRotY, &addr::kVarVehicleId,
 			&addr::kVarPlayerLife, &addr::kVarPlayerStamina, &addr::kVarWeapons, &addr::kVarAmmoInWeapons, &addr::kVarHandEquip,
 			&addr::kVarInventorySlot, &addr::kVarBuddyType, &addr::kVarBuddyGearAmmo, &addr::kVarBuddyGearMainWp, &addr::kVarPlayerPhase,
-			&addr::kVarSupportWeapons, &addr::kVarSupportIndex, &addr::kVarAmmoStockCounts, &addr::kVarCurrentItemIndex };
+			&addr::kVarSupportWeapons, &addr::kVarSupportIndex, &addr::kVarAmmoStockCounts, &addr::kVarCurrentItemIndex,
+			&addr::kVarSuppressorLives, &addr::kVarIsUseSuppressor };
 
 		bool g_ok[kCount]{};
 		bool g_buttonsOk{ false };
@@ -132,6 +135,11 @@ namespace phantom::guest::vars
 			if (g_ok[kStockCounts]) {
 				std::memcpy(s.stockCounts.data(), equip + (addr::kVarAmmoStockCounts.offset - kEquip), sizeof(s.stockCounts));
 			}
+			s.suppressorOk = g_ok[kSuppressorLives] && g_ok[kIsUseSuppressor];
+			if (s.suppressorOk) {
+				std::memcpy(s.suppressorLives.data(), equip + (addr::kVarSuppressorLives.offset - kEquip), sizeof(s.suppressorLives));
+				std::memcpy(s.isUseSuppressor.data(), equip + (addr::kVarIsUseSuppressor.offset - kEquip), sizeof(s.isUseSuppressor));
+			}
 		}
 
 		// 0x2D68..0x2E7C: buddy type, D-Walker gear, alert phase
@@ -212,5 +220,18 @@ namespace phantom::guest::vars
 		}
 		::WriteProcessMemory(::GetCurrentProcess(), block + addr::kVarAmmoStockCounts.offset, a_counts.data(), sizeof(a_counts), &put);
 		return true;
+	}
+
+	bool WriteSuppressorCopy(int a_slot, std::uint8_t a_life, bool a_on)
+	{
+		auto* block = g_ok[kSuppressorLives] && g_ok[kIsUseSuppressor] && a_slot >= 0 && a_slot < 6 ? Block() : nullptr;
+		if (!block) {
+			return false;
+		}
+		const std::uint8_t on = a_on ? 1 : 0;
+		SIZE_T             put = 0;
+		const bool ok = ::WriteProcessMemory(::GetCurrentProcess(), block + addr::kVarSuppressorLives.offset + a_slot, &a_life, 1, &put) && put == 1 &&
+		                ::WriteProcessMemory(::GetCurrentProcess(), block + addr::kVarIsUseSuppressor.offset + a_slot, &on, 1, &put) && put == 1;
+		return ok;
 	}
 }

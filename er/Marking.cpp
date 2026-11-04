@@ -14,7 +14,9 @@
 #include "../protocol/phantomring_protocol.h"
 
 #include <algorithm>
+#include <unordered_map>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <format>
 #include <numbers>
@@ -27,7 +29,7 @@ namespace phantom::er::Marking
 	namespace
 	{
 		constexpr float kCentreDeg = 10.0f;      // distance = centre: marks this near the view's centre show it
-		constexpr float kAimHeight = 1.2f;       // m over the feet: the chest the cone and the ray aim at
+		constexpr float kAimHeight = marking::kAim;  // m over the feet: the chest the cone and the ray aim at (no capsule known)
 		// CSChrPhysicsModule hit capsule (NpcParam hitHeight/hitRadius), then the character-vs-character one: the offsets
 		// er/Combat.cpp reads for its targets (fromsoftware-rs physics.rs [V-src], sanity-checked per character there too).
 		constexpr std::uint32_t kPhysHitHeight = 0x2F0;
@@ -44,6 +46,10 @@ namespace phantom::er::Marking
 		bool           g_noRayLogged{ false };
 		std::uint64_t  g_marked{ 0 }, g_frames{ 0 }, g_blocked{ 0 };
 		std::size_t    g_unrendered{ 0 };   // characters the last look skipped as not rendered (status)
+		// (0.7.0) His hit capsule's height over his feet, by handle: read while looking (bodies), and once for a marked one seen
+		// later without the binoculars; forgotten with the marks (a new world). <= 0: none (the fixed height).
+		std::unordered_map<std::uint64_t, std::optional<combat::Capsule>> g_bodies;
+		std::uint64_t  g_fromCapsule{ 0 }, g_fixed{ 0 };  // marks drawn at their capsule's top / at [Marking] height
 
 		marking::Rules Rules()
 		{
@@ -183,6 +189,7 @@ namespace phantom::er::Marking
 		if (g_loads.Update(a_f.inGame, reinterpret_cast<std::uintptr_t>(a_f.player.chr), nowMs) && (g_marks.Count() || g_marks.Looking())) {
 			Log::Info("marking: a new world (load or another character): {} marks forgotten", g_marks.Count());
 			g_marks.Clear();
+			g_bodies.clear();
 		}
 		// Marks are Snake's: none for the Tarnished, none while Elden Ring or MGSV owns the screen (Elden Ring's menus, a grace's,
 		// a talk: menuOpen / interacting; MGSV's iDroid or pause menu: kGuestInMenu, as Fulton's markers). Not Elden Ring's
@@ -212,7 +219,11 @@ namespace phantom::er::Marking
 		std::vector<marking::Seen> seen;
 		seen.reserve(chrs.size());
 		for (const auto& x : chrs) {
-			seen.push_back({ x.c.handle, x.c.pos + Vec3{ 0, kAimHeight, 0 }, x.alive, x.body });
+			if (x.body) {
+				g_bodies[x.c.handle] = x.body ? std::optional<combat::Capsule>(combat::ChrCapsule(Vec3{}, x.body->b.y + x.body->r - x.c.pos.y, x.body->r))
+				                              : std::nullopt;
+			}
+			seen.push_back({ x.c.handle, x.c.pos + Vec3{ 0, x.body ? marking::AimHeight(x.body, x.c.pos) : kAimHeight, 0 }, x.alive, x.body });
 		}
 		const marking::View view{ cam.pos, cam.fwd, cam.fovY, looking };
 		const bool          rays = c.lineOfSight && game::CanCastRay();
@@ -253,7 +264,20 @@ namespace phantom::er::Marking
 			if (op <= 0.0f) {
 				continue;
 			}
-			const Vec3  at = x.c.pos + Vec3{ 0, c.height, 0 };
+			// Over his head, from his own hit capsule (a troll's or a boss's too); the [Marking] height only when it can't be read.
+			auto it = g_bodies.find(x.c.handle);
+			if (it == g_bodies.end()) {
+				const auto b = Body(x.c);
+				it = g_bodies.emplace(x.c.handle, b ? std::optional<combat::Capsule>(combat::ChrCapsule(Vec3{}, b->b.y + b->r - x.c.pos.y, b->r)) : std::nullopt).first;
+			}
+			// The cache keeps the capsule at his feet = origin (he walks): moved to where he is now.
+			std::optional<combat::Capsule> body;
+			if (it->second) {
+				body = combat::ChrCapsule(x.c.pos, it->second->b.y + it->second->r, it->second->r);
+			}
+			const float height = marking::MarkHeight(body, x.c.pos, c.height, c.above);
+			++(body ? g_fromCapsule : g_fixed);
+			const Vec3  at = x.c.pos + Vec3{ 0, height, 0 };
 			std::string text;
 			if (c.distance == "always" || (c.distance == "centre" && marking::OffAxis(view, at, marking::Rules{ .bodyRadius = 0.0f }) <= centre)) {
 				text = marking::DistanceText(Length(x.c.pos - snake));
@@ -268,11 +292,30 @@ namespace phantom::er::Marking
 		g_drawn = true;
 	}
 
+	namespace
+	{
+		// The marked ones' heights (console): "npc's capsule h m -> mark at m".
+		std::string Heights()
+		{
+			std::string out;
+			for (const auto& [h, b] : g_bodies) {
+				if (!g_marks.Opacity(h, 1.0f)) {
+					continue;
+				}
+				out += b ? std::format("\n  {:#x}: capsule {:.2f} m tall, r {:.2f} -> mark at {:.2f} m", h, b->b.y + b->r, b->r,
+							   b->b.y + b->r + Cfg().marking.above)
+				         : std::format("\n  {:#x}: no capsule -> mark at {:.2f} m", h, Cfg().marking.height);
+			}
+			return out;
+		}
+	}
+
 	std::string Describe()
 	{
 		return std::format("marking: {} | binoculars {} | {} marked, {} being looked at | {} marked this session, {} rays ({} blocked), {} frames, "
-		                   "{} unrendered skipped",
-			Cfg().marking.enabled ? "on" : "off", g_force, g_marks.Count(), g_marks.Looking(), g_marked, g_marks.Rays(), g_blocked, g_frames, g_unrendered);
+		                   "{} unrendered skipped | marks drawn over the capsule {}, at the fixed {:.1f} m {}{}",
+			Cfg().marking.enabled ? "on" : "off", g_force, g_marks.Count(), g_marks.Looking(), g_marked, g_marks.Rays(), g_blocked, g_frames, g_unrendered,
+			g_fromCapsule, Cfg().marking.height, g_fixed, Heights());
 	}
 
 	std::string Command(const Frame& a_f, std::string_view a_args)
@@ -312,6 +355,21 @@ namespace phantom::er::Marking
 			}
 			return "marking: no living character around";
 		}
-		return "mark [status | binoculars on|off|auto | nearest | clear]";
+		if (w[0] == "handle" && w.size() > 1) {
+			// A test mark on that character (0x... from `noise who` / `chr`): where its mark sits, from its capsule.
+			const auto h = std::strtoull(w[1].c_str(), nullptr, 0);
+			for (const auto& x : Around(a_f, true)) {
+				if (x.c.handle == h) {
+					const bool fresh = g_marks.Mark(h, Rules());
+					g_marked += fresh ? 1 : 0;
+					const float height = marking::MarkHeight(x.body, x.c.pos, Cfg().marking.height, Cfg().marking.above);
+					return std::format("marking: 0x{:x} (npc {}) {} -- its capsule {}, the mark's tip {:.2f} m over its feet", h, x.c.npcParam,
+						fresh ? "marked" : "was marked already",
+						x.body ? std::format("{:.2f} m tall, r {:.2f}", x.body->b.y + x.body->r - x.c.pos.y, x.body->r) : std::string("unreadable"), height);
+				}
+			}
+			return "marking: no such character around";
+		}
+		return "mark [status | binoculars on|off|auto | nearest | handle <0x..> | clear]";
 	}
 }

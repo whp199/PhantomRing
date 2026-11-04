@@ -26,6 +26,7 @@ pr lua '!status'               # lines starting with '!' are guest worker comman
 pr er 'peek player.pos'        # command run inside Elden Ring (host console; the language is er/Console.cpp's)
 pr launch --dry-run            # preflight + the full plan and commands; starts nothing, writes nothing
 pr launch [--mgsv-only|--er-only] [-W 1280 -H 720] [--wait] [--proton-debug WINEDEBUG] [--er-headless WxH]
+                               # [--keep-backups N] [--keep-logs N]: save backups per game / logs/ sessions kept (10 each)
                                # --er-headless: test automation on a machine whose displays are off (Elden Ring then
                                # presented ~1 frame/s on the desktop): Elden Ring in its own headless gamescope too;
                                # screenshots with GAMESCOPE_WAYLAND_DISPLAY=gamescope-N gamescopectl screenshot F.png
@@ -36,7 +37,7 @@ pr stop [--er|--mgsv] [--kill] # SIGTERM what pr launch started (games first), -
                                # running Elden Ring it used to stop MGSV only); --er / --mgsv: only that game. A recorded
                                # pid counts only while it still carries its launch's PHANTOMRING_LAUNCH_ID (pid reuse)
 pr logs [-n 30] [-f]           # tail logs/current/*.log (gamescope/me3 output, Proton logs) and the plugin logs
-pr backup-saves [--er-only|--mgsv-only]
+pr backup-saves [--er-only|--mgsv-only]   # a backup made by hand: never pruned by pr launch
 pr restore-saves <timestamp> [--er-only|--mgsv-only] [--all-er-files] --yes
                                # without --yes: lists every file it would overwrite. Elden Ring: only PhantomRing0000.sl2
                                # (+ its .bak) unless --all-er-files (the backup holds the whole save folder: ER0000.sl2, .co2, ...);
@@ -106,7 +107,7 @@ and the game runs it when it next serves its console.
    - ER: `compatdata/1245620/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing/<steamid64>/` is copied to `backups/<ts>/er/`.
    - MGSV: `~/.local/share/Steam/userdata/<account>/311340/remote` is copied to `backups/<ts>/mgsv/311340-remote/`, and `.../287700` to `backups/<ts>/mgsv/287700/`.
    - Every file is re-hashed on both sides, and `manifest.json` is written and then verified. Each ER backup is about 140 MB.
-   - Old backups are pruned only when asked (`--keep-backups N`, `$PHANTOMRING_KEEP_BACKUPS`; default 0 = keep all): then, for Elden Ring and for MGSV each, the newest N backups holding that game are kept and so is the oldest one holding it (its saves before PhantomRing first ran); a backup goes only when neither game keeps it. Every `*-pre-restore` one and any folder whose manifest can't be read are kept too.
+   - Old backups are pruned after the new one has verified (`--keep-backups N`, `$PHANTOMRING_KEEP_BACKUPS`; **default 10 since 0.7.0**, 0 = keep all -- kept forever, ~130 MB each, they reached 18.8 GB in 146 launches). **Only the backups `pr launch` itself took** are ever pruned: each manifest says who made it (`"origin": "launch"`, `"manual"` for `pr backup-saves`, `"pre-restore"` for `restore-saves`' safety copy); a manifest from before 0.7.0 has none and counts as a launch's only while `logs/` still holds that launch's session folder of the same name with its `pids.json` -- the prune then writes `"origin": "launch"` into it, so it stays known once that log folder is pruned -- and anything else counts as made by hand. Only folders with a launcher-made name (`<yyyymmdd-hhmmss>[-n]`, sorted by its numbers) and a `manifest.json` are candidates: a copy (`20261012-003126-original`, `0-original`), `worktree-patches-...`, any other folder, a symbolic link (never followed) and a manifest that can't be read are always kept. For Elden Ring and for MGSV each, the newest N launch backups holding that game are kept, and so is the **first** backup of each game -- named in `backups/.first.json` (written the first time a game is seen: on a new install the backup just taken, on an upgrade the oldest one there; a backup taken later while the system clock ran behind, whose name sorts first, can't take its place) and the oldest by name too. A backup goes only when no game keeps it. Every `*-pre-restore` one and every backup from the last 24 hours (`$PHANTOMRING_KEEP_RECENT_HOURS`, 0 = no such protection; a value that isn't a number, or nan, keeps the 24 h; a name dated in the future counts as recent) are kept too: a day of relaunches never pushes out the backup a test session started with. A `$PHANTOMRING_KEEP_*` value that isn't a whole number ("all", "off", "", "10.0") keeps everything, with a warning. A folder that can't be removed is logged and skipped (the launch goes on); the log line names what was removed. `pr launch --dry-run` prints the rule in force. Review 0.7.0; live on the 0.7.0 integration launch: 17 folders before, 18 after (the new one), nothing pruned (all from the last 24 h, made by hand or protected), `.first.json` = er 20261031-232905, mgsv 20261012-003126; the 11 launch backups of that day got `"origin": "launch"` from their `logs/` folders, the three older ones (their log folders gone) count as made by hand.
    - Two backups in the same second get their own folders (`<ts>-2`, `<ts>-2-pre-restore`): the second used to rewrite the first's manifest.
 3. **ER save.** If `PhantomRing0000.sl2` doesn't exist, it is created as a verified copy of the seed save (`--seed-save`, `$PHANTOMRING_SEED_SAVE`, else `ER0000.sl2`), through `PhantomRing0000.sl2.tmp` (renamed only once its sha256 matches; a failed copy leaves no save behind). The seed is never modified, and an existing `PhantomRing0000.sl2` is never replaced.
 4. **me3.** If it isn't there yet, the official `me3-linux-amd64.tar.gz` of [me3 v0.13.0](https://github.com/garyttierney/me3/releases/tag/v0.13.0) is extracted to `third_party/me3/`. It is looked for at `pr install-me3 --archive PATH`, `$PHANTOMRING_ME3_ARCHIVE`, `third_party/downloads/` and `~/Downloads/`. Its sha256 must equal the release's published digest (`f31579de…e93fc1`, `ME3_SHA256` in `launch.py`), and it is unpacked with `tarfile` `filter="data"`.
@@ -128,6 +129,7 @@ Each launched process gets `PHANTOMRING_LAUNCH_ID` in its environment. `pr stop`
 Logs:
 
 - **Launch.** `logs/<ts>/mgsv-gamescope.log`, `er-me3.log`, `steam-287700.log` and `steam-1245620.log` (the last two are Proton logs), and `pids.json` (what `pr stop` stops). A second launch in the same second gets `logs/<ts>-2` (`pr launch --mgsv-only` straight followed by `--er-only` used to share one `pids.json`, the second replacing the first, and `pr stop --mgsv` then found no MGSV).
+- **Pruning** (0.7.0; `--keep-logs N`, `$PHANTOMRING_KEEP_LOGS`; default 10, 0 = keep all): each launch, after `logs/current` points at its new folder, deletes the oldest session folders (`logs/<yyyymmdd-hhmmss>[-n]`) beyond the newest N. Never anything else under `logs/` (`guest-install.json`, evidence folders, `collect-logs` zips, other files), never the folder `logs/current` points at, never one whose launch still runs (a `pids.json` root still carrying its `PHANTOMRING_LAUNCH_ID`), and never one from the last 24 hours (`$PHANTOMRING_KEEP_RECENT_HOURS`, as for backups). A symbolic link is never followed and a folder that can't be removed is logged and skipped. The plugin logs (`build/PhantomRingHost.log`, `MGS_TPP/PhantomRingGuest.log`) are not session folders and are never pruned. `pr launch --dry-run` prints the count and the rule in force.
 - **me3.** `~/.local/share/me3/logs/phantomring/`.
 - **Plugins.** `build/PhantomRingHost.log` (next to the host DLL) and `MGS_TPP/PhantomRingGuest.log`; `pr logs` shows whichever exist.
 
@@ -188,6 +190,10 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 - Sends one triangle mesh and a 4×4 texture per owner on the render ring.
 - `!climbhome <ms>`: after `kHEvClimb a = 0` Snake stays on MGSV's ladder that long (`kGuestClimbing`, no walking) before he is home,
   as the real guest takes him back from its airport ladder (0.18-0.23 s live); default 0 (home at once).
+- `!suppressor on [shots] | off` (v16) sets `kGuestSuppressorOn`; while it is on every `!fire` is suppressed (`kFireSuppressed` in
+  Fire `b`'s bit 31) unless it says `loud`, and after `shots` suppressed shots (default 4, 0 = never) the flag drops right after
+  the shot that wore it out, as MGSV's spent suppressor comes off (the host's "Suppressor worn out"). `!fire ... suppressed` marks
+  one shot without the flag.
 - `!binoculars on|off` (v13) sets `kGuestBinoculars` + `kGuestFirstPerson`: the real Elden Ring host then marks the characters
   near its camera's centre (docs/HOST.md "Marking"; `pr er 'mark binoculars on'` does the same without any guest flag).
 - Answers `pr lua` (and `!status`) through a tiny Lua subset: `return <exprs>` and `vars.x = <expr>`, with `vars.*`, `BuddyType.*`, `math.*`, `tostring`, `..`, `~=`, and/or/not.
@@ -198,7 +204,9 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
 python3 tools/phantomring/test_layout.py     # build/layout_dump.exe (110 values) + a dump generated from proto.py (489 values: every field
                                              # offset/size of all 22 structs, all constants, all enum values), both MinGW-built, run under wine
 python3 tools/phantomring/test_fakes.py      # fake_mgsv vs fake_er, ~14 s, 51 checks incl. host restart -> guest re-attach + resend, buddy block
-python3 tools/phantomring/test_launcher.py   # backup/verify/restore/prune, seed save, guest install refusals, profile validation,
+python3 tools/phantomring/test_launcher.py   # backup/verify/restore/prune (default keep 10, the last 24 h kept, logs/ sessions only;
+                                             # only launch backups, launcher-named, .first.json, symlinks, bad env values),
+                                             # seed save, guest install refusals, profile validation,
                                              # me3 archive lookup (temp dirs only; any machine, games running or not)
                                              # --unit: only game-process matching on a fake /proc; --machine: also this machine's
                                              # Steam, Proton, MGSV and ER save dir (read-only)

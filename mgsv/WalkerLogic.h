@@ -34,7 +34,23 @@ namespace phantom::guest::walker::plan
 		std::uint64_t stopMs{ 500 };
 		float         turnRate{ 6.0f };  // rad/s: the walker turned toward the lead's motion at most this fast (0 = its own facing kept)
 		float         lostAt{ 2.0f };    // m: the walker this far from where it was put (and not by us) = someone else moved it
+		// (2026-11-03) Never faster than its legs: MGSV's walker AI takes its order 0.2-3 s after Snake starts, and until then its
+		// legs stand while the lead slid it beside him ("glides"). legGate: while its AI isn't walking (LeadInput::legs known and
+		// not kLegsWalking / kLegsStopping) the lead moves at most idleSpeed; walking, at most legSpeed (MGSV's walker walks ~6.5
+		// m/s); the lead's speed changes by at most accel m/s per second (no jerk when the legs start). Off: maxSpeed alone.
+		bool          legGate{ false };
+		float         legSpeed{ 6.5f };
+		float         idleSpeed{ 0.0f };
+		float         accel{ 8.0f };
+		// (review 0.7.0) A walker further than `acquire` from its spot whose legs walk catches up at maxSpeed (legSpeed alone left it
+		// ever further behind a dashing Snake, ~7 m/s); one whose legs stand that far behind for farReleaseMs is let go (stopped):
+		// Follow's catch-up and whistle take it over again.
+		std::uint64_t farReleaseMs{ 4000 };
 	};
+
+	// D-Walker's AI state byte (Follow.cpp WalkerState: 05 idle, 06 settling, 09 turning, 0A walking, 0C stopping; -1 unknown)
+	inline constexpr int kLegsWalking = 0x0A, kLegsStopping = 0x0C;
+	inline bool LegsMove(int a_state) { return a_state == kLegsWalking || a_state == kLegsStopping; }
 
 	struct LeadInput
 	{
@@ -46,6 +62,7 @@ namespace phantom::guest::walker::plan
 		float         viewYaw{ 0.0f };   // the camera's view of him (Follow.cpp ViewYaw), radians
 		Vec3          walker;            // the walker's feet now (its location object +0x10)
 		float         walkerYaw{ 0.0f }; // its facing now
+		int           legs{ -1 };        // its AI's state byte (kLegsWalking ...), -1 = not known (no gate)
 	};
 
 	struct LeadOutput
@@ -56,6 +73,9 @@ namespace phantom::guest::walker::plan
 		bool  started{ false };
 		bool  stopped{ false };
 		bool  lost{ false };   // stopped because the walker wasn't where we put it (moved by MGSV / a whistle / a warp)
+		bool  farBehind{ false };  // stopped because it stood far behind its spot, legs still, for farReleaseMs
+		float speed{ 0.0f };   // m/s the lead moved it this frame
+		bool  glide{ false };  // it moved (> 0.3 m/s) while its legs, known, didn't walk: what the eye sees as a glide
 	};
 
 	inline float WrapPi(float a_a)
@@ -95,6 +115,8 @@ namespace phantom::guest::walker::plan
 				m_point = a_in.walker;
 				m_yaw = a_in.walkerYaw;
 				m_slowSince = 0;
+				m_farIdleSince = 0;
+				m_speed = 0.0f;
 				out.started = true;
 			} else if ((a_in.walker - m_point).LengthXZ() > a_s.lostAt) {
 				// Not where we put it last frame: MGSV moved it (a whistle's placement, a warp, its own planner) -- it is MGSV's again.
@@ -117,10 +139,34 @@ namespace phantom::guest::walker::plan
 			const float k = a_s.tau > 0.0f ? 1.0f - std::exp(-a_in.dt / a_s.tau) : 1.0f;
 			Vec3        step{ a_in.velocity.x * a_in.dt + (spot.x - m_point.x) * k, 0.0f, a_in.velocity.z * a_in.dt + (spot.z - m_point.z) * k };
 			const float len = step.LengthXZ();
-			const float cap = std::max(0.0f, a_s.maxSpeed) * a_in.dt;
-			if (len > cap && len > 0.0f) {
-				step = step * (cap / len);
+			float       capSpeed = std::max(0.0f, a_s.maxSpeed);
+			if (a_s.legGate && a_in.legs >= 0) {
+				const bool legs = LegsMove(a_in.legs);
+				const bool behind = (m_point - spot).LengthXZ() > a_s.acquire;
+				if (behind && !legs) {
+					if (!m_farIdleSince) {
+						m_farIdleSince = a_in.nowMs ? a_in.nowMs : 1;
+					} else if (a_s.farReleaseMs && a_in.nowMs - m_farIdleSince >= a_s.farReleaseMs) {
+						m_active = false;
+						m_farIdleSince = 0;
+						out.stopped = out.farBehind = true;
+						return out;
+					}
+				} else {
+					m_farIdleSince = 0;
+				}
+				capSpeed = std::min(capSpeed, std::max(0.0f, !legs ? a_s.idleSpeed : behind ? a_s.maxSpeed : a_s.legSpeed));
+				if (a_s.accel > 0.0f) {
+					capSpeed = std::min(capSpeed, m_speed + a_s.accel * a_in.dt);
+				}
 			}
+			const float cap = capSpeed * a_in.dt;
+			if (len > cap && len > 0.0f) {
+				step = len > 0.0f && cap > 0.0f ? step * (cap / len) : Vec3{};
+			}
+			m_speed = step.LengthXZ() / a_in.dt;
+			out.speed = m_speed;
+			out.glide = a_in.legs >= 0 && !LegsMove(a_in.legs) && m_speed > 0.3f;
 			m_point = { m_point.x + step.x, a_in.walker.y, m_point.z + step.z };
 			// Facing: toward where it goes, turned at most turnRate (a walker sliding sideways looks wrong; one spinning too).
 			if (a_s.turnRate > 0.0f && step.LengthXZ() > 0.2f * a_in.dt) {
@@ -152,5 +198,7 @@ namespace phantom::guest::walker::plan
 		Vec3          m_point;
 		float         m_yaw{ 0.0f };
 		std::uint64_t m_slowSince{ 0 };
+		float         m_speed{ 0.0f };  // m/s of last frame's step (the gate's acceleration limit)
+		std::uint64_t m_farIdleSince{ 0 };
 	};
 }

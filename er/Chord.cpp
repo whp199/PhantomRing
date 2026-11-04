@@ -121,8 +121,8 @@ namespace phantom::er
 		// The quick item's shift ([Flask]): View down and still undecided -- or already the shift's -- when the item or cycle button
 		// goes down. View is then the shift's (consumed: no map tap, no iDroid, no chord), and the press stays out of MGSV's pad
 		// until released.
-		const bool shiftOk = a_p.itemShift && a_in.mode == Mode::kSnake && view_.down && view_.tracked && !view_.toGuest && !view_.chord &&
-		                     (view_.undecided() || view_.shift);
+		const bool shiftAny = a_in.mode == Mode::kSnake && view_.down && view_.tracked && !view_.toGuest && !view_.chord && (view_.undecided() || view_.shift);
+		const bool shiftOk = a_p.itemShift && shiftAny;
 		// Tarnished mode: Elden Ring gets the item / cycle press itself (its X drinks); View, still undecided, then opens no map.
 		const bool tarnishedShift = a_p.itemShift && a_in.mode == Mode::kTarnished && view_.down && view_.tracked && !view_.chord &&
 		                            (view_.undecided() || view_.shift);
@@ -146,6 +146,19 @@ namespace phantom::er
 		shiftEdge(a_in.cycle, cycleDown_, cycleHeld_, o.itemCycles);
 		o.guestMaskItem = itemHeld_;
 		o.guestMaskCycle = cycleHeld_;
+		// (0.7.0) View + the controls card button: the card again (the same shift; never in Tarnished mode, Elden Ring's D-pad there).
+		if (a_in.help && !helpDown_) {
+			helpHeld_ = a_p.helpShift && shiftAny;
+			if (helpHeld_) {
+				++o.helpPresses;
+				view_.consumed = true;
+				view_.shift = true;
+			}
+		} else if (!a_in.help) {
+			helpHeld_ = false;
+		}
+		helpDown_ = a_in.help;
+		o.guestMaskHelp = helpHeld_;
 
 		auto seen = [&](const Button& b) { return (b.down && (b.raw || b.passed)) || now < b.tapUntil; };
 		if (a_in.mode != Mode::kGuestMenu) {

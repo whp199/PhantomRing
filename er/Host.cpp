@@ -11,6 +11,7 @@
 #include "Config.h"
 #include "Console.h"
 #include "DebugDraw.h"
+#include "ErBars.h"
 #include "Events.h"
 #include "Fulton.h"
 #include "GeomProbe.h"
@@ -460,6 +461,10 @@ namespace phantom::er::Host
 			in.inWorld = a_f.inGame && a_f.player && !a_f.dead && !a_f.dying;
 			in.waitMs = static_cast<std::uint64_t>(std::max(0, Cfg().ladderWaitMs));
 			in.settleMs = static_cast<std::uint64_t>(std::max(0, Cfg().ladderSettleMs));
+			// (0.7.0) The climb over for good (MGSV told: g_climbEndedEarly) and Snake home in MGSV: the short settle.
+			in.endedForGood = g_climbEndedEarly || (Cfg().ladderEndEarly && LadderEndedForGood(prevState, *state));
+			in.guestHome = a_f.guestReady && !(a_f.guest.flags & proto::kGuestClimbing) && !(a_f.guest.flags & proto::kGuestMantling);
+			in.homeSettleMs = static_cast<std::uint64_t>(std::max(0, Cfg().ladderHomeSettleMs));
 			const auto event = g_ladder.Update(in);
 			if (g_ladder.PressDue(in.nowMs, static_cast<std::uint64_t>(std::max(0, Cfg().ladderPressDelayMs)))) {
 				// The puppet has stepped aside: Elden Ring gets Snake's press now, as the Tarnished's own (InputBridge kept it).
@@ -600,7 +605,9 @@ namespace phantom::er::Host
 			}
 			const bool visible = (states[i] & 0x02) != 0;
 			g_hudSeen = g_hudSeen || visible;
-			return g_hudSeen && (states[i] & 0x01) && !visible;  // created, not visible
+			// Not while our own [Overlay] er_bars = none hides it (ErBars::HidesHud; 0.7.0 integration: it read as a screen at every
+			// takeover)
+			return g_hudSeen && (states[i] & 0x01) && !visible && !ErBars::HidesHud();  // created, not visible
 		}
 
 		void UpdateInteraction(Frame& a_f, std::int32_t a_promptBefore)
@@ -619,6 +626,10 @@ namespace phantom::er::Host
 			// already be hidden while you walk up to an item: then the minimum time alone).
 			if (pressed) {
 				g_hudUpAtPress = !a_f.hudHidden;
+			} else if (g_interaction.Active() && !g_hudUpAtPress && a_f.inGame && !a_f.hudHidden && a_f.hudKnown) {
+				// Hidden at the press, up since (a rest shows it at the sit-down): from here on it tells when the screen ends.
+				g_hudUpAtPress = true;
+				Log::Info("ER interaction: its HUD came up {} ms after the press -- it tells when Elden Ring's screen ends", ::GetTickCount64() - g_interaction.Since());
 			}
 			// An Elden Ring dialog that comes up by itself next to an NPC: live (the Castleward Tunnel grace) Melina talked after the
 			// rest, then asked "Go to the Roundtable Hold" (A/B) while Snake had the pad, and nothing could answer her. Her HUD
@@ -935,6 +946,7 @@ namespace phantom::er::Host
 			Puppet::SyncAnchor(g_frame);
 			UpdateClimbAnchor(g_frame);
 			CameraDriver::Apply(g_frame);
+			ErBars::Apply(g_frame);  // (0.7.0) Elden Ring's HP / FP / stamina bars while Snake plays
 		}
 
 		void OnPostPhysics(float a_dt)

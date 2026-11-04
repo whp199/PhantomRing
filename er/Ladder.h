@@ -45,6 +45,13 @@ namespace phantom::er
 			bool          inWorld{ true };    // in the world, alive (not loading, not dead or dying)
 			std::uint64_t waitMs{ 1500 };     // a press waits this long for the climb to start
 			std::uint64_t settleMs{ 300 };    // off the ladder this long (the step off it) before Snake takes over
+			// (0.7.0) ... unless Elden Ring's climb ended for good (none right after EndTop / EndBottom: LadderEndedForGood -- no
+			// frame of none between two of its states, the step off is done) and MGSV has Snake home (kGuestClimbing down): then
+			// homeSettleMs is enough. Live 2026-11-01 (0.6.0) Snake walked 0.44-0.52 s after the climb: the 300 ms settle, then
+			// MGSV's first step; MGSV had him home after 0.20 s.
+			bool          endedForGood{ false };
+			bool          guestHome{ false };
+			std::uint64_t homeSettleMs{ 50 };
 		};
 
 		Event Update(const Input& a_in);

@@ -3,6 +3,7 @@
 #include "ActorProxy.h"
 
 #include "Ammo.h"
+#include "Suppressor.h"
 #include "AudioMeter.h"
 #include "Blast.h"
 #include "Camera.h"
@@ -99,6 +100,7 @@ namespace phantom::guest
 			frame::PublishStalled(a_nowMs, a_ready);
 			sound::Tick(a_ready);
 			cigar::Tick(a_nowMs, a_ready);  // the Phantom Cigar's minutes for Elden Ring's clock (Cigar.h)
+			suppressor::LuaTick();         // `!suppressor <slot> <life>` (Suppressor.h)
 		}
 
 		std::string Command(std::string_view a_line)
@@ -387,6 +389,35 @@ namespace phantom::guest
 			if (cmd == "cqc" || cmd.starts_with("cqc ")) {
 				return cqc::Console(cmd.substr(3));  // !cqc [action]: CQC holds and throws (Cqc.h)
 			}
+			if (cmd == "suppressor" || cmd.starts_with("suppressor ")) {
+				// `!suppressor` (the slots' records, the vars copies, the weapon in hand), `!suppressor <slot> <life> [on|off]` (set it
+				// through MGSV's own setters on the Lua thread)
+				std::istringstream in{ std::string(cmd.substr(10)) };
+				int                slot = -1, life = -1;
+				std::string        onOff = "on";
+				if (in >> slot >> life) {
+					in >> onOff;
+					return suppressor::Queue(slot, life, onOff != "off");
+				}
+				return suppressor::Describe(combat::Character(), combat::SnakeIndex()) + "\nlast set: " + suppressor::LastSet();
+			}
+			if (cmd.starts_with("peek ")) {
+				// `!peek <hex address> [bytes]`: a safe read of MGSV's memory (diagnostics)
+				std::istringstream in{ std::string(cmd.substr(5)) };
+				std::uintptr_t     at = 0;
+				std::size_t        n = 64;
+				in >> std::hex >> at >> std::dec >> n;
+				n = std::min<std::size_t>(n, 512);
+				std::string out = std::format("{:#x}:", at);
+				for (std::size_t i = 0; i < n; ++i) {
+					const auto b = SafeRead<std::uint8_t>(reinterpret_cast<const void*>(at + i));
+					if (!b) {
+						return out + " (unreadable)";
+					}
+					out += std::format("{}{:02x}", i % 16 == 0 ? "\n" : " ", *b);
+				}
+				return out;
+			}
 			if (cmd == "shots") {
 				return combat::DescribeDamage();
 			}
@@ -407,6 +438,7 @@ namespace phantom::guest
 			}
 			if (cmd == "refill") {
 				// Dev: what the host's kHEvRested does (magazines, ammo stocks, items to full; docs/GUEST.md 18.11)
+				suppressor::NoteRest();
 				ammo::Request("console");
 				return "refill requested (next Lua update): " + ammo::Describe();
 			}
@@ -543,6 +575,7 @@ namespace phantom::guest
 			ladder_rung::Init();  // byte checks only; the search for MGSV's ladder system starts once the sandbox plays (Climb.cpp)
 		}
 		ammo::Init();
+		suppressor::Init();
 		sound::Install();
 		audio_meter::Install();  // [Audio] Meter: CoCreateInstance watched for MGSV's XAudio2 engine (before MGSV creates it)
 		menu::Install();

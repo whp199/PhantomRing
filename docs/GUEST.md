@@ -67,6 +67,7 @@ work, live with MGSV and fake_er only (no protocol change).
 | `Blast.*` | attack-area system vf0 detour -> kGEvExplosion for thrown/placed explosives (§18.5) |
 | `C4.*`, `C4Logic.*` | C4's detonator: MGSV's own (ACTION with C4 in hand) watched, a refused or unanswered press set off by the guest (§18.8a, `[Combat] C4Detonator`); the pure part unit-tested |
 | `Ammo.*` | kHEvRested: magazines, ammo stocks and item counts back to full through MGSV's own ammo component (§18.11) |
+| `Suppressor.*` | Snake's suppressor (§18.18, protocol v16): MGSV's reader replicated (kFireSuppressed at each shot, kGuestSuppressorOn), the [Loadout] guns' suppressors at MGSV's full life, the refill at a rest / a pickup |
 | `Menu.*` | MGSV's pause menu (native) / iDroid (Lua) -> kGuestInMenu; GuestState republished while frames stall (§18.6) |
 | `Sound.*` | Wwise SetPosition/PostEvent detours, D-Walker volume experiment and `!sound` diagnostics (§18.2) |
 | `Horse.*`, `HorseLogic.*` | D-Horse treadmill (§8.1a, `[Buddy] HorseTreadmill`, off): the horse's own location object found near its skin and moved with each treadmill jump; the pure part unit-tested |
@@ -116,6 +117,7 @@ An unprotected error would hit `lua_atpanic` and end the game.
     - Cqc (CQC_HOLD/CONTINUOUS), FirstPerson (SUBJECT/BINOCLE, or riding with MGSV's cockpit camera: §18.10);
     - InBox (CBOX), BoxPoster (its item slot has a poster) (v8, §18.9);
     - Nvg: the night-vision goggles are on (v10, §18.12);
+    - SuppressorOn (v16): the weapon in hand has a suppressor on that isn't worn out (MGSV's reading every frame, §18.18);
     - Binoculars: PlayerStatus BINOCLE (RB held, not aiming; FirstPerson is set too) -- the host marks the Elden Ring characters
       Snake looks at (v13, docs/HOST.md "Marking"; live 2026-10-14: on while RB holds the binoculars up, off on release);
   - mission/location codes;
@@ -138,7 +140,8 @@ An unprotected error would hit `lua_atpanic` and end the game.
 - **Guest events:**
   - `kGEvFire` / `kGEvBuddyFire`:
     - `a` = equipId | ammoKind<<16;
-    - `b` = pellets;
+    - `b` = pellets (low 16 bits) | `kFireSuppressed` (v16: the round went through a working suppressor, MGSV's own reading at
+      the shot, §18.18);
     - v0/v1 = MGSV's own origin and direction after spread;
     - `pad[0]` = bulletId, with bit 31 set for explosive bullets (informational);
     - `pad[1]` (v8) = the round's lethal damage as a share of a 2600-life MGSV soldier, 1/10000 (docs/COMBAT.md "Damage share").
@@ -1060,6 +1063,46 @@ MGSV's Wwise is driven through its own Lua (`GuestScript.cpp PR.Audio / AudioKee
     Gatefront's path: the walker beside Snake on his left in every one, its legs walking. `walker: ... treadmill on (140 moved, 0
     failed); lead on ...: 30 leads, 21977 frames, 30 stopped, 0 lost, largest step 0.265 m`. Seen once: led to Snake's left, the
     walker stood between him and a rail fence he was walking at (he stopped against it).
+- **Never faster than its legs (2026-11-03, `WalkerLogic.h` leg gate, `Walker.cpp`, `Follow.cpp`; `[Buddy] WalkerLeadLegs`,
+  `WalkerLeadLegSpeed`, `WalkerLeadIdleSpeed`, `WalkerLeadAccel`, `WalkerLeadOrderAhead`, `WalkerLeadReorderMs`; `!walker legs
+  on|off`, `!walker orderahead <m>`, `!walker reorder <ms>`):** README's "glides at the start of a run". The lead moved the walker
+  from Snake's first step while its AI (record `+0x56`) still stood: a glide until its legs walked. Now:
+  - **Measured** for every lead (`walker: lead #N: 10.5 s led, its legs walking 2.45 s after the start (AI state 0x5 at the start);
+    glided 4.77 s / 13.8 m, 2.39 s of it before they walked (legs gate off)`; totals and the legs' delays in `!walker`): a frame is a
+    glide when the lead moved it > 0.3 m/s with its AI's state known and not walking (0A) or stopping (0C).
+  - **The gate**: while its AI doesn't walk the lead moves it at most `WalkerLeadIdleSpeed` (0: it stays), walking at most
+    `WalkerLeadLegSpeed` (6.5 m/s, MGSV's walker's own pace; the lead's 9 m/s before), its speed changing by at most `WalkerLeadAccel`
+    (8 m/s per s: no jerk when the legs start). Unknown legs (Follow hasn't read the record in 0.5 s): as before.
+  - **Its own walk sooner**: its AI took the order given as Snake starts within 25 ms and stayed idle (polled through
+    /proc/<pid>/mem at 40 Hz: `+0x5C` cleared, `+0x56` still 05), and walked only with the next one, given when it had stood 0.8 s and
+    1.5 s after the first (taken ~0.5 s later: 09 turning, 0A walking 20 ms after). The orders while led (as he starts, when its AI
+    stood) now go `WalkerLeadOrderAhead` (8 m) ahead of him in the lead's lane, the steering keeps that spot ahead while he moves (its AI
+    always has somewhere to walk: no glide in the middle of a run), and the AI is ordered again after `WalkerLeadReorderMs` (500 ms)
+    of standing. The first step after a run's start did not come sooner (below): MGSV's walker answers ~2.2 s after a stand of
+    3-4 s whatever the orders; why is open (a cooldown of its AI's after it arrives?).
+  - **Live (MGSV + fake_er, the same 50 s pad script each time: stand 3 s, run 10 s, stand 4 s, run 6 s turning, stand 4 s, run 3 s,
+    stand 3 s, run 8 s turning back, stand 5 s; distances from the fake_er trace while Snake runs > 3 m/s):**
+
+    | | legs walking after the start (4 leads) | glided (time / distance, the 4 leads) | running median / p90 / max | first 3 s of a run: median / max |
+    |---|---|---|---|---|
+    | 0.6.0 (gate off, orders as before) | 2.44, 2.47, 2.18, 1.35 s (and 2.45, 2.42, 2.40, 0.47 s) | 13.4 s / 38.5 m (13.9 s / 41.0 m) | 2.80 / 2.80 / 2.91 m | 2.80 / 2.91 m |
+    | orders ahead, gate off | 3.54, 2.53, 2.25, 0.62 s | 8.9 s / 26.3 m (only before the legs first walk) | 2.80 / 2.80 / 2.91 m | 2.80 / 2.91 m |
+    | gate on, orders as before | 3.56, 2.45, 2.37, 1.63 s | **0.0 s / 0.0 m** | 4.29 / 8.55 / 10.83 m | 4.77 / 10.64 m |
+    | **gate on, orders ahead, reorder 500 (default)** | 2.26, 2.12, 2.49, 0.32 s | **0.0 s / 0.0 m** | **2.83** / 6.77 / 8.36 m | 4.68 / 8.36 m |
+
+    So the walker never glides now: at a run's start it stands with its legs until its AI walks (~2 s after a stand), then catches up
+    at its own 6.5 m/s and runs beside him (the running median is 0.6.0's); the price is the first seconds of a run, where it is up to
+    ~8 m behind him instead of gliding beside him. `WalkerLeadLegs = false` is 0.6.0's glide. Offline: `TestWalkerLegs`
+    (`tests/test_guest_horse.cpp`: legs standing 1 s, then walking: never moved while standing, never faster than 6.5 m/s or 8 m/s
+    per s, catching up; unknown legs and the gate off as before).
+  - **Far behind** (review 0.7.0): legSpeed (6.5 m/s) alone left the walker ever further behind a dashing Snake (~7 m/s), and nothing
+    let go of it while led. Now a walker more than `WalkerLeadAcquire` (6 m) from its spot whose legs walk catches up at
+    `WalkerLeadMaxSpeed` (9 m/s, still at most 8 m/s per s faster each second), and one whose legs stand that far behind for 4 s
+    (`farReleaseMs`) is let go: `walker: the lead let D-Walker go -- N m behind its spot, legs standing 4000 ms: Follow's catch-up takes
+    it`. Offline (`TestWalkerLegs`): a 12 s dash at 7 m/s with the legs standing 2.2 s -- behind more than 6 m, then back to about
+    6 m and held there, never over 9 m/s, never a glide; legs that never walk -> let go. Live with both games (0.7.0 integration,
+    Stormveil's rooms and courtyards, short runs): every lead `glided 0.00 s / 0.0 m (legs gate on)`, legs walking 0.00-2.44 s after
+    the start.
 - **Keeping up (2026-10-12, `Follow.cpp`):** what MGSV's walker AI does, from its record (polled through
   /proc/<pid>/mem at 10 Hz during runs): `+0x56` is its state (05 idle, 06 settling, 09 turning, 0A walking, 0C
   stopping); a whistle's `+0x5C` flag is taken ~1-2 s after the command and it walks ~1 s later (a direct write of
@@ -1775,6 +1818,81 @@ PARTS_ACTIVE CARRY CURTAIN VOLGIN_CHASE (CBOX_EVADE is the box's own dive). So t
 - Tests: `tests/test_guest_dive.cpp` (each sign; crouched X; no sign; already running; not eligible / cancelled; one flag per
   dive; NORMAL_ACTION already off at X is no sign).
 
+### 18.18 Suppressor (`Suppressor.*`, `[Loadout] Suppressors`, `!suppressor`; protocol v16 `kGuestSuppressorOn` / `kFireSuppressed`; live 2026-11-03, MGSV + fake_er)
+
+Player report (0.6.0): a silencer on the sleep pistol. MGSV's WU S.PISTOL takes a suppressor, but the boot's loadout put the gun
+into a slot whose suppressor vars were the save's ZORN-KP's (none): Snake's tranquilizer pistol was loud, with no SUP gauge.
+
+- **Where MGSV keeps it** (static RE, Addresses.h "Snake's suppressor", every site byte-checked; `verify_addresses.py`: 135 sites, all match):
+  the ammo component's 6-byte slot record (`[comp+0x50] + (player * [comp+0xC] + slot) * 6`, the one Ammo.cpp refills) is u16
+  magazine, u16 sub magazine, **u8 life** (+4: rounds it still takes, 0xFF never wears) and u8 flags (+5: **0x02 on**).
+  `vars.suppressorLives[slot]` / `isUseSuppressor[slot]` (u8 x6, `+0x56C` / `+0x572`) are the copies a mission load builds the
+  records from. FireWeapon (0x141041110) asks MGSV's own reader `0x141050870` (WeaponComponent, &life, &on, WeaponState, player)
+  **before its pellet loop**: not a firearm -> 0/0; on = (rec[5] & 2) && life && the gun's traits (`[w+0x23A]` & 0x40: the gun
+  takes one); the alternate (under-barrel) magazine has its own bit 0x40. Pellet i is fired suppressed while on && i < life
+  (quiet, no muzzle flash); afterwards life -= pellets through the equip controller vf 0x150 (not for 0xFF, the alternate mode,
+  or `[w+0x3C0]` & 0x20000000), and at 0 the "broke" notices (the gauge goes). The component's own setters: vf 5
+  `SetSuppressorLife` (rec[4], then its listener's notice: the HUD) and vf 6 `SetUseSuppressor` (rec[5] bit 1). Each gun's
+  **full life** is its 0x90-byte gun data's +0x80 (the listener `[comp+0x58]` vf 0x150 GunData(slot type), replicated with safe
+  reads): live the WU S.PISTOL **30** (traits 0x55), the SVG-76 and the FB MR launcher 0 (traits 0x11 / 0x01: they take none).
+- **The boot's loadout** (`[Loadout] Suppressors = sleep|all|none`, default sleep; only while MGSV's saves are blocked and the
+  setters verified, else `boot: suppressors (...): left as the save has them (why)`): `PR.PreLoadout` writes each [Loadout] gun's
+  `isUseSuppressor` / `suppressorLives` before the sandbox loads -- on with a provisional 254 for the sleep guns (bullet 10/11) or
+  all, off/0 for the others -- and at the setup, the guns' parameters loaded, `suppressor::ApplyLoadout` sets MGSV's own full
+  life natively (a reload keeps a worn life; a gun that takes none is turned off). Live: `boot: loadout before the load: ...
+  EQP_WP_West_thg_010(7)=slot 2 was 875 suppressor 2=on` -> `suppressor: in hand equip 7 (slot 2): on, life 254` (MGSV doesn't
+  clamp it) -> `boot: suppressors (sleep): slot 0 equip 36 (bullet 15, takes none): none; slot 1 equip 54 (bullet 46, takes
+  none): none; slot 2 equip 7 (bullet 10, takes one, MGSV's full 30): slot 2: 254 on -> 30 on`. The SVG-76's record had kept the
+  save's shotgun's life 15 / on; now 0 / off. MGSV's weapon box: the pistol drawn with its suppressor, `SUP` and a full gauge.
+- **kFireSuppressed** (`Combat.cpp` ShotDetour, inside FireWeapon before the loop and the wear): MGSV's reading for the firing
+  WeaponState; `b = pellets | kFireSuppressed` when on && life > 0 (logged `shots: equip 7 SUPPRESSED (suppressor life N before
+  the shot)`; `!shots` counts). **kGuestSuppressorOn** (`Frame.cpp`, every frame): the same reading for Snake's WeaponState
+  (`[character+0x80]` = his WeaponComponent, `[c+0x58] + (player - [[c+0x38]+0x24]) * 0x610`); a change is logged (`suppressor:
+  in hand equip 7 (slot 2): on, life 30` / `none or off`).
+- **Refill**: kHEvRested (rest 0 / respawn 1) and `!refill` refill every gun that has one this session (the loadout's, or one seen
+  working: a supply drop's) to its full life with Ammo.cpp's rounds, on the Lua thread (`suppressor: refill (rest; slot 2: 0 on ->
+  30 on (equip 7, MGSV's full 30))`). A weapon slot's ammo stock rising outside a rest (a supply drop's ammo picked up) refills that
+  gun's suppressor too (debug `suppressor: slot N's stock rose A -> B ...`). Every write (the refill, `!suppressor <slot> <life>`)
+  waits for MGSV's save guards as the boot's loadout does (`left as it is (MGSV's save guards are incomplete ...)`). **Known
+  limit:** with the save's Infinity Bandana MGSV refills the reserve itself at every reload, which looks like a pickup (harmless:
+  the suppressor never wears then, below; such a "refill" that changes nothing is logged at debug level only). MGSV's own supply
+  drop was not tried.
+- **The Infinity Bandana**: this save's Snake wears it (`vars.playerFaceEquipId` 2 -> `PlayerPlayFlag.USE_MUGEN_BANDANA`,
+  `vars.playerPlayFlag` 384): MGSV then shows the reserve as "∞" and **never wears a suppressor** (FireWeapon skips the wear, the
+  `[w+0x3C0]` 0x20000000 bit): live 18 shots, life 30 throughout. That is MGSV's own rule, kept. For the wear test it was taken off
+  in memory (`vars.playerFaceEquipId = 0` + a sandbox reload; saves blocked; the next launch has it again).
+- **Live (MGSV + fake_er on /dev/shm/phantomring_g, the bandana off):** `!suppressor 2 10 on`, then 14 aimed RT taps: 10 kGEvFire
+  `x1 SUPPRESSED` with the guest's life before each shot 10, 9, ..., 1 (`... 1 before the shot: it wears out with this one`), fake_er
+  `guest: suppressor off (kGuestSuppressorOn) -- weapon 0x7 4/11` 20 ms after the 10th, then 4 shots without the bit; fake_er `rested
+  0` -> `suppressor: refill (rest; slot 2: 0 on -> 30 on ...)` 1 ms after the rounds' refill, `guest: suppressor ON` at once, the next
+  shot SUPPRESSED (life 30 -> 29). The first shot from a full one: life 30 -> 29 in the record. **MGSV's output** (`[Audio] Meter`,
+  each shot metered alone, loudest 0.5 s window / peak): suppressed (11 shots) -29.1 .. -29.7 dBFS / -12.7 .. -13.4; the worn-out
+  pistol (3 shots) -24.4 .. -24.6 / -10.2: **~5 dB quieter**; the shot it broke on -23.2 / -7.1 (MGSV's "broke" sound with it).
+  **MGSV's HUD** (gamescope frames, the weapon box): `SUP` with a full gauge; worn out, no gauge (MGSV's own); refilled at a rest
+  the gauge comes back at the next shot or weapon change (the box refreshes then, as its ammo does; known limit).
+- `recordings/fire_suppressed.prrec` (git-ignored; recordings/README.txt): 4 suppressed shots, the wear-out, 3 unsuppressed.
+- **Review 0.7.0**: `Suppressors = sleep` means every gun firing tranquilizer darts (`logic::KindOfBullet` kTranq: bullets 10, 11,
+  26, 30, 34, 40, 49, 67, 98; `PR.SLEEP_BULLETS` the same list), not only the handgun's 10 / 11. A gun whose suppressor never wears
+  (gun data +0x80 = 0xFF) gets exactly 0xFF (a provisional 254 used to stay and wear out for good after 254 shots: MGSV skips the
+  wear only at 0xFF), is refilled to 0xFF, and is left on whatever the mode (SetUseSuppressor forces it on; zeroing it only made the
+  reader call it worn out). `kFireSuppressed` only when every pellet goes through it (life >= pellets, or 0xFF): MGSV suppresses pellet
+  i < life, so a shotgun's last lives were partly loud. Turning one off sets "off" first and then the life (SetSuppressorLife on a
+  record still on calls its listener, and with 0 that is MGSV's "suppressor broke" notice). `!suppressor` reads the refill state under
+  the lock (the Lua thread's refill reassigned the string meanwhile), `g_pickups` is atomic. A byte check that fails now logs 64
+  bytes around the first difference (`found from +0x..`), not the site's first 64 (Verify.cpp).
+- **Live with both games** (0.7.0 integration, Elden Ring 1.17.2 + this MGSV, the player's save): the boot's `slot 2: 254 on -> 30
+  on`; Elden Ring's frames show MGSV's weapon box with the pistol, `SUP` and its gauge; a head dart `shots: equip 7 SUPPRESSED
+  (suppressor life 30 before the shot)` -> the host's `... suppressed) -> ... HEADSHOT ... sleep +252` and no AI sound; the bandana
+  taken off in memory (`vars.playerFaceEquipId = 0`, `!boot`: MGSV reloaded the sandbox and Snake took over again; `vars.playerPlayFlag`
+  still read 384 but the suppressor wore), `!suppressor 2 3 on`, three shots: life 3, 2, 1, then the host's corner "Suppressor worn
+  out", the weapon box without its gauge, the fourth shot loud; a rest at a grace `suppressor: refill (rest; slot 2: 0 on -> 30 on (equip
+  7, MGSV's full 30))` and the gauge back at the next shot. Respawns: `suppressor: refill (respawn; slot 2 (equip 7): full (30))`.
+- No suppressor toggle of MGSV's own was found to wire up (none among its pad actions the guest knows; the component's
+  `SetUseSuppressor` is called by its equip setup); `!suppressor <slot> <life> [on|off]` sets one through MGSV's setters (tests),
+  `!suppressor` shows the slots' records and gun data, the vars copies and the weapon in hand.
+- Offline: `test_guest_logic` `TestSuppressor` (the reader with the live values: the pistol, the rifle with a stale record, the
+  non-firearms, the alternate magazine), `test_guest_link` (the ini's `Suppressors = sleep`).
+
 ## 19. Frame pacing (`FramePace.cpp`, `[Pacing]`, `!pace`; live 2026-10-12, both games)
 
 Player report: "the camera is and has always been a bit jumpy". The host side (blending MGSV's frames into Elden Ring's) is
@@ -2244,12 +2362,15 @@ makes MGSV play Snake's own matching move for as long as it lasts.
   swings round the wall); the buddy's position is published as `buddyPos + (root - home)` (where it stands relative to Snake's
   sandbox spot); no treadmill, jump, dive, buddy whistles, Fulton anchor or proxies; the guest owns the pad
   (`pad::SetOwned`: neutral, its own stick, the Y pulses -- the player's pad is Elden Ring's ladder's); MGSV's HUD layer keeps its
-  last frame (its "Y" prompt and ladder icon never reach Elden Ring) until 300 ms after it ends.
+  last frame (its "Y" prompt and ladder icon never reach Elden Ring) until `[Climb] HudThawMs` (150) after it ends -- 300 ms before
+  2026-11-03. Measured that day (`!climb hudthaw 0`, `pr record --hud-every 0`, every HUD frame against the HUD 1 s later): after a
+  ladder climb MGSV's "Y" + ladder prompt is still there, fading, at +36 ms (773 of the prompt area's samples differ), +53 (612), +70
+  (499), +87 (144) and gone at +103 ms; after a vault and a climb-up there is none at +36 ms. The odometer's own settle stays 300 ms.
 - **After it** (review of 0.6.0, `plan::OdoThaw`, `TestOdoThaw`): the odometer stays still for the settle after the placement
   home (MGSV's root drifts 0.5-0.9 m forward there), until the player's own left stick is pushed past the dead zone or 300 ms --
   before, the whole 300 ms whatever the player did, on top of the way home: the stick did nothing for 0.2-0.5 s after every
   ladder. A stick held through Elden Ring's end never counts (the host keeps it neutral until let go). `climb::OdometerStill()`
-  for Frame.cpp; `state::Staged()` (no treadmill, jump or dive, MGSV's HUD frozen) still lasts the 300 ms. Logged `climb: the
+  for Frame.cpp; `state::Staged()` (no treadmill, jump or dive) still lasts the 300 ms (MGSV's HUD thaws at `HudThawMs`, 150). Logged `climb: the
   player's stick N ms after the move -- Snake's motion counts again`; `!climb` counts them. Live with both games 2026-11-01
   (Stormveil's 14.5 m ladder): the stick pushed 35-53 ms after Elden Ring's end, the guest home 195-205 ms after it, the stick
   counted 110-122 ms after that (when the host's puppet starts and its pad reaches MGSV, 301-317 ms after the end), Snake walking in

@@ -1,4 +1,4 @@
-# Status (2026-11-01, 0.6.0-alpha)
+# Status (2026-11-03, 0.7.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,92 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## 0.7.0-alpha, 2026-11-03: release integration with both games
+
+Both real games on the default mapping (`pr launch --er-headless 3840x2160`, `pr er-continue`, the exclusive virtual pad, no controller
+plugged in: `real pad polls hidden 0`; Elden Ring 1.17.2, MGSV 1.0.15.4; ~1 h 45 min: one launch, then an Elden Ring-only relaunch for a
+fix found in the run, MGSV kept running), the player's save at Stormveil (the courtyard, the Rampart Tower grace and its room, the
+tower ladder's room, the lower courtyard's group of four). Positions through the dev console's `call setpos`; Snake aimed through
+MGSV's own camera (`Player.RequestToSetCameraRotation` from `pr lua`, the angles from `pr er "combat aimat"`). The saves taken at
+the start (`backups/20261103-194736`) were put back afterwards: **15 of 15 files equal by sha256** (`PhantomRing0000.sl2` and its
+`.bak` restored; `ER0000*`, `MGS_ER0000*`, `steam_autocloud.vdf` and MGSV's 7 files never changed); the copy before the restore is
+`backups/20261103-203145-pre-restore`. Both games stopped, the virtual pad off, `build/PhantomRingHost.firstrun` removed (the player
+gets the card).
+
+- **The round's code review** (24 findings, commit "Review fixes for 0.7.0"): launcher pruning (only `pr launch`'s own backups,
+  launcher-named, `.first.json`, symlinks, bad env values), the AI getters byte-verified (89/89 on 2.7.2.0), mode heard after the
+  shot's hit and never on sleepers, quiet darts until a suppressor is reported, the worn-out watch, the card only where seen and A,
+  the quick item's re-read and queue, the bars on a ladder, the spirit-ash watch, the projectile store's checks, the guest's
+  never-wearing suppressors / tranquilizer guns / partial pellets / off order / Describe lock / mismatch window, D-Walker far behind.
+  One finding taken in part: a backup dated in the future still counts as recent (treating it as old would delete every real backup
+  while the clock runs behind); the first is protected by `.first.json` instead.
+- **Found in this run and fixed**: `er_bars = none` (hud_state 0) also hides CSMenuMan UI state 7, the HUD signal of the
+  interactions: every takeover logged `ER HUD hidden (UI state 7) -- nothing on screen explains it`, the second `Elden Ring's HUD
+  looks set to "Auto"` (the press-less screens off), and a rest at the Rampart Tower grace ended `after 3513 ms (a short one: the HUD
+  stayed)` with the grace menu still on screen -- Snake had the pad and B reloaded; Tarnished mode closed it. Now UI state 7 is
+  ignored while (and 0.3 s after) the bars hide it, the bars come back 1.5 s after any of Elden Ring's screens, and an interaction
+  whose HUD came up after the press follows it. After the Elden Ring relaunch: 0 such lines; Y at the grace -> `ER interaction
+  (ActionButtonParam 6101)`, its menu (frame), B -> `ER interaction over after 13882 ms (its HUD is back)`, Snake back (frame).
+- **Backups and logs on this launch** (pruning live): before -- 17 backups (`20261012-003126` ... `20261103-183813`, three
+  `-pre-restore`) and `worktree-patches-20261103`; logs: 11 sessions, `current`, `evidence-20261014`, `guest-install.json`. After --
+  all of them plus `20261103-194736` and `.first.json` (er `20261031-232905`, mgsv `20261012-003126`); nothing pruned (everything
+  from the last 24 h, made by hand or the first); the day's 11 launch manifests got `"origin": "launch"` from their `logs/` folders,
+  the three older ones count as made by hand. The Elden Ring-only relaunch added `20261103-200822`, the restore
+  `20261103-203145-pre-restore`; nothing was ever removed.
+- **The silencer** (real MGSV): the boot `slot 2: 254 on -> 30 on`; MGSV's weapon box in the HUD layer shows the WU S.PISTOL with
+  `SUP` and its gauge (frames). A head dart from 11 m on one of four calm soldiers: guest `shots: equip 7 SUPPRESSED (suppressor life
+  30 before the shot)`, host `Snake tranquilizer (weapon 7 bullet 10 x1, suppressed) -> npc 30000014 ... HEADSHOT ...: sleep +252
+  (resist 229, 2 rungs)`, `noise`: `1 quiet shots, 0 AI sounds made`; 108 `noise who` samples over 18 s: all four `calm ... last AI
+  sound 0`. Control: an SVG-76 round into the ground beside them -> `AI sound 35 m (Snake's rifle)` + `5 m (strikes)`, all four had
+  2010 at the next sample, three in BATTLE 1.9-2.7 s after the shot (then they killed Snake). **Wear-out**: the save's Infinity
+  Bandana taken off in memory (`vars.playerFaceEquipId = 0`, `!boot`: MGSV reloaded the sandbox, Snake took over again; saves
+  blocked), `!suppressor 2 3 on`, three shots: life 3, 2, 1 (`it wears out with this one`), host `the suppressor on Snake's weapon 7
+  wore out` 316 ms after the third, the corner "Suppressor worn out" and the weapon box without its gauge (frame), the fourth shot
+  `AI sound 20 m (Snake's pistol)`. **Refill**: Y at the grace -> `suppressor: refill (rest; slot 2: 0 on -> 30 on (equip 7, MGSV's
+  full 30))`, the next shot SUPPRESSED at life 30; respawns `refill (respawn; ... full (30))`.
+- **One-press quick item**: after 12 s idle (the Auto HUD faded) View + D-pad down -> `a wake press, the switch 170 ms later` ->
+  `the switch press after the wake` -> `the quick item is now slot 1: Flask of Cerulean Tears`; two presses ~0.35 s apart: the second
+  `queued behind the switch still pressed (1 waiting)`, slot 1 -> 0 -> 1, no retry.
+- **The controls card**: at the takeover `overlay: the controls card (Snake's first takeover ...)` and `the first controls card is on
+  screen -- PhantomRingHost.firstrun written` 0.36 s later (frame: seven lines, "A: close", over Stormveil); View + D-pad up -> again;
+  A -> `closed with A (that A kept from MGSV until let go)` with Snake `Crouching` before and after (an A without the card then
+  stood him up).
+- **The respawn's Tarnished**: six deaths of Snake's (a beast, soldiers, a 21 m fall, the courtyard group, a fall out of the tower
+  room in the 10-minute run) -- each `the respawn's new Tarnished hidden from his first frame` and `stayed hidden 3.1-3.2 s, from his
+  first frame to Snake's start`; death traces hidden throughout; a frame after a respawn: Snake and D-Walker at the grace, no Tarnished.
+- **Elden Ring's bars** (the HUD set On for the frames, back to Auto after): Snake -- no HP / FP / stamina; Tarnished mode -- the three
+  bars; Snake again -- gone (frames).
+- **Mark heights**: `mark handle` on two of the group -> `its capsule 1.90 m tall, r 0.40, the mark's tip 2.25 m over its feet`; frame
+  from Snake's position: the red triangle and "11m" just over a hooded soldier's head.
+- **Tints**: Snake walked into a wall, the camera turned against it -- the see-through (D-Walker's panel, Snake's launcher) in its own
+  colours, 0 magenta / 6 green-ish pixels of 864,000 in the near half (frame).
+- **The first throw**: `projectiles: throw equip 378 known from an earlier session` at the load; the session's first sleep grenade ->
+  `drawn with the mesh kept from an earlier session (0.02 s after its release ...)`; frame 0.25 s after: MGSV's blue canister inside
+  the throw ring.
+- **The ladder settle** (Stormveil's AEG219_067_4000; Snake at its foot, `prompt 5000`, Y, MGSV's climb): two climbs down to the
+  bottom -- the climb over at 0, `back on the sandbox` +206 / +207 ms, `puppet ON` +233 / +234 ms (0.6.0: +301 / +317); the second
+  with the stick pushed again at EndBottom: `the player's stick 39 ms after the move -- Snake's motion counts again`, Snake walked 4 m
+  in 3 s. A stick held through the end stays out of MGSV's pad until let go (as designed).
+- **Dark places** (`min_ambient` 0.008): Snake by the torch at the ladder's foot in the dark tower and in the dim Rampart Tower room,
+  readable (frames).
+- **D-Walker**: 97 leads in the 10 minutes, every one `glided 0.00 s / 0.0 m`; legs walking 0.00-2.44 s after a lead's start;
+  sampled ~1.4 times a second over the 10 minutes in the tower's small room (runs into walls): running (> 3 m/s) median 3.8 m, p90 6.9,
+  max 12.2 (after Snake fell out of the room); standing median 2.9 m.
+- **Spirit ashes**: not testable on this save (no Spirit Calling Bell, the quick slots hold the two flasks: `flask slots`); offline
+  tests only.
+- **Regression** (README How to play, each once, the tower room): run, camera, A crouch / stand, R3 (`Snake jumps -- 1.20 m up`), X dive
+  (`hop #1: 0.60 m up`), LT + RT (`... suppressed`), B reload, D-pad up / down, RB (`marking: binoculars up`), LB call menu, Start (Elden
+  Ring's menu) and B, View tapped (its map) and B, View held (`View held 400 ms+ ... -> MGSV Start held` -> `MGSV menu open`) and
+  Start, View + Start x2 (`Tarnished mode ON` / `OFF`), View + X (`Flask of Cerulean Tears used 922 ms after the press, 0 left`).
+- **10 minutes of continuous play** (309 actions in 600 s: 72 runs, 24 walks, 33 camera turns, 20 stance changes, 33 jumps, 20 dives,
+  26 aim-and-fire, 12 reloads, 13 weapon switches, 11 binoculars, 11 call menus, 6 Elden Ring menus, 3 maps, 10 iDroids, 9 Tarnished-mode
+  round trips, 6 flasks): both sides alive throughout (heartbeats 4-9 ms at the end); 9 jumps, 7 dive hops, 11 shots (one rocket
+  into a wall at 4 m), one death (Snake ran out of the room, fell to a lower yard and was beaten, respawn 17.3 s later, hidden 3.1 s);
+  the host log **one warning** (`projectiles: the guest's projectile draws for round bullet 46 were not taken (more than 6 parts or
+  spread wider than 1.5 m)`: that rocket, fired into a wall, flew as the simple shape), the guest log **0 warnings and 0 errors** (for
+  the whole MGSV session too). The host log's other warning of the session was the Auto-HUD false alarm fixed above.
+- Not done: `[Noise] mode = heard` live, spirit ashes, MGSV's own supply drop, a long open-ground run for D-Walker's distance.
 
 ## 0.6.0-alpha, 2026-11-01: release integration with both games
 
@@ -290,7 +376,7 @@ The player's session-6 reports, item by item:
 - **View, then Start: the chord.** Start 550 ms after View: MGSV's iDroid flashes open for ~1 s and closes by itself, Tarnished
   mode 1.0 s after Start (three times); Start then View: Snake back; View held alone: the iDroid, Start closes it.
 - **Buddies from MGSV's menu.** Dismiss D-Walker, deploy D-Horse, D-Dog, D-Walker again, each with the iDroid through the pad
-  (the host's corner: "D-Walker dismissed -- no buddy now", "Buddy: D-Dog is out"); D-Dog follows and marks Elden Ring's enemies.
+  (the host's corner: "D-Walker dismissed -- no buddy now", "Buddy: D-Dog is out"); D-Dog follows (it doesn't fight or mark Elden Ring's enemies: its "Found enemy" is MGSV's about MGSV's own sandbox; D-Dog as a battle buddy is next, docs/research/ddog.md).
 - **Fulton of a sleeping Elden Ring soldier: works.** Gatefront: two darts, walk up, MGSV's Fulton prompt and "ZZZ" marker over
   him, Y held -> 5 s later Elden Ring's balloon lifts him away, gone, +64 runes (HOST.md "Fulton"). Elden Ring's sleep lasts ~50 s.
 - **Full proxies (`!proxy on`, off by default): not ready.** With the real host MGSV went to alert phase 3 within 80 s and an MGSV
@@ -486,14 +572,17 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
 - D-Walker's footsteps: quieter since 0.6.0 (`[Audio] WalkerDistance` 8; MGSV's output running with it following: median -36.5
   dBFS, peak -17.8; it was -21 dBFS with peaks near clipping).
 - D-Walker still answers orders ~1-2 s late; while Snake runs it is led beside him since 0.6.0 (live with both games 2026-11-01:
-  median 2.81 m, p90 2.81, max 2.82; it was 4.8 / 6.7 / 10 m), but its own walking AI starts 0.2-3 s after him (it glides meanwhile).
+  median 2.81 m, p90 2.81, max 2.82; it was 4.8 / 6.7 / 10 m), but its own walking AI starts 0.2-3 s after him: since 0.7.0 it
+  stands until its legs walk (no glide: 97 of 97 leads `glided 0.00 s` with both games) and is up to ~8 m behind for a run's first
+  seconds, catching up at up to 9 m/s when far behind. Why MGSV's walker drops its first order is open.
 - MGSV's own effects (explosions, smoke, flames) are never drawn in Elden Ring; blasts are drawn with Elden Ring's pot effects
   instead (Fire Pot fireball, Holy Water Pot flash, Sleep Pot mist, Fetid Pot cloud; seen live, [docs/COMBAT.md](COMBAT.md) §9),
   D-Walker's flamethrower with Dragonfire flames. The smoke looks more like brown dust than MGSV's white smoke. Muzzle flashes: a
   small burst of Elden Ring's sparks (on since 0.6.0).
 - Grenades and rockets in flight: MGSV's own models once the guest tags them (on since 0.6.0; with both games 2026-11-01 MGSV's
   sleep grenade framed in flight, a rocket only from behind: its exhaust hides the body), otherwise a ball / a dark ball with a
-  glowing trail -- the first throw of an item each session, the one the model is learned from. CQC throws/chokes need a target
+  glowing trail -- the first throw of an item ever (since 0.7.0 the learned model is kept across sessions; a rocket fired into a
+  wall at 4 m in the 0.7.0 run was not taken: its draws spread wider than 1.5 m). CQC throws/chokes need a target
   MGSV doesn't have. C4: MGSV's own detonator (Y with C4 in hand) never answers in the sandbox;
   PhantomRing sets the oldest C4 off on a Y tap instead (`[Combat] C4Backup`, on since live pass A 2026-10-14: 2 of 2 taps).
 - Breaking things: sturdy ones (defence 90: Limgrave's wooden palisade fences) don't break even in a blast; a few low
@@ -510,6 +599,12 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
 - Elden Ring's own frame times show a single 36-40 ms frame one to six times per 10 s in the open world (the pacing probe,
   both games running); each is a small visible step in a pan. The evening pan also had two one-frame yaw steps of 0.85
   and 1.6 deg (frames of ~19 ms) and one 2 m camera pull-in by collision. Not investigated yet.
+- Elden Ring's bars (`[Overlay] er_bars = none`, 0.7.0): all three or none (HP alone can't be kept); for 1.5 s after any of Elden
+  Ring's screens they show, so that the screen after one is still recognised (UI state 7, "Elden Ring's bars" in HOST.md).
+- The suppressor (0.7.0): with the Infinity Bandana MGSV never wears it (its rule); after a rest MGSV's weapon box shows the old
+  gauge until the next shot or weapon change; MGSV's own supply drop untried. Some Elden Ring enemies never react to sounds
+  (Stormveil's upper-rampart soldiers 42101014 / 30100114, the sentry 30003514); `[Noise] mode = heard` untried live.
+- Spirit ashes through the quick item: untested live (no Spirit Calling Bell in the test save).
 - Regeneration after Elden Ring's hits now follows MGSV's own curve (fixed; Margit kills a Snake who stands still in ~12 s);
   life can tick up by up to ~2% for a moment before the curve's first write after a hit.
 - D-Horse: the treadmill moves it in MGSV (`[Buddy] HorseTreadmill`, on since live pass B 2026-10-15: a straight 300 m ride, no

@@ -374,6 +374,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(d.promptButton == 0x8000);  // Y: Elden Ring's event action on an Xbox pad (VERIFIED live)
 	CHECK(shipped.fallWatchSeconds == d.fallWatchSeconds && shipped.fallWatchDrop == d.fallWatchDrop && shipped.unstick == d.unstick &&
 	      shipped.unstickSeconds == d.unstickSeconds && shipped.catchUp == d.catchUp);
+	CHECK(shipped.respawnHide == d.respawnHide && d.respawnHide && shipped.respawnHideMaxMs == d.respawnHideMaxMs);
 	CHECK(shipped.hideMode == d.hideMode && shipped.motion == d.motion && shipped.hitHook == d.hitHook && shipped.noDead == d.noDead &&
 	      shipped.noDamage == d.noDamage && shipped.mirrorLife == d.mirrorLife && shipped.forwardHeals == d.forwardHeals &&
 	      shipped.killOnGuestDeath == d.killOnGuestDeath);
@@ -399,6 +400,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.drawTracers == d.drawTracers && shipped.tracerSeconds == d.tracerSeconds && shipped.traceRange == d.traceRange);
 	CHECK(shipped.marking == d.marking);  // [Marking]
 	CHECK(shipped.ladderPrompts == d.ladderPrompts && shipped.ladderWaitMs == d.ladderWaitMs && shipped.ladderSettleMs == d.ladderSettleMs &&
+	      shipped.ladderHomeSettleMs == d.ladderHomeSettleMs &&
 	      shipped.ladderPressDelayMs == d.ladderPressDelayMs);
 	CHECK((d.ladderPrompts == std::vector<int>{ 5000, 5010 }));  // ActionButtonParam "Climb" / "Descend"
 	CHECK(shipped.maxSpeedHorse == d.maxSpeedHorse && shipped.stepUpHorse == d.stepUpHorse && shipped.radiusVehicle == d.radiusVehicle &&
@@ -411,6 +413,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.hopMinRise == d.hopMinRise && shipped.hopWaitMs == d.hopWaitMs);  // dive = hop: on since the live pass of 2026-10-14
 	CHECK(shipped.render == d.render);
 	CHECK(shipped.overlay == d.overlay);
+	CHECK(shipped.noise == d.noise);  // [Noise]
 	CHECK(shipped.keyboard == d.keyboard);  // [Keyboard]: the shipped ini spells out the defaults
 }
 
@@ -711,6 +714,7 @@ static void TestMenuGroups()
 #include "test_host_hop.inc"
 #include "test_host_mantle.inc"
 #include "test_host_quickitem.inc"
+#include "test_host_noise.inc"
 
 // The real host link + console (er/Link.cpp, er/Console.cpp) against a live guest on a_where -- fake_mgsv.py
 // or the real guest link -- driven by tools/phantomring/test_plugins.py. Prints one "PEER {json}" line.
@@ -837,6 +841,7 @@ int main(int argc, char** argv)
 	TestJumpReview();
 	TestJumpUphill();
 	TestNearerOf();
+	TestNoise();
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

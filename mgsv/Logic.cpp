@@ -477,6 +477,29 @@ namespace phantom::guest::logic
 		return a_text.empty();
 	}
 
+	SuppressorReading SuppressorOf(const SuppressorInputs& a_in)
+	{
+		SuppressorReading r;
+		// not a firearm, a thrown one ((flags & 0x1800) == 0x800), no weapon, or mode 4: MGSV answers 0 / 0
+		if ((a_in.gunFlags & 0x1C0) != 0x40 || (a_in.gunFlags & 0x1800) == 0x800 || a_in.equip == 0 || a_in.mode == 4) {
+			return r;
+		}
+		const std::uint32_t type = a_in.slotType & 0x1F;
+		if (type < 1 || type > 8 || !a_in.haveRecord) {
+			return r;
+		}
+		r.firearm = true;
+		if (a_in.gunFlags & 0x200) {
+			// the alternate magazine (under-barrel): its own bit stands for both, life 0xFF when set (never worn)
+			r.on = (a_in.recordFlags & 0x40) != 0;
+			r.life = r.on ? 0xFF : 0;
+			return r;
+		}
+		r.life = a_in.recordLife;
+		r.on = (a_in.recordFlags & 0x02) && a_in.recordLife != 0 && (a_in.gunTraits & 0x40);
+		return r;
+	}
+
 	IDroidRequest::Pad IDroidRequest::Update(std::uint64_t a_nowMs, bool a_hostStart, bool a_menu, bool a_eligible, std::uint64_t a_retryMs, Event& a_event)
 	{
 		a_event = Event::kNone;

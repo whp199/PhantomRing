@@ -190,6 +190,7 @@ static void TestProjectiles()
 	{
 		auto&      rc = Cfg().render;
 		const bool was = rc.projectileMeshes, wasPlayer = rc.drawPlayer;
+		rc.projectileStore = false;  // (0.7.0) never the templates a live session kept next to the test exe (build/PhantomRingHost.projectiles)
 		RenderSnapshot s;
 		const float id[12] = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0 };
 		std::memcpy(s.anchor, id, sizeof(id));

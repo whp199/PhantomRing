@@ -16,11 +16,14 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import math
 import os
+import re
 import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import time
 import tomllib
@@ -62,10 +65,61 @@ ME3_SHA256 = "f31579deebf75b4702059694b664bdd8917c4773ab0c266715ca8f92e1e93fc1"
 ME3_DIR = ROOT / "third_party/me3"
 # Where the archive is looked for (after `pr install-me3 --archive` and $PHANTOMRING_ME3_ARCHIVE).
 ME3_ARCHIVE_CANDIDATES = (ROOT / "third_party/downloads" / ME3_ASSET, Path.home() / "Downloads" / ME3_ASSET)
-# Save backups kept under backups/ (`pr launch --keep-backups N`, $PHANTOMRING_KEEP_BACKUPS; 0 keeps all). The oldest
-# one (the saves as they were before PhantomRing first ran) and every *-pre-restore one are always kept. Pruning is
-# opt-in: deleting someone's save backups is never a default.
-KEEP_BACKUPS = 0
+# Save backups kept under backups/ (`pr launch --keep-backups N`, $PHANTOMRING_KEEP_BACKUPS; 0 keeps all): per game the
+# newest N of the backups `pr launch` took, and always the first one (the saves as they were before PhantomRing first ran,
+# named in backups/.first.json), every *-pre-restore one and every backup made by hand (`pr backup-saves`).
+# Each Elden Ring backup is ~130 MB: kept forever they reached 18.8 GB in 146 launches (a player's report, 0.6.0), so since
+# 0.7.0 the newest 10 per game are kept by default.
+KEEP_BACKUPS = 10
+# Who made a backup (its manifest's "origin"): only ORIGIN_LAUNCH backups are ever pruned. A manifest without the field
+# (before 0.7.0) counts as a launch's only when logs/ still holds that launch's session folder of the same name with its
+# pids.json (the prune then writes the origin into it); anything else counts as made by hand and is kept.
+ORIGIN_LAUNCH = "launch"
+ORIGIN_MANUAL = "manual"
+ORIGIN_PRE_RESTORE = "pre-restore"
+FIRST_BACKUPS = ".first.json"
+# Launch sessions kept under logs/ (`pr launch --keep-logs N`, $PHANTOMRING_KEEP_LOGS; 0 keeps all): the newest N <time>
+# folders. Never anything else there (logs/guest-install.json, logs/current, evidence folders, collect-logs zips), never the
+# folder logs/current points at, nor one whose launch is still running (pr stop finds the games through its pids.json).
+KEEP_LOGS = 10
+SESSION_DIR = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
+# Neither prune touches anything from the last KEEP_RECENT_HOURS ($PHANTOMRING_KEEP_RECENT_HOURS): a day of relaunches (a test
+# session restores the backup it started with, a player compares today's logs) stays whatever the count.
+KEEP_RECENT_HOURS = 24.0
+
+
+def keep_recent_hours() -> float:
+	"""$PHANTOMRING_KEEP_RECENT_HOURS; 0 or less: no such protection; a value that isn't a number (or nan): the default."""
+	v = os.environ.get("PHANTOMRING_KEEP_RECENT_HOURS")
+	if v is None:
+		return KEEP_RECENT_HOURS
+	try:
+		h = float(v)
+	except ValueError:
+		h = math.nan
+	if math.isnan(h):
+		print(f"PHANTOMRING_KEEP_RECENT_HOURS={v!r} is not a number: keeping the last {KEEP_RECENT_HOURS:g} h", file=sys.stderr)
+		return KEEP_RECENT_HOURS
+	return h
+
+
+def folder_time(p: Path) -> float:
+	"""When a backup / log folder was made: its <yyyymmdd-hhmmss> name (local time), else its mtime."""
+	m = re.match(r"^(\d{8}-\d{6})", p.name)
+	if m:
+		try:
+			return time.mktime(time.strptime(m.group(1), "%Y%m%d-%H%M%S"))
+		except (ValueError, OverflowError):
+			pass
+	try:
+		return p.stat().st_mtime
+	except OSError:
+		return time.time()
+
+
+def recent(p: Path, now: float | None = None, hours: float | None = None) -> bool:
+	hours = keep_recent_hours() if hours is None else hours
+	return hours > 0 and (now if now is not None else time.time()) - folder_time(p) < hours * 3600.0
 
 # me3's own table (crates/cli/src/commands/launch/strategy/compat_tool.rs): Steam compat tool name -> appid.
 COMPAT_TOOL_APPIDS = {
@@ -442,9 +496,11 @@ def fresh_backup_dir(ts: str, backups: Path | None = None) -> Path:
 	return d
 
 
-def backup_saves(m: Machine, ts: str, er: bool, mgsv: bool, log=print) -> Path:
+def backup_saves(m: Machine, ts: str, er: bool, mgsv: bool, log=print, origin: str = ORIGIN_MANUAL) -> Path:
+	"""backups/<ts>: both games' saves (as asked), each file re-hashed, and manifest.json last. `origin` says who made it
+	(ORIGIN_LAUNCH, ORIGIN_MANUAL, ORIGIN_PRE_RESTORE): only a launch's backups are ever pruned."""
 	dest = fresh_backup_dir(ts)
-	manifest: dict = {"created": ts, "sets": {}}
+	manifest: dict = {"created": ts, "origin": origin, "sets": {}}
 	if er:
 		src = m.er_save_dir()
 		if not src:
@@ -474,11 +530,83 @@ def verify_backup(dest: Path) -> dict:
 	return manifest
 
 
-def keep_backups_default() -> int:
+def _keep_from_env(name: str, default: int) -> int:
+	"""An integer count from the environment; a value that isn't one ("all", "off", "", "10.0") keeps everything (0): a
+	destructive default must never come from a typo (before 0.7.0 nothing was pruned at all)."""
+	v = os.environ.get(name)
+	if v is None:
+		return default
 	try:
-		return int(os.environ.get("PHANTOMRING_KEEP_BACKUPS", KEEP_BACKUPS))
+		return int(v)
 	except ValueError:
-		return KEEP_BACKUPS
+		print(f"{name}={v!r} is not a whole number: keeping all (0)", file=sys.stderr)
+		return 0
+
+
+def keep_backups_default() -> int:
+	return _keep_from_env("PHANTOMRING_KEEP_BACKUPS", KEEP_BACKUPS)
+
+
+def keep_logs_default() -> int:
+	return _keep_from_env("PHANTOMRING_KEEP_LOGS", KEEP_LOGS)
+
+
+def _remove_tree(p: Path, log) -> bool:
+	"""Remove one pruned folder; a symlink is never followed or removed, and a failure is logged, never raised (a prune must
+	never stop a launch)."""
+	if p.is_symlink():
+		log(f"not pruning {p}: a symbolic link")
+		return False
+	try:
+		shutil.rmtree(p)
+		return True
+	except OSError as e:
+		log(f"could not prune {p}: {e}")
+		return False
+
+
+def session_dirs(logs: Path | None = None) -> list[Path]:
+	"""The launch sessions' folders under logs/ (logs/<yyyymmdd-hhmmss>[-n]), oldest first; no symlink, no other file or folder."""
+	logs = logs or LOGS
+	if not logs.is_dir():
+		return []
+	return sorted((p for p in logs.iterdir() if p.is_dir() and not p.is_symlink() and SESSION_DIR.match(p.name)),
+		key=lambda p: tuple(int(x) for x in re.findall(r"\d+", p.name)))
+
+
+def launch_running(session: Path) -> bool:
+	"""A process this session's launch started still runs (its pids.json root, still carrying the launch's marker)."""
+	try:
+		pids = json.loads((session / "pids.json").read_text())
+	except (OSError, ValueError):
+		return False
+	if not isinstance(pids, dict):
+		return False
+	launch_id = pids.get("launchId")
+	for v in pids.values():
+		if isinstance(v, dict) and isinstance(v.get("pid"), int) and alive(v["pid"]):
+			if not launch_id or environ_of(v["pid"]).get("PHANTOMRING_LAUNCH_ID") == launch_id:
+				return True
+	return False
+
+
+def prune_logs(keep: int, log=print, logs: Path | None = None, now: float | None = None, recent_hours: float | None = None) -> list[Path]:
+	"""Delete old launch sessions under logs/ (keep <= 0: delete nothing): the newest `keep` session folders stay, so does the one
+	logs/current points at and any whose launch still runs; nothing that isn't a session folder is ever touched
+	(logs/guest-install.json, evidence folders, zips). Returns what was removed."""
+	logs = logs or LOGS
+	if keep <= 0:
+		return []
+	sessions = session_dirs(logs)
+	current = logs / "current"
+	target = (logs / os.readlink(current)).resolve() if current.is_symlink() else None
+	kept = set(sessions[-keep:])
+	doomed = [d for d in sessions if d not in kept and d.resolve() != target and not launch_running(d) and not recent(d, now, recent_hours)]
+	removed = [d for d in doomed if _remove_tree(d, log)]
+	if removed:
+		log(f"pruned {len(removed)} old launch log folder(s) from {logs}: {', '.join(d.name for d in removed)} (kept the newest {keep} "
+			f"and everything from the last {keep_recent_hours() if recent_hours is None else recent_hours:g} h; --keep-logs 0 keeps all)")
+	return removed
 
 
 def backup_kinds(dest: Path) -> set[str] | None:
@@ -492,32 +620,109 @@ def backup_kinds(dest: Path) -> set[str] | None:
 	return {"er" if k == "er" else "mgsv" if k.startswith("mgsv/") else k for k in sets}
 
 
-def prune_backups(keep: int, log=print, backups: Path | None = None) -> list[Path]:
-	"""Delete old launch backups under backups/ (keep <= 0: delete nothing), per game: for Elden Ring and for MGSV each,
-	the oldest backup holding that game (its saves before PhantomRing ever ran) and the newest `keep` holding it survive;
-	a backup goes only when no game protects it. Also always kept: every *-pre-restore backup and anything that is not a
-	backup with a readable manifest. (One pool used to protect only the oldest backup by name: an MGSV-only first backup
-	left the first Elden Ring one unprotected, and MGSV-only relaunches pushed the newest ER backups out.) Only called
-	after the new backup has verified. Returns what was removed."""
+def backup_origin(dest: Path, logs: Path | None = None, log=print) -> str:
+	"""Who made a backup: its manifest's "origin". A manifest from before 0.7.0 has none: it was a launch's only when logs/
+	holds that launch's session folder of the same name with its pids.json; then the origin is written into the manifest
+	(so it stays known once that log folder is pruned). Anything else is ORIGIN_MANUAL (never pruned)."""
+	mf = dest / "manifest.json"
+	try:
+		manifest = json.loads(mf.read_text())
+	except (OSError, ValueError):
+		return ORIGIN_MANUAL
+	if not isinstance(manifest, dict):
+		return ORIGIN_MANUAL
+	origin = manifest.get("origin")
+	if isinstance(origin, str):
+		return origin
+	session = (logs or LOGS) / dest.name
+	if SESSION_DIR.match(dest.name) and session.is_dir() and not session.is_symlink() and (session / "pids.json").is_file():
+		manifest["origin"] = ORIGIN_LAUNCH
+		manifest["originFrom"] = f"logs/{dest.name}/pids.json (a backup from before 0.7.0)"
+		try:
+			tmp = mf.with_name("manifest.json.tmp")
+			tmp.write_text(json.dumps(manifest, indent=2) + "\n")
+			os.replace(tmp, mf)
+		except OSError as e:
+			log(f"note: could not record the origin of {dest} ({e})")
+		return ORIGIN_LAUNCH
+	return ORIGIN_MANUAL
+
+
+def backup_dirs(backups: Path | None = None) -> list[Path]:
+	"""The backups under backups/ with a launcher-made name (<yyyymmdd-hhmmss>[-n], so never *-pre-restore, a copy like
+	"...-original" or "worktree-patches-...") and a manifest.json; no symlink. Oldest first, by the numbers in the name."""
+	backups = backups or BACKUPS
+	if not backups.is_dir():
+		return []
+	return sorted((p for p in backups.iterdir() if p.is_dir() and not p.is_symlink() and SESSION_DIR.match(p.name)
+		and (p / "manifest.json").is_file()), key=lambda p: tuple(int(x) for x in re.findall(r"\d+", p.name)))
+
+
+def first_backups(backups: Path | None = None, log=print) -> dict[str, str]:
+	"""backups/.first.json: per game the first backup ever taken of it (the saves before PhantomRing first ran). A game not
+	in it yet gets its oldest backup now (on a new install that is the one just taken), so a later backup taken while the
+	system clock ran behind (a name sorting first) can never take its protection. Written when it changes."""
+	backups = backups or BACKUPS
+	path = backups / FIRST_BACKUPS
+	firsts: dict[str, str] = {}
+	try:
+		data = json.loads(path.read_text())
+		if isinstance(data, dict):
+			firsts = {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str)}
+	except FileNotFoundError:
+		pass
+	except (OSError, ValueError) as e:
+		log(f"note: {path} can't be read ({e}): the oldest backups stand in for it")
+	changed = False
+	for p in backup_dirs(backups):
+		for kind in sorted(backup_kinds(p) or ()):
+			if kind not in firsts:
+				firsts[kind] = p.name
+				changed = True
+	if changed:
+		try:
+			tmp = path.with_name(FIRST_BACKUPS + ".tmp")
+			tmp.write_text(json.dumps(firsts, indent=2, sort_keys=True) + "\n")
+			os.replace(tmp, path)
+		except OSError as e:
+			log(f"note: could not write {path} ({e})")
+	return firsts
+
+
+def prune_backups(keep: int, log=print, backups: Path | None = None, now: float | None = None, recent_hours: float | None = None,
+		logs: Path | None = None) -> list[Path]:
+	"""Delete old launch backups under backups/ (keep <= 0: delete nothing), per game: for Elden Ring and for MGSV each, the
+	newest `keep` backups `pr launch` took holding that game survive, and so does the first backup of each game
+	(backups/.first.json, and the oldest by name); a backup goes only when no game protects it. Only launch backups with a
+	launcher-made name (backup_dirs, backup_origin) are ever candidates: every backup made by hand, every *-pre-restore one,
+	any copy or other folder, a symlink and a manifest that can't be read are always kept, and so is everything from the last
+	KEEP_RECENT_HOURS. (One pool used to protect only the oldest backup by name: an MGSV-only first backup left the first
+	Elden Ring one unprotected, and MGSV-only relaunches pushed the newest ER backups out.) Only called after the new backup
+	has verified; a folder that can't be removed is logged and skipped. Returns what was removed."""
 	backups = backups or BACKUPS
 	if keep <= 0 or not backups.is_dir():
 		return []
-	sets = sorted(p for p in backups.iterdir() if p.is_dir() and (p / "manifest.json").is_file())
-	kinds = {p: backup_kinds(p) for p in sets}
-	pool = [p for p in sets if kinds[p] is not None and not p.name.endswith(PRE_RESTORE)]
+	named = backup_dirs(backups)
+	kinds = {p: backup_kinds(p) for p in named}
+	firsts = first_backups(backups, log)
+	pool = [p for p in named if kinds[p] is not None and backup_origin(p, logs, log) == ORIGIN_LAUNCH]
 	groups: dict[str, list[Path]] = {}
 	for p in pool:
 		for kind in kinds[p] or {""}:  # a backup of no game is its own group
 			groups.setdefault(kind, []).append(p)
-	protected = {p for g in groups.values() for p in (g[0], *g[-keep:])}
-	doomed = [p for p in pool if p not in protected]
-	for p in doomed:
-		shutil.rmtree(p)
-	if doomed:
-		firsts = ", ".join(f"{k} {g[0].name}" for k, g in sorted(groups.items()) if k)
-		log(f"pruned {len(doomed)} old save backup(s) from {backups} (kept per game the newest {keep} and the first: {firsts}; "
-			"and every *-pre-restore; --keep-backups 0 keeps all)")
-	return doomed
+	oldest: dict[str, Path] = {}
+	for p in named:
+		for kind in kinds[p] or ():
+			oldest.setdefault(kind, p)
+	protected = {p for g in groups.values() for p in g[-keep:]} | {backups / n for n in firsts.values()} | set(oldest.values())
+	doomed = [p for p in pool if p not in protected and not recent(p, now, recent_hours)]
+	removed = [p for p in doomed if _remove_tree(p, log)]
+	if removed:
+		first = ", ".join(f"{k} {n}" for k, n in sorted(firsts.items()) if k)
+		log(f"pruned {len(removed)} old save backup(s) from {backups}: {', '.join(p.name for p in removed)} (kept per game the newest "
+			f"{keep} of pr launch's and the first: {first}; every backup made by hand, every *-pre-restore and everything from the "
+			f"last {keep_recent_hours() if recent_hours is None else recent_hours:g} h; --keep-backups 0 keeps all)")
+	return removed
 
 
 def backups_summary(backups: Path | None = None) -> str:
@@ -562,7 +767,8 @@ def restore_saves(ts: str, er: bool, mgsv: bool, log=print, all_er: bool = False
 		raise LaunchError("nothing to restore in that backup for the selected game(s)")
 	# Keep what is there now, in case the restore was a mistake.
 	m = Machine()
-	safety = backup_saves(m, f"{timestamp()}-pre-restore", er and "er" in sets, mgsv and any(k.startswith("mgsv/") for k in sets), log)
+	safety = backup_saves(m, f"{timestamp()}-pre-restore", er and "er" in sets, mgsv and any(k.startswith("mgsv/") for k in sets), log,
+		origin=ORIGIN_PRE_RESTORE)
 	log(f"current saves kept in {safety}")
 	done: list[Path] = []
 	for set_name, info in sets.items():
@@ -721,6 +927,7 @@ class LaunchOptions:
 	proton_debug: str = "+timestamp,+pid,+tid,warn+seh,err+seh,+debugstr,+loaddll"
 	seed_save: str | None = None  # the save PhantomRing0000.sl2 is first copied from (default: see seed_save())
 	keep_backups: int | None = None  # None: keep_backups_default()
+	keep_logs: int | None = None     # None: keep_logs_default()
 
 
 @dataclass
@@ -907,7 +1114,9 @@ def print_plan(plan: Plan, opts: LaunchOptions, m: Machine, log=print) -> None:
 		log("  " + " ".join(f"{k}={shlex.quote(v)}" for k, v in plan.er_env.items()) + " " + shlex.join(plan.er_cmd))
 		log(f"  stdout/stderr -> {plan.log_dir / 'er-me3.log'}; Proton log -> {plan.log_dir / f'steam-{ER_APPID}.log'}")
 	keep = opts.keep_backups if opts.keep_backups is not None else keep_backups_default()
-	log(f"save backups: {backups_summary()}; " + (f"keeping the newest {keep} (+ the oldest)" if keep > 0 else "all kept"))
+	log(f"save backups: {backups_summary()}; " + (f"keeping the newest {keep} launch backups per game (+ the first, every pre-restore and every one made by hand)" if keep > 0 else "all kept"))
+	keep_logs = opts.keep_logs if opts.keep_logs is not None else keep_logs_default()
+	log(f"launch logs: {len(session_dirs())} session folder(s) in {LOGS}; " + (f"keeping the newest {keep_logs}" if keep_logs > 0 else "all kept"))
 	log("plugin logs (expected): " + ", ".join(str(p) for p in plugin_log_candidates(m)))
 
 
@@ -922,9 +1131,10 @@ def launch(opts: LaunchOptions, log=print) -> int:
 		log("refusing to launch: fix the FAIL items above")
 		return 1
 
-	backup = backup_saves(m, plan.ts, opts.er, opts.mgsv, log)
+	backup = backup_saves(m, plan.ts, opts.er, opts.mgsv, log, origin=ORIGIN_LAUNCH)
 	verify_backup(backup)
 	log(f"backup verified: {backup}")
+	first_backups(log=log)
 	prune_backups(opts.keep_backups if opts.keep_backups is not None else keep_backups_default(), log)
 	if opts.er:
 		ensure_er_save(m, log, opts.seed_save)
@@ -948,6 +1158,7 @@ def launch(opts: LaunchOptions, log=print) -> int:
 	if current.is_symlink() or current.exists():
 		current.unlink()
 	current.symlink_to(plan.log_dir.name)
+	prune_logs(opts.keep_logs if opts.keep_logs is not None else keep_logs_default(), log)
 	pids: dict = {"ts": plan.ts, "logDir": str(plan.log_dir)}
 	children = []
 	if plan.mgsv_cmd:

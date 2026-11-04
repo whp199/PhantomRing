@@ -8,7 +8,9 @@
 #include "DebugDraw.h"
 #include "Explosion.h"
 #include "Game.h"
+#include "Link.h"
 #include "Log.h"
+#include "Noise.h"
 #include "Mem.h"
 #include "Decoys.h"
 #include "Mines.h"
@@ -22,6 +24,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <functional>
 #include <numbers>
 
 #include <windows.h>
@@ -114,11 +117,20 @@ namespace phantom::er::Combat
 		combat::RouteMonitor::State   g_ladderLastState{ combat::RouteMonitor::State::kUnknown };
 		combat::NativeDamage::GuardRule g_lastGuardRule{ combat::NativeDamage::GuardRule::kUnknown };
 		std::string                   g_damageRouteOverride;  // console: "" = ini
+		// The hit row's own AI sounds (AtkParam appear / hit ids), read once before the first patch: a quiet hit writes -1, a loud
+		// one these back (er/Noise.h).
+		bool                          g_atkSoundsRead{ false };
+		std::int32_t                  g_atkAppearSound{ -1 }, g_atkHitSound{ -1 };
 		bool                          g_ladderPatched{ false };
 		std::uint64_t                 g_ladderHits{ 0 }, g_ladderArrived{ 0 }, g_ladderMissing{ 0 }, g_ladderGuarded{ 0 }, g_ladderFallbacks{ 0 }, g_ladderNoSlot{ 0 };
 		std::int64_t                  g_ladderWanted{ 0 }, g_ladderDealt{ 0 };  // over landed ladder hits that did not kill
 		combat::RateLimiter           g_limiter;
 		std::vector<Pending>          g_pending;
+		// (review 0.7.0) The guest reported a suppressor this session (kGuestSuppressorOn or a kFireSuppressed shot): until it does,
+		// tranquilizer rounds stay quiet (the pre-v16 rule). Starts over with each guest (re-attach).
+		bool                          g_suppressorSeen{ false };
+		bool                          g_quietTranqLogged{ false };
+		std::uint32_t                 g_suppressorAttach{ 0 };
 		std::string                   g_routeOverride;  // console: "" = ini
 		std::uint64_t                 g_hits{ 0 }, g_bulletHits{ 0 }, g_hpHits{ 0 }, g_sleeps{ 0 }, g_fallbacks{ 0 }, g_logged{ 0 };
 		std::uint64_t                 g_busyHits{ 0 };
@@ -528,6 +540,16 @@ namespace phantom::er::Combat
 			g_patch.Set<float>(atkRow, params::atk::kAtkSuperArmor, std::max(0.0f, a_e.poise));
 			g_patch.Set<float>(atkRow, params::atk::kAtkSuperArmorCorrection, 100.0f);
 			g_patch.Set<std::uint8_t>(atkRow, params::atk::kDmgLevel, a_e.dmgLevel);
+			// (v16) A suppressed shot's hit makes no AI sound: the row's own (the Throwing Dagger's 2100 as it appears, 2000 where it
+			// hits: 4 m round the one hit, enough for his neighbours to turn) is -1 for it (er/Noise.h). Kept per row value like the
+			// rest (HitKey's quiet bit): quiet and loud hits never fly together.
+			if (!g_atkSoundsRead) {
+				g_atkSoundsRead = true;
+				g_atkAppearSound = SafeRead<std::int32_t>(atkRow + params::atk::kAppearAiSoundId).value_or(-1);
+				g_atkHitSound = SafeRead<std::int32_t>(atkRow + params::atk::kHitAiSoundId).value_or(-1);
+			}
+			g_patch.Set<std::int32_t>(atkRow, params::atk::kAppearAiSoundId, a_e.quiet ? -1 : g_atkAppearSound);
+			g_patch.Set<std::int32_t>(atkRow, params::atk::kHitAiSoundId, a_e.quiet ? -1 : g_atkHitSound);
 			// Sleep rides on the bullet, as on Elden Ring's own sleep bullets (Bullet 2270260 -> SpEffect 25006, the Sleep Pot's
 			// mist -> 500640): its spEffectId0..4 are applied by the hit (combat::SleepRungs). 0 = none, the row's own value.
 			for (std::uint32_t slot = 0; slot < 5; ++slot) {
@@ -623,7 +645,7 @@ namespace phantom::er::Combat
 			}
 			const std::uint16_t amount = ladder ? static_cast<std::uint16_t>(std::min(carried, 65535)) : BulletAmount(a_e);
 			const std::uint64_t key =
-				ladder && carried > 65535 ? combat::kUniqueKey : combat::HitKey(amount, correction, a_e.fire, a_e.poise, a_e.dmgLevel, rungSleep);
+				ladder && carried > 65535 ? combat::kUniqueKey : combat::HitKey(amount, correction, a_e.fire, a_e.poise, a_e.dmgLevel, rungSleep, a_e.quiet);
 			// One patched row for every bullet: only bullets with the same numbers fly together, and one with damage per
 			// target (combat::MayFly); the others take the HP route (and lose their sleep: it needs the attack).
 			std::vector<combat::InFlight> flying;
@@ -808,6 +830,8 @@ namespace phantom::er::Combat
 		}
 		++g_shots;
 		const std::uint32_t bulletId = a_e.pad[0] & 0x7FFFFFFF;  // guest extension (protocol comment at kGEvFire)
+		const std::uint32_t pellets = a_e.b & 0xFFFF;              // (v16) b's high bit is kFireSuppressed
+		const bool          suppressed = (a_e.b & proto::kFireSuppressed) != 0;
 		// D-Walker's flamethrower: buddy fire without a bullet, carrying its reach in pad[1] (mm, guest extension):
 		// a stream as long as that, a body anywhere near it burns (the stream has width), fire damage.
 		const bool  flame = a_buddy && bulletId == 0 && a_e.pad[1] > 0;
@@ -846,16 +870,35 @@ namespace phantom::er::Combat
 		if (explosive) {
 			cls = combat::RoundClass::kExplosive;
 		}
-		const std::string what = std::format("{} {} (weapon {} bullet {} x{}{})", who, combat::Name(cls), weapon, bulletId, a_e.b,
-			share > 0.0f ? std::format(", MGSV share {:.3f}", share) : "");
+		const std::string what = std::format("{} {} (weapon {} bullet {} x{}{}{})", who, combat::Name(cls), weapon, bulletId, pellets,
+			share > 0.0f ? std::format(", MGSV share {:.3f}", share) : "", suppressed ? ", suppressed" : "");
 		if (g_shots <= 50) {
 			Log::Info("{} -> {} at ({:.2f}, {:.2f}, {:.2f})", what, target ? target->Name() : (hitWorld ? "world" : "nothing"), end.x, end.y, end.z);
 		} else {
 			Log::Debug("{} -> {} at ({:.2f}, {:.2f}, {:.2f})", what, target ? target->Name() : (hitWorld ? "world" : "nothing"), end.x, end.y, end.z);
 		}
-		if (!flame) {
-			Explosion::Muzzle(a_f, muzzle, dir, ammo == proto::kAmmoTranq || cls == combat::RoundClass::kTranq);  // [Combat] muzzle_flash (roadmap 5.4)
+		// (v16) Through a suppressor: no muzzle flash, no AI sound, a quiet hit. Review 0.7.0: a guest that never reported a suppressor
+		// this session (its suppressor reading failed its byte checks, an older or modded MGSV) can't tell a suppressed dart from a loud
+		// one: tranquilizer rounds then stay quiet, the pre-v16 rule, instead of every dart becoming a loud pistol shot.
+		if (suppressed && !a_buddy) {
+			g_suppressorSeen = true;
 		}
+		const bool quietTranq = !a_buddy && !g_suppressorSeen && (ammo == proto::kAmmoTranq || cls == combat::RoundClass::kTranq);
+		if (quietTranq && !g_quietTranqLogged) {
+			g_quietTranqLogged = true;
+			Log::Info("noise: the guest never reported a suppressor -- tranquilizer rounds kept quiet (pre-v16 rule)");
+		}
+		const bool quiet = suppressed || quietTranq;
+		if (!flame) {
+			Explosion::Muzzle(a_f, muzzle, dir, quiet);  // [Combat] muzzle_flash (roadmap 5.4); (v16) none through a suppressor
+		}
+		// (v16) The shot's noise: Elden Ring's AI sound at the muzzle unless it was suppressed (er/Noise.h). After the round's own hit
+		// (review 0.7.0: mode heard's token hits used to take the patched row first, and the real hit lost its sleep or poise).
+		struct NoiseAfter
+		{
+			std::function<void()> fn;
+			~NoiseAfter() { fn(); }
+		} noiseAfter{ [&] { Noise::OnShot(a_f, muzzle, end, hitWorld && !target, bulletId, explosive, flame, quiet, a_buddy, target ? target->handle : 0, what); } };
 		if (cls == combat::RoundClass::kExplosive) {
 			// A rocket / grenade round flies from the muzzle and goes off where it meets the world or an enemy (er/Rounds.h);
 			// without a flight for it, at the impact point at once as before.
@@ -886,7 +929,8 @@ namespace phantom::er::Combat
 			Log::Debug("combat: {} hit {} (not hostile to the Tarnished): no damage", what, target->Name());
 			return;
 		}
-		const auto effect = combat::ShotEffect(cls, ammo, a_e.b, combat::HeightFraction(target->cap, end), target->maxHp, a_buddy, Rules(), share);
+		auto effect = combat::ShotEffect(cls, ammo, pellets, combat::HeightFraction(target->cap, end), target->maxHp, a_buddy, Rules(), share);
+		effect.quiet = quiet;
 		if (effect.damage > 0 && !flame) {
 			++(effect.shared ? g_sharedHits : g_tableHits);
 		}
@@ -1028,6 +1072,14 @@ namespace phantom::er::Combat
 	void Tick(const Frame& a_f)
 	{
 		const auto now = ::GetTickCount64();
+		if (const auto attach = Link::Get().AttachCount(); attach != g_suppressorAttach) {
+			g_suppressorAttach = attach;
+			g_suppressorSeen = false;  // a new guest: it must report its suppressor again
+			g_quietTranqLogged = false;
+		}
+		if (a_f.guestReady && (a_f.guest.flags & proto::kGuestSuppressorOn)) {
+			g_suppressorSeen = true;
+		}
 		if (a_f.player) {
 			g_playerMaxHp = static_cast<float>(game::MaxHp(a_f.player));
 		}

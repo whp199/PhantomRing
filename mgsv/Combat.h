@@ -21,6 +21,9 @@ namespace phantom::guest::combat
 	[[nodiscard]] std::uint64_t BuddyRounds();  // rounds the hook attributed to the buddy so far
 	// `!shots`: the v8 damage share (kGEvFire pad[1]) state.
 	[[nodiscard]] std::string DescribeDamage();
+	// Snake's character and player index as ObserveOwner saw them last (0 / 0xFFFFFFFF before): his weapon in hand (Suppressor.h).
+	[[nodiscard]] std::uintptr_t Character();
+	[[nodiscard]] std::uint32_t  SnakeIndex();
 
 	// Game thread, from the camera frame: Snake's player index and character, the frame number, and
 	// whether a buddy is deployed (decides kGEvFire vs kGEvBuddyFire for foreign weapon components).

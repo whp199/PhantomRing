@@ -26,12 +26,12 @@ from ctypes import c_char, c_double, c_float, c_int16, c_int32, c_int64, c_uint8
 
 # ---- constants (namespace phantom::proto) ---------------------------------------------------------
 MAGIC = 0x47524850  # "PHRG"
-VERSION = 15  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
+VERSION = 16  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
 				# v6: GuestState aimThrowPos/Vel/Kind (0xA8..0xC4) + GuestFlags.ThrowAim; v7: GuestEventType.BuddyOrder; v8: GuestFlags.InBox/BoxPoster, Fire pad[1] = damage share;
 				# v9: PLACED_AGAIN (Placed pad[0]: an announcement repeated); v10: GuestFlags.Nvg, HostEventType.Rested/Tarnished;
 				# v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100: plugin versions, readable on a mismatch); v12: GuestEventType.Fulton
 				# v13: GuestFlags.Binoculars/Diving, GuestEventType.TimeSkip/Cqc, CqcAction, AmmoKind.Decoy, DrawOwner.Projectile; v14: GuestFlags.Jumping
-				# v15: GuestFlags.Climbing/Mantling, HostEventType.Climb/Mantle
+				# v15: GuestFlags.Climbing/Mantling, HostEventType.Climb/Mantle; v16: GuestFlags.SuppressorOn, FIRE_SUPPRESSED (Fire b)
 DEFAULT_PATH = "/dev/shm/phantomring_v1"
 DEFAULT_MAPPING_WIN = "file:Z:\\dev\\shm\\phantomring_v1"
 
@@ -61,6 +61,8 @@ HEARTBEAT_TIMEOUT_MS = 3000
 # v9: GuestEvent Placed pad[0] bit -- announced before (the host's puppet restarted, a new host session): v0 is MGSV's point,
 # not where it lies in Elden Ring.
 PLACED_AGAIN = 1 << 16
+# v16: GuestEvent Fire / BuddyFire b bit -- the shot went through a working suppressor; pellets = b & 0xFFFF.
+FIRE_SUPPRESSED = 1 << 31
 MAX_POSE_BONES = 256
 EVENT_RING_ENTRIES = 512
 MAX_ACTORS = 256
@@ -138,6 +140,7 @@ class GuestFlags(enum.IntFlag):
 	Jumping = 1 << 19  # v14: Snake jumps (host: Elden Ring-like jump on the rising edge)
 	Climbing = 1 << 20  # v15: MGSV plays Snake's ladder climb for an ER ladder
 	Mantling = 1 << 21  # v15: MGSV plays a climb-up / vault
+	SuppressorOn = 1 << 22  # v16: the weapon in hand has a working suppressor
 
 
 class GuestBuddyFlags(enum.IntFlag):
@@ -589,7 +592,7 @@ ALL_CONSTANTS = {
 	"OFF_RENDER_RING": "kOffRenderRing", "RENDER_RING_BYTES": "kRenderRingBytes",
 	"OFF_DRAW_SLOTS": "kOffDrawSlots", "DRAW_SLOT_BYTES": "kDrawSlotBytes", "OFF_HUD_SLOTS": "kOffHudSlots",
 	"MAX_HUD_W": "kMaxHudW", "MAX_HUD_H": "kMaxHudH", "HUD_SLOT_BYTES": "kHudSlotBytes",
-	"MAPPING_BYTES": "kMappingBytes", "HEARTBEAT_TIMEOUT_MS": "kHeartbeatTimeoutMs", "PLACED_AGAIN": "kPlacedAgain",
+	"MAPPING_BYTES": "kMappingBytes", "HEARTBEAT_TIMEOUT_MS": "kHeartbeatTimeoutMs", "PLACED_AGAIN": "kPlacedAgain", "FIRE_SUPPRESSED": "kFireSuppressed",
 	"MAX_POSE_BONES": "kMaxPoseBones", "EVENT_RING_ENTRIES": "kEventRingEntries", "MAX_ACTORS": "kMaxActors",
 	"CONSOLE_TEXT_BYTES": "kConsoleTextBytes", "DRAW_TEXTURES": "kDrawTextures",
 	"REN_RING_HEAD_OFF": "kRenRingHeadOff", "REN_RING_TAIL_OFF": "kRenRingTailOff",

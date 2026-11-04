@@ -11,6 +11,7 @@
 #include "Log.h"
 #include "Marking.h"
 #include "Mines.h"
+#include "Noise.h"
 #include "Puppet.h"
 #include "Rounds.h"
 #include "Stealth.h"
@@ -91,6 +92,7 @@ namespace phantom::er::Events
 		Stealth::Tick(a_f);
 		Mines::Tick(a_f);
 		Decoys::Tick(a_f);
+		Noise::Tick(a_f);  // (v16) "Suppressor worn out"
 		Fulton::Tick(a_f);
 		Marking::Tick(a_f);  // protocol v13 kGuestBinoculars
 		TimeSkip::Tick(a_f);

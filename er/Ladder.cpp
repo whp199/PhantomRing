@@ -45,7 +45,7 @@ namespace phantom::er
 				state_ = State::kClimbing;
 				return Event::kNone;
 			}
-			if (a_in.nowMs - offSince_ >= a_in.settleMs) {
+			if (a_in.nowMs - offSince_ >= a_in.settleMs || (a_in.endedForGood && a_in.guestHome && a_in.nowMs - offSince_ >= a_in.homeSettleMs)) {
 				*this = LadderHandOver();
 				return Event::kEnded;
 			}

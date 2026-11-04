@@ -19,6 +19,7 @@
 #include <cstring>
 #include <format>
 #include <mutex>
+#include <optional>
 
 namespace phantom::guest::follow
 {
@@ -217,6 +218,9 @@ namespace phantom::guest::follow
 		}
 		std::uint64_t g_aiIdleSince{ 0 };
 		std::uint64_t g_ledOrders{ 0 };
+		// its AI's state byte as last read (Lua thread, ~30 Hz) for the lead's leg gate on the frame thread (Walker.cpp)
+		std::atomic<int>           g_legs{ -1 };
+		std::atomic<std::uint64_t> g_legsMs{ 0 };
 
 		// D-Walker's mode (0..5) for the buddy object a_id, -1 = not known (no controller yet, sites differ).
 		int WalkerMode(std::uint16_t a_id)
@@ -280,6 +284,21 @@ namespace phantom::guest::follow
 		}
 
 		logic::Vec3 Target(const state::FrameView& a_fr) { return Spot(Lead(a_fr), ViewYaw(a_fr, a_fr.yaw), Running(a_fr)); }
+
+		// (2026-11-03) An order for a walker beside a Snake who starts moving (or whose AI stood while he runs): in the lead's lane
+		// [Buddy] WalkerLeadOrderAhead m ahead of him along his motion. MGSV's walker AI takes an order to a spot within ~3 m of
+		// itself as "there" and stands (live: the order at the start of a run taken in 25 ms, the AI idle on, walking only with the
+		// next order 1.5 s later: 2.4 s after Snake started); one far enough ahead it walks at once (0.05 s when it got one).
+		std::optional<logic::Vec3> AheadOrder(const state::FrameView& a_fr)
+		{
+			const float ahead = Cfg().buddyWalkerLeadOrderAhead;
+			const float speed = a_fr.velocity.LengthXZ();
+			if (!(ahead > 0.0f) || !a_fr.valid || speed < 0.5f) {
+				return std::nullopt;
+			}
+			const logic::Vec3 dir{ a_fr.velocity.x / speed, 0.0f, a_fr.velocity.z / speed };
+			return logic::BesideOf(a_fr.root + dir * ahead, ViewYaw(a_fr, a_fr.yaw), 0.0f, Cfg().buddyWalkerLeadSide);
+		}
 
 		// Catch-up: a walker that fell far behind a running Snake is moved closer -- only from a place the camera doesn't see
 		// to one it doesn't see either (behind the camera; MGSV's camera is Elden Ring's), so nobody sees it jump. MGSV's
@@ -681,6 +700,8 @@ namespace phantom::guest::follow
 		// The mode the player (or MGSV) put it in: auto-follow only acts in the FollowModes ones, so a Stealth (wait),
 		// Search or Intercept Mode the player chose stays. -1 = not known yet: the player-command hold below decides alone.
 		const int mode = WalkerMode(lua.buddyId);
+		g_legs.store(WalkerState(lua.buddyId), std::memory_order_relaxed);
+		g_legsMs.store(a_nowMs, std::memory_order_relaxed);
 		if (mode != g_lastMode) {
 			Log::Info("follow: D-Walker mode {} -> {}", ModeName(g_lastMode), ModeName(mode));
 			g_lastMode = mode;
@@ -731,10 +752,12 @@ namespace phantom::guest::follow
 		if (spotted) {
 			CatchUp(fr, lua, a_nowMs);
 		}
-		// Steering: while it walks to our spot, keep that spot where Snake is going (no new whistle, no stop and restart).
+		// Steering: while it walks to our spot, keep that spot where Snake is going (no new whistle, no stop and restart). Led
+		// alongside a moving Snake, the spot ahead of him (AheadOrder): its AI keeps somewhere to walk to, its legs walking.
 		{
+			const auto       steerTo = walker::Leading() && moving ? AheadOrder(fr).value_or(spot) : spot;
 			std::scoped_lock lock(g_lock);
-			if (spotted && c.buddyFollowSteer && StillOurs() && (spot - g_spot).LengthXZ() > 0.3f && MoveSpot(spot)) {
+			if (spotted && c.buddyFollowSteer && StillOurs() && (steerTo - g_spot).LengthXZ() > 0.3f && MoveSpot(steerTo)) {
 				++g_steers;
 			}
 		}
@@ -752,12 +775,17 @@ namespace phantom::guest::follow
 			// ... and when he stops, an order beside where he stands (the lead lets go 0.5 s later): without it the AI walked on to its
 			// last order ahead of him and stood 5 m off (live: standing p90 5.3 m).
 			const bool stopped = started && !moving;
-			if (stopped || (moving && (started || (g_aiIdleSince && a_nowMs - g_aiIdleSince >= 800 && a_nowMs - g_last >= 1500)))) {
+			// (2026-11-03) ... after WalkerLeadReorderMs (500): live, the order given as he starts is taken within 25 ms and does
+			// nothing (the AI stays idle; polled through /proc/<pid>/mem), the next one is taken ~0.5 s later and it walks: the
+			// first step came 2.2-3.5 s after Snake's with the old 0.8 s / 1.5 s.
+			const auto reorder = static_cast<std::uint64_t>(c.buddyWalkerLeadReorderMs);
+			if (stopped || (moving && (started || (g_aiIdleSince && a_nowMs - g_aiIdleSince >= reorder && a_nowMs - g_last >= reorder)))) {
 				g_last = a_nowMs;
 				g_stuckSince = a_nowMs;
 				g_aiIdleSince = 0;
 				++g_ledOrders;
-				Order(lua.buddyId, spot, fr.yaw, stopped ? "led, Snake stopped" : started ? "led, Snake started moving" : "led, its AI stood");
+				const auto aheadSpot = stopped ? std::nullopt : AheadOrder(fr);
+				Order(lua.buddyId, aheadSpot ? *aheadSpot : spot, fr.yaw, stopped ? "led, Snake stopped" : started ? "led, Snake started moving" : "led, its AI stood");
 			}
 			return;
 		}
@@ -780,7 +808,10 @@ namespace phantom::guest::follow
 		}
 		g_last = a_nowMs;
 		g_stuckSince = a_nowMs;
-		Order(lua.buddyId, spot, fr.yaw,
+		// Snake starts moving with the walker beside him (the lead takes it a moment later): an order far enough ahead that its AI
+		// walks at once (AheadOrder)
+		const auto aheadSpot = started && moving && c.buddyWalkerLead ? AheadOrder(fr) : std::nullopt;
+		Order(lua.buddyId, aheadSpot ? *aheadSpot : spot, fr.yaw,
 			std::format("{:.1f} m from its spot{}", dist, started ? (moving ? ", Snake started moving" : ", Snake stopped") : steerable ? ", standing still" : soon ? ", after a treadmill jump" : ""));
 	}
 
@@ -824,6 +855,8 @@ namespace phantom::guest::follow
 	void RequestWhistle() { g_requested = true; }
 
 	bool LeadAllowed() { return g_leadOk.load() && ::GetTickCount64() - g_leadOkMs.load() < 1000; }
+
+	int WalkerLegs() { return ::GetTickCount64() - g_legsMs.load(std::memory_order_relaxed) < 500 ? g_legs.load(std::memory_order_relaxed) : -1; }
 
 	bool WhistleHorseNow(const char* a_why)
 	{

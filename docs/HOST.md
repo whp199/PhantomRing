@@ -67,10 +67,10 @@ in [STATUS.md](STATUS.md#elden-ring-1172-eldenringexe-2720-2026-10-26-live-regre
 
 | Group | Work |
 |---|---|
-| FrameBegin (0) | heartbeat, guest liveness (`guestNonce == sessionNonce` and heartbeat < 3 s), guest status text → log, GuestState snapshot, frame pacing (this frame's moment on MGSV's timeline and the blended motion: Frame pacing below), menu watch, dev console, guest events, puppet start/stop, input mode, draw-list acquire, host status |
+| FrameBegin (0) | heartbeat, guest liveness (`guestNonce == sessionNonce` and heartbeat < 3 s), guest status text → log, GuestState snapshot, frame pacing (this frame's moment on MGSV's timeline and the blended motion: Frame pacing below), menu watch, dev console, guest events (then decoys, the suppressor watch `Noise::Tick`), puppet start/stop, input mode, draw-list acquire, host status |
 | ChrIns_PrePhysics (78) | world shift check (below), then puppet motion: (paced) odometer delta × Ry(delta) (+ X mirror), then either the kinematic controller (`er/Kinematic.cpp`: knee/chest wall rays with radius kept perpendicular to the wall, one slide along the estimated wall normal, step-up, ground snap, gravity) + `ChrIns::SetPosition`, or (`motion = root_motion`) the displacement handed to ER's own proxy as root motion (`er/RootMotion.cpp`); `ChrIns::SetYaw` |
-| DrawParamUpdate (107, `[Camera] task_group`) | a fresh GuestState into the pacing history; anchor feet re-read after ER's physics; `CSCamera.pers_cam_1` ← MGSV's (paced) camera at the feet (height eased); eye→camera rays pull it in front of walls (out eased) |
-| WorldChrMan_PostPhysics (117) | hide/NoDead re-asserted, HP mirror + `kHEvHurt`, `kHEvRespawn`, axis self-calibration (only while ER drives the player), ActorTable, buddy, debug draw, HostState |
+| DrawParamUpdate (107, `[Camera] task_group`) | a fresh GuestState into the pacing history; anchor feet re-read after ER's physics; `CSCamera.pers_cam_1` ← MGSV's (paced) camera at the feet (height eased); eye→camera rays pull it in front of walls (out eased); Elden Ring's HP/FP/stamina bars (`ErBars::Apply`, `[Overlay] er_bars`) |
+| WorldChrMan_PostPhysics (117) | hide/NoDead re-asserted (and a respawn's new Tarnished hidden from his first frame), HP mirror + `kHEvHurt`, `kHEvRespawn`, axis self-calibration (only while ER drives the player), ActorTable, buddy, debug draw, HostState |
 | DmgMan_Post (122) | MGSV's camera into `chr_cam` once more, right before Elden Ring computes its HUD compass from it (see Compass) |
 | BeginShiftWorldPosition (160), EndShiftWorldPosition (11) | the player's position at 160, compared at FrameBegin (0), 11 and ChrIns_PrePhysics (78): nothing but an origin shift moves him in between; thrown grenades, placed mines and the puppet's own stored positions move with it (`er/WorldShift.cpp`). Live (riding through Limgrave): every shift (32.00 / 32.98 / 35.78 / 40.00 m, multiples of 8 m on x/z, 9 in 10 min) landed after our task in group 11 and was caught at 78 -- before, the puppet took each for "Elden Ring moved the player 32 m by itself" and re-anchored, and mines/grenades stayed behind. A jump counts as a shift only when every axis is within 0.75 m of a whole number of 8 m steps (y too: live (48, -8, -56), (-32, -104, 16)), and the shift applied is the grid's (`WorldShift::ShiftOf`): the player's own motion of that frame no longer leaks into mines, grenades, clouds (`Explosion::OnWorldShift`) and rounds, and a console `call setpos` is no shift |
 
@@ -182,7 +182,8 @@ rune retrieval), and for as long as Elden Ring's in-game HUD is hidden. That HUD
 playing, `01` hidden): hidden 2.3-2.9 s after resting at a grace, while talking or reading, during loads and
 cutscenes, in "Choose revival location". The grace menu is no "blocking" menu (CSMenuMan+0x798 stays 0) and not a
 state Start/View learning finds, so before this it got the masked pad and could not be left. The HUD is used only when
-it was up at the press and was seen visible since the last load: a hidden HUD is not a menu signal by itself (ER's
+it was up at the press (or came up after it: a rest shows it at the sit-down, 0.7.0) and was seen visible since the last load; while
+our `[Overlay] er_bars = none` hides the bars UI state 7 reads hidden too and is ignored ("Elden Ring's bars" below): a hidden HUD is not a menu signal by itself (ER's
 "auto" HUD setting may hide it while you just play -- UNVERIFIED which state that hides). The press-less starts (an NPC's
 dialog, the next screen, the grace's next screen) trust a HUD hide, so `AutoHud` (er/Interaction.h, review 2026-10-13) counts
 the hides nothing explains (Snake playing in the world: no press, menu, cutscene, load or death, no prompt or interaction end
@@ -348,13 +349,37 @@ console `flask [use|next|slots|on|off]`; 2026-10-31). Camps killed Snake and his
 - **After the press** a consumable's count is watched: "Flask of Crimson Tears: 3 left" when it drops, "none left" for the last
   (the slot keeps the full flask's handle while Elden Ring swaps the entry to its empty twin in place: 1001 -> 1000), "the
   Tarnished couldn't use it now" when it didn't drop within `confirm_ms` (3000). A non-consumable (spirit ashes, a shackle) has
-  nothing to count: "Spirit ashes: pressed" (since the 0.6.0 review; it said "used" even when Elden Ring refused the summon). A
+  nothing to count: "Spirit ashes: pressed" (since the 0.6.0 review; it said "used" even when Elden Ring refused the summon; 0.7.0
+  watches what came of spirit ashes, below). A
   switch is checked 0.4 s later and pressed once more when the slot didn't move (live: the first D-pad down after a while
-  switched nothing, also the Tarnished's own in Tarnished mode; the next ones did -- and with both games 2026-11-01 every one of
+  switched nothing -- Elden Ring's Auto HUD, fixed in 0.7.0 below --, also the Tarnished's own in Tarnished mode; the next ones did -- and with both games 2026-11-01 every one of
   six switches took the second press), then "Quick item: Flask of Cerulean Tears (3)" / "(empty -- rest at a grace)". Not while a
   use is being followed: the retry would switch the item under the tracker, which then said "couldn't use it now" for a drunk
   flask. Elden Ring-only presses keep a deadline per button (`er/ErPresses.h`, tested): one slot used to hold them, so the cycle
   retry landing on a View + X cut the X to under a frame.
+- **One press after a pause** (0.7.0; `[Flask] wake_hud`, `AutoHudHidden`): the switch "ignored" after a while was Elden Ring's
+  "Auto" HUD (the player's save: GameSettings `hud_type` 2, [[GameDataMan]+0x58]+9): out of combat it fades the equipment slots
+  out, and its first D-pad down then only shows them again -- the item stays (live 2026-11-03: the Tarnished's own press in
+  Tarnished mode too). With `hud_type` 2 and the slots hidden (CSFeMan's Auto-HUD "shown" bytes +0x4EB8, entries 5-10 all 0; RTTI
+  `CS::CSFeManImp` checked), View + D-pad down sends a 70 ms wake press and the switch 170 ms later; the 0.4 s retry stays for
+  anything else. Live (fake MGSV, the slots faded): `flask: View + D-pad down -> Elden Ring's Auto HUD has its equipment slots
+  hidden: a wake press, the switch 170 ms later`, `flask: the switch press after the wake (0x0002)` 183 ms later, slot 0 -> 1
+  with no retry. `wake_hud = false` is the old way. Review 0.7.0: the switch after a wake re-reads the slot first (`flask: the
+  wake press switched by itself (slot A -> B) -- no second press`: never two switches for one press), and a press made while
+  another is still held for Elden Ring (or a wake's switch is still to come) is queued behind it, released 60 ms in between (up to
+  3; `queued behind the switch still pressed (N waiting)`): `ErPresses` only raises a deadline, so two quick presses used to merge
+  into one switch. Live with both games (0.7.0 integration, the Auto HUD faded after 12 s idle): `a wake press, the switch 170 ms
+  later` -> `the switch press after the wake` 184 ms later -> `the quick item is now slot 1: Flask of Cerulean Tears`; two presses
+  ~0.35 s apart: the second `queued behind the switch still pressed (1 waiting)`, sent 216 ms after the first, slot 1 -> 0 -> 1 with
+  no retry.
+- **Spirit ashes** (0.7.0; `quickitem::SpiritCheck`, `TestQuickItem`): pressed as before, then watched for 4.5 s: CSFeMan's
+  summoned-spirit count (FrontEndViewValues +0x4D58 at CSFeMan +0x80, RTTI checked) going up or a new non-hostile character within
+  12 m of the Tarnished -> "Spirit ashes: summoned -- they fight beside Snake" (they rise at the hidden Tarnished, where Snake
+  stands); neither -> "Spirit ashes: can't be summoned here (no summoning icon, or not enough FP / HP)" (warn) and `flask: spirit
+  ashes -- no spirit N ms after the press ... Elden Ring refused the summon here`. `pr er flask` counts both. A death, a load or
+  Snake stopping (Tarnished mode) ends the watch with no verdict (review 0.7.0: its "refused" came over a death). UNVERIFIED live:
+  the player's save has neither the Spirit Calling Bell nor ashes (Renna gives the bell: an NPC talk, not done); offline tests
+  only -- the quick slots hold the two flasks only, so there is nothing to press (`flask slots`).
 - **Layout** (fromsoftware-rs `cs/player_game_data.rs`; no code address -- each object's RTTI name and the inventory pointer are
   checked on every read, any failure refuses with the reason and presses nothing): PlayerIns +0x580 PlayerGameData, +0x2B0
   EquipGameData (+0x158 EquipInventoryData, +0x288 EquipItemData: +0x8 ten quick slots {u32 handle 0xB0000000 | goods id, i32
@@ -478,6 +503,18 @@ on the ladder, facing it. Before (and with `snake = off`) the Tarnished showed a
   `kHEvHeal` / `kHEvHurt`). **The stick that climbed doesn't run Snake on** (`InputBridge::HoldLeftStickUntilReleased`): it stays
   out of MGSV's pad until it is let go. Found live: holding the stick up through the end, Snake ran off the tower's landing and
   fell 19 m down the ladder's shaft (92% of his life).
+- **Snake walks sooner after a climb** (0.7.0; `[Input] ladder_home_settle_ms` 50; `Ladder::Input` endedForGood / guestHome,
+  `TestChord`): of the ~0.5 s from the top until Snake walked, 300 ms was the settle, there so that one of Elden Ring's state
+  flickers on the ladder never hands Snake over mid-climb. Once the climb is over for good (`LadderEndedForGood`: none right after
+  EndTop / EndBottom, `kHEvClimb a=0` out) *and* MGSV has Snake home (the guest neither kGuestClimbing nor kGuestMantling), 50 ms
+  is enough: the puppet starts as soon as MGSV is back on the sandbox (+195-205 ms in the 2026-11-01 runs) instead of at +301-317
+  ms, ~0.1 s sooner. Any other end (a death, the chord, Elden Ring's none without EndTop / EndBottom) keeps `ladder_settle_ms`.
+  Offline tests: done at 50 ms with both conditions, not before 300 ms with either missing. **Live with both games** (0.7.0
+  integration, Stormveil's AEG219_067_4000, Snake set at its foot and walked into it: `prompt 5000`, Y; MGSV played the climb):
+  two climbs, each down to the bottom -- Elden Ring's climb over (EndBottom -> none) at 0, `climb: back on the sandbox` +206 /
+  +207 ms, `puppet ON` +233 / +234 ms (2026-11-01: +301 / +317 ms); the second with the stick let go and pushed again at EndBottom:
+  `the player's stick 39 ms after the move -- Snake's motion counts again (MGSV's HUD thaws at 150 ms)` and Snake walked 4 m in the
+  next 3 s. A stick held down through the end stays out of MGSV's pad until let go (as designed: no run off a landing).
 - **Snake starts on ground** (`kinematic::SupportedStart`, kinematic motion, any puppet start): Elden Ring's capsule can stand on
   a rim with its centre over a drop, the kinematic body couldn't (then one ray under its centre; now five, "Collision filters and
   the ground under Snake" below: one probe on a rim is still no support). Live, a climb's end left the Tarnished
@@ -1146,9 +1183,26 @@ ball and a dark ball with a flame. The guest now publishes MGSV's draws of a pro
    "other" owner, velocity from the previous snapshot's same draw). `Projectiles::Drawn(source, copy, frame)` tells
    Throw/Rounds to leave out the ball only for a copy really placed in the last scene (a rocket keeps its flame, exhaust and
    smoke trail); tagged draws pass `[Render] draw_other = false` so they can still be learned.
-No template yet (the first throw of an item in a session, a guest from before v13 or with `[Capture] ProjectileMeshes` off
+No template yet (the first throw of an item ever -- or in each session with `projectile_store` off --, a guest from before v13 or with `[Capture] ProjectileMeshes` off
 -- its default --, a mesh forgotten after the guest re-attached, a template refused as too big), or the switch off: the ball
 as before. `throw` on the host console prints the templates (`pr er throw`).
+
+**Kept across sessions** (0.7.0; `[Render] projectile_store`, true; `PhantomRingHost.projectiles` next to the ini and the DLL). A
+template learned or measured is written to disk (via a `.tmp` and a rename): per key (throw equip / round bullet id) its size, its
+parts as the guest's draw records -- its content hashes of mesh, textures and material, no MGSV asset -- with each part's matrix,
+and whether it was refused (magic `PRPJ`, version 1; anything else in the file: ignored and logged). A later session reads it
+once, the first time it needs a template, and draws a key as soon as MGSV has sent those meshes (the hashes are the guest's own
+keys, so MGSV's same meshes find the same template): `projectiles: throw equip 354 known from an earlier session: 1 part(s), first
+mesh b1332cea2c489926, 0.18 m across`. Loaded templates follow the rules of learned ones (two releases in a row agreeing on other
+meshes replace one). Live 2026-11-03 (fake MGSV's tagged grenade, then a new Elden Ring session): learning took 0.256 s after the
+first release in the first session; in the next `projectiles: throw equip 354 drawn with the mesh kept from an earlier session
+(0.02 s after its release: no learning needed)`. `projectile_store = false` learns every session as before (the offline tests
+set it, so a store in build/ can't change their results). Review 0.7.0: a store with a part of no matrix (it reached the renderer
+as a draw reading past the matrices), a non-finite number anywhere, an extent over `kMaxExtent` or a size over the key's limit is
+ignored whole ("unreadable ... learned again"), and the renderer drops any draw whose matrices aren't all in the snapshot. Live with
+both games (0.7.0 integration): `projectiles: throw equip 378 known from an earlier session` at the load, then the session's first
+sleep grenade `throw 1: sleep (equip 378 ...) released` -> `drawn with the mesh kept from an earlier session (0.02 s after its
+release ...)`; a frame 0.25 s after the release shows MGSV's blue canister inside the throw ring.
 
 **Muzzle flashes.** Every `kGEvFire` / `kGEvBuddyFire` that is not D-Walker's flamethrower calls `Explosion::Muzzle`: the
 eighth explosion look, `kMuzzle` (`explosion_muzzle = 10030001`, the Fire Pot's fireball) written into the eighth carrier
@@ -1156,9 +1210,92 @@ eighth explosion look, `kMuzzle` (`explosion_muzzle = 10030001`, the Fire Pot's 
 (`MakeCarrier` without its children: no sparks, no ground flames) that does not move, lives `muzzle_life` (0.06 s) and takes
 its effect with it when it dies (`MakeFlash`: `sfxDeleteByLifeDead` 1), so the fireball is cut after its first flash.
 Spawned `muzzle_ahead` (0.1 m) in front of MGSV's muzzle point along the shot, at most `muzzle_per_second` (10; automatic
-fire shows a flash every few rounds), counted in our live-bullet cap like every look; none for tranquilizer rounds unless
-`muzzle_tranq` (MGSV's darts are suppressed). `boom muzzle` on the host console shows one in front of the Tarnished.
+fire shows a flash every few rounds), counted in our live-bullet cap like every look; none for a suppressed shot (protocol v16
+`kFireSuppressed`: the tranquilizer pistol, a suppressed rifle) unless `muzzle_suppressed` (0.7.0; before, `muzzle_tranq` for
+tranquilizer rounds, still read as its fallback); a worn-out suppressor's shots flash. `boom muzzle` on the host console shows one in front of the Tarnished.
 If the fireball reads too big even cut short, try another look live: `boom look muzzle <bullet id> [sfx]`.
+
+### Noise: Snake's shots heard by Elden Ring's enemies (`er/Noise*`, `er/NoiseLogic*`, `[Noise]`; protocol v16 `kFireSuppressed` / `kGuestSuppressorOn`; 0.7.0, live 2026-11-03)
+
+MGSV's shots are no Elden Ring attacks, so they made no sound its AI could hear: an unsuppressed rifle beside a camp alerted
+nobody. Elden Ring's enemies hear *AI sounds*: every attack of the Tarnished's makes one (AtkParam appear / hit AI sound ids:
+AiSoundParam 2100, 4 m, as a swing starts; 2010, 12 m, where a weapon hits), and so do his footsteps, pots, breaking crates and
+the enemies' own animation events.
+- **The sound system** (Ghidra on 2.7.2.0; `A::WorldAiManager`, `AiSoundRequest`, `AiSoundEmit`, `AiSoundAdd` byte-verified on
+  2.7.1.0 and 2.7.2.0 like every address -- one failing leaves `sound` mode unable to emit, logged once with the reason):
+  CSWorldAiManager +0x7628 holds a vector of 0x90-byte sounds behind a lock (+0x20). `0x140348760` builds a request from a
+  position, an owner record (the hidden Tarnished's handle: he stands where Snake does, so the sound is the Tarnished's -- hostile
+  to the enemies, ignored by allies) and an attack's AI sound (`sound_row`, 2010); `0x14034A1B0` adds it. The built request's
+  handle (+0x18) and row (+0x48) are checked before the add; the radius is the row's x the request's scale (+0x4C), so
+  `noise::ScaleFor` gives each weapon class its own. Each AI's listener checks the sounds near it every update (within the radius
+  plus its ear distance, a hostile owner, the rank) and takes the loudest as its sound target -- the turn, the walk over to look,
+  the search -- through its own NpcThinkParam sound behaviour.
+- **Each shot** (`Noise::OnShot` from `Combat::OnShot`, every `kGEvFire` / `kGEvBuddyFire`): a sound at the muzzle, its radius by
+  the class of MGSV's bullet (`noise::ClassOfShot`: Hg* pistol 20 m, Rf* rifle and machine gun 35, *Sniper* 40, 12GA* shotgun 45,
+  40 mm / ms* / vehicle guns and anything explosive launcher 55, D-Walker's flamethrower 10); an unsuppressed round that strikes
+  the world makes `impact` (5 m) where it lands (a character it hits makes Elden Ring's own); at most `per_second` (8).
+- **Suppressed = silent all the way** (`b & kFireSuppressed`): radius `suppressed` (0: no sound), no muzzle flash (`[Combat]
+  muzzle_suppressed`, false; it was `muzzle_tranq`, still read as the fallback), and the dart's hit bullet carries no sound either:
+  the Throwing Dagger AtkParam_Pc row (10170000) it is built from has appear 2100 / hit 2000 (4 m round the target); a quiet hit
+  (`HitEffect.quiet`, its own `HitKey` bit 53, so never sharing a patched row with a loud one) writes both -1, a loud one the
+  row's own values back (`er/Combat.cpp` SpawnHitBullet).
+- **`mode = heard`** (the fallback, ini-switchable): enemies within the radius that are not fighting yet get a token hit (no damage,
+  no flinch: poise 0.01, damage level 0, quiet) -- Elden Ring's aggro on the Tarnished, not a search. `off`: no noise. Since the
+  0.7.0 review the tokens wait until the shot's own hit has left the patched row (they used to take it first: a dart then lost its
+  sleep, a lethal round its flinch -- `Noise::Tick` runs a waiting shot's tokens once `Combat::RowBusy()` is false, a shot's waiting
+  at most 1.5 s), go to at most 4 foes a shot, nearest first, and never to the shot's own target, a sleeper (`Combat::Asleep`: an
+  Elden Ring hit wakes him), a foe CQC holds or one token-hit in the last 10 s.
+- **The AI's state** (`noise who`, mode heard): CSAiTargetingSystemOwner's slots 14 / 15 (is_battle_state /
+  is_not_in_any_search_state) are byte-verified functions in both tables since the 0.7.0 review (`A::AiOwnerIsBattle` 0x345E50,
+  `A::AiOwnerNoSearch` 0x345E60, the same code and RVA in 2.7.1.0's Ghidra project and 2.7.2.0's exe; `verify_er_addresses` 89/89 on
+  2.7.2.0), and ReadAi calls one only when the live vtable slot is that very function -- otherwise the state is "unknown"
+  (logged once) and mode heard hears each foe once per 10 s.
+- **A guest that never reports a suppressor** (review 0.7.0): kFireSuppressed only says "suppressed", never "unknown", so a guest
+  whose suppressor reading failed its byte checks would turn every dart into a loud pistol shot. Until the guest reports one this
+  session (`kGuestSuppressorOn` in a state or `kFireSuppressed` on a shot; a re-attach starts over), tranquilizer rounds stay quiet,
+  the pre-v16 rule (`noise: the guest never reported a suppressor -- tranquilizer rounds kept quiet (pre-v16 rule)`, once).
+- **"Suppressor worn out"** (corner, warn; `noise::SuppressorWatch`, `worn_note`, `worn_window_ms` 1000): kGuestSuppressorOn going
+  off within 1 s of a suppressed shot and staying off 0.3 s, the weapon in hand at that shot (the GuestState's weaponId: the shot's
+  own equip id is another numbering) still in hand. A weapon switch (in either order: the id first or the flag first), holstering,
+  MGSV's menu, a climb, a vault, CQC, the box, a vehicle, a death, a load or a cutscene next to the drop is no wear; the watch
+  starts over with each guest. (Before the review a switch could give a false note.)
+
+Console: `noise` (mode, radii, sounds made / quiet shots / over the cap / failed / heard, suppressors worn out), `noise emit [r]
+[m ahead]` (a sound in front of the Tarnished), `noise mode sound|heard|off|ini`, `noise set <key> <v>`, `noise who [r]` (each
+character near: team, distance, HP, calm or BATTLE, its last AI sound and rank, search slots, "(sound target)"; the NPC's AI is
+found once by RTTI: `noise: an NPC's AI is ChrIns +0x580 -> +0xc0 (its targeting owner +0xc938 names the ChrIns, its targeting
+system +0xc950)`). Fake MGSV: `!suppressor on [shots] | off`, `!fire <weapon> suppressed|loud` (wears out after `shots`). Tests:
+`tests/test_host_noise.inc` (classes, radii, scale, the watch, quiet hit keys), tools/phantomring/test_fakes.py (v16 flags).
+
+**Live 2026-11-03** (Elden Ring 1.17.2 headless 4K alone, fake MGSV, Stormveil; `noise who` sampled every ~0.47 s):
+- `noise emit 60` -> `noise: AI sound 60 m (console; AiSoundParam 2010 x 5.00)`: two soldiers 47.1 / 47.6 m away took it as their
+  sound target 0.36 s later (`last AI sound 2010 (rank 1) ... (sound target)`) and walked 12 m towards it in 10 s, still calm.
+- Snake's pistol, unsuppressed -> `noise: AI sound 20 m (Snake's pistol; AiSoundParam 2010 x 1.67)`: the four soldiers at 11.0,
+  13.0, 13.4 and 17.7 m had it as their sound target 0.35 s later; npc 36600014 at 22.8 m (outside 20 m) and the sentry 30003514
+  at 13.3 m did not. The same shots suppressed from the same spot: nobody's last sound changed (the status counts them as quiet shots,
+  no sound made).
+- **A dart in a group**: a suppressed head shot on one of three soldiers in a courtyard -- frame 4 s later: he lies asleep, the
+  two beside him stand as before; 25 s of `noise who`: every one `calm ... last AI sound 0 (rank -1)`. The control from the same
+  spot, an unsuppressed pistol shot: all four soldiers near had it 0.35 s later, walked over from 2.3 s, were in BATTLE 5.2 s
+  after the shot and at Snake (1.7 m) 8.5 s after it.
+- `!suppressor on 3` then three suppressed shots: `noise: the suppressor on Snake's weapon 291 wore out (kGuestSuppressorOn
+  dropped right after a suppressed shot)`, the corner "Suppressor worn out" (frame), and the next shot loud (`AI sound 20 m`).
+- Not every enemy listens: the upper rampart's 42101014 and 30100114 (27.9 / 29.5 m from a 60 m sound) and the sentry 30003514
+  never registered one (their think params may have no sound behaviour); the sentry raised its alarm when the Tarnished was set
+  down next to it. Not tried: the real MGSV's suppressed weapons, `mode = heard` live, D-Walker's guns.
+
+**Live with both games 2026-11-03 evening** (0.7.0 integration: the real MGSV 1.0.15.4 and Elden Ring 1.17.2, the player's save at
+Stormveil, the same courtyard group of four): `noise who` reads `calm searching` through the verified getters. The real WU S.PISTOL,
+aimed through MGSV's own camera: guest `shots: equip 7 SUPPRESSED (suppressor life 30 before the shot)`, host `Snake tranquilizer
+(weapon 7 bullet 10 x1, suppressed) -> npc 30000014 ... HEADSHOT ...: bullet 0 poise 0 lv 0 sleep +252 (resist 229, 2 rungs)`, `1
+quiet shots, 0 AI sounds made`; 18 s of `noise who` (108 samples) after it: all four `calm ... last AI sound 0`. The control, an SVG-76
+round into the ground beside them: `AI sound 35 m (Snake's rifle)` + `5 m (... strikes)`, all four had 2010 at the next sample, three
+in BATTLE 1.9-2.7 s after the shot (the darted one among them: the loud round woke him). Wear-out with the real MGSV (the save's
+Infinity Bandana taken off in memory, `vars.playerFaceEquipId = 0` + `!boot`, saves blocked; `!suppressor 2 3 on`): the guest's
+life before each shot 3, 2, 1 ("it wears out with this one"), the host `the suppressor on Snake's weapon 7 wore out` 316 ms after
+the third (the 0.3 s confirm), the corner "Suppressor worn out" and MGSV's weapon box without its gauge (frame), the fourth shot
+`AI sound 20 m (Snake's pistol)`; a rest at the Rampart Tower grace: `suppressor: refill (rest; slot 2: 0 on -> 30 on ...)`, the next
+shot SUPPRESSED (life 30).
 
 ### Decoys (`er/Decoys.cpp`, `er/DecoyLogic.*`, `[Decoys]`, protocol v13 `kGEvPlaced` a = `kAmmoDecoy`; roadmap 2.8; live pass B 2026-10-15)
 
@@ -1395,7 +1532,7 @@ view, zoom included (`er/CameraDriver.cpp` copies MGSV's FOV). Each frame (`Mark
   respawns keep their handles); one seen dead (or at 0 HP) fades over `fade` (1 s) and is forgotten; at most `max_marked` (the
   oldest goes).
 The mark (`marking::Build`, the world markers of er/RenderMarkers.h, owner `kMarking`): a triangle pointing down with its tip
-`height` (2.2 m) over his feet, red (hostile) or white, dark-edged, `size` (0.012) of the screen height at any distance and FOV;
+`above` (0.35 m) over the top of his own hit capsule (`height`, 2.2 m over his feet, without one: "Real heights" below), red (hostile) or white, dark-edged, `size` (0.012) of the screen height at any distance and FOV;
 his distance from Snake (the puppet) in whole metres as seven-segment glyphs over it (`text_size` of the triangle;
 `distance = always | centre | off`, centre: only within 10 degrees of the view's centre); a fresh mark's triangle pops (1.6x,
 0.3 s; the number stays put). Both are new marker shapes in the marker pixel shader (`kTriangle` 3, `kGlyph` 4: signed
@@ -1411,6 +1548,16 @@ caps, `LoadWatch`, layout and the pop); the shaders compile in test_render. **Li
 BINOCLE flag (`binoculars up/down`), a Stormveil soldier `marked ... (npc 30001014, hostile) at 2 m` 0.48 s after the
 binoculars came up (31 rays, 0 blocked), his red triangle and distance in Elden Ring's frame; `mark nearest` draws a white one.
 Still unverified: foliage vs. the ray filter, giants, fast travel as a load.
+
+**Real heights** (0.7.0; `marking::MarkHeight` / `AimHeight`, `[Marking] above` 0.35, `height` 2.2 now the fallback; console
+`mark handle <0x..>` marks one character): a fixed 2.2 m over the feet put the triangle inside a troll, a giant or a boss, and the
+cone and the ray aimed at a fixed chest. Now each character's own hit capsule (NpcParam hitHeight / hitRadius as the physics
+module has it, the one Combat reads; cached per handle) sets both: the tip `above` m over the capsule's top, the aim at 0.65 of
+its height. A capsule that can't be read or isn't sane: the old fixed heights (`mark` counts both). Live 2026-11-03 (Stormveil):
+`marking: 0xa0000001000001b (npc 30003214) marked -- its capsule 1.90 m tall, r 0.40, the mark's tip 2.25 m over its feet`;
+30100814 2.10 m -> 2.45; 36600014 1.77 -> 2.12; 81000014 2.00 -> 2.35; the large 46400014, 4.50 m tall (r 1.80) -> 4.85 m (it was
+at 2.2 m, its waist). Frames: the marks with their distances (27 m, 70 m) drawn through the walls between; the characters
+themselves were behind those walls, so the height over a head is from the log, not seen.
 
 ### Phantom Cigar = Elden Ring time skip (`er/TimeSkip.cpp`, `[TimeSkip]`, protocol v13 `kGEvTimeSkip`; live pass B 2026-10-15)
 
@@ -1673,10 +1820,12 @@ die [snake|er]               a test death: Snake's as MGSV reports it (kGEvDied,
 ladder early on|off          kHEvClimb a=0 and the stick's latch at Elden Ring's EndTop/EndBottom (on, 0.6.0) or after the settle
 mantle set <key> <m>         [Mantle] vault_max_height vault_max_depth vault_max_drop min_height max_height reach run_into_max live
 flask [use|next|slots|on|off]   the quick item for the hidden Tarnished (View + X / View + D-pad down; [Flask]); slots lists all ten
+noise [emit [r] [ahead] | mode sound|heard|off|ini | set <key> <v> | who [r]]   Snake's shots as Elden Ring AI sounds ([Noise])
+mark handle <0x..>           mark one character (its capsule's height and the mark's tip logged)
 puppet motion kinematic|root_motion   switch [Puppet] motion live (and zero the moved/asked, walls and breakers counters)
 puppet hop [on|off]          dive = hop ([Puppet] hop) live; without an argument its settings
 render [status | keys | set <key> <value> | probe]
-hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value>]
+hud [status | msg [info|good|warn|error] <text> | aim on|off|auto | set <key> <value> | card | bars none|all|auto|ini]
 draw [skeleton|buddy|tracers on|off]
 findq <expr> [max]           qwords equal to expr in writable private memory (class instances by vtable)
 snap reset|take <label>|diff <a> <b> [max] [va vb]|add <addr> [bytes]|clear
@@ -1912,7 +2061,7 @@ ResizeBuffers) is kept alive until a submission of ours after the change has com
 hold no reference of their own (UNVERIFIED live: needs a graphics-quality change while Snake is drawn).
 
 **Near-camera fades** (all stages, screen-door with a static 4×4 Bayer pattern that Elden Ring's TAA turns into
-transparency): Snake per pixel (`near_fade = 0.25, 0.6` m from the camera), everything else per pixel
+transparency; in 2x2-pixel cells since 0.7.0, `near_fade_cell`: "Magenta / green tints" below): Snake per pixel (`near_fade = 0.25, 0.6` m from the camera), everything else per pixel
 (`near_fade_other = 0.5, 1.5`) and as a whole by its nearest part, and anything but Snake with a part within
 `occluder_radius` (1 m) of the camera→Snake line in front of him at `occluder_fade` (0.15; never while riding).
 In MGSV's first person / scope (GuestState `kGuestFirstPerson`, `RenderSnapshot::firstPerson`) Snake's own draws are not
@@ -2018,7 +2167,7 @@ point, gone with `gbuffer_point = clear` (the default since 2026-10-14) but neve
   0 fallbacks in every session since 2026-10-14); the player's grass reports may have come from such frames, or from before then.
 - Not re-checked: the cardboard box in grass (no recording with the box; its draws go the same way as Snake's).
 
-#### Minimum light on Snake (roadmap 5.3; `[Render] min_ambient` 0.004, `render set min_ambient <v>`; 2026-10-31)
+#### Minimum light on Snake (roadmap 5.3; `[Render] min_ambient` 0.008 since 0.7.0, `render set min_ambient <v>`; 2026-10-31)
 
 Snake is lit by Elden Ring's world light set (0); the character sets that give the Tarnished his rim light light nothing while no
 character of Elden Ring's uses them on screen, so in a dark tower at night Snake went nearly black. RT4 (R16G16B16A16_FLOAT) is
@@ -2029,8 +2178,28 @@ the rock he stood behind (live). It is its own pass after Elden Ring's last G-bu
 (`Gbuffer::RecordEmissive`): Snake's draws again, RT4 written alone, the depth read-only and tested as the velocity pass does, so
 only where he is still the nearest surface (live: nothing through the rock in front of him, nothing on the Tarnished behind him).
 Values (Gatefront at 00:11, the humanoid next to the Tarnished, `debug_offset`): mean luminance over his body 20.3 at 0, 22.4 at
-0.002, 28.5 at 0.005, 30.1 at 0.01; 0.025 and up glow. 0.004 is the default: barely there under the moon, a visible figure
-where nothing else lights him. By day the sun's light dwarfs it. Not yet tried in a dark tower.
+0.002, 28.5 at 0.005, 30.1 at 0.01; 0.025 and up glow. 0.004 was the default: barely there under the moon, a visible figure
+where nothing else lights him. By day the sun's light dwarfs it.
+
+**0.7.0: 0.008** (2026-11-03, Stormveil's torch-lit tower room at 03:00, the real MGSV's Snake from a recording beside the
+Tarnished, frames side by side at 0 / 0.004 / 0.006 / 0.008 / 0.01 / 0.02): 0 a black silhouette, 0.004 still dark next to the
+Tarnished (whom Elden Ring's character light sets light), 0.008 his outline and gear readable beside the Tarnished, 0.01
+brighter, 0.02 flat and glowing. By day it still disappears under the sun. With both games (0.7.0 integration, 0.008): Snake by
+the torch at the foot of Stormveil's dark tower ladder and in the dim Rampart Tower room, his face, gear and launcher readable
+(frames).
+
+#### Magenta / green tints with the camera pushed into Snake (`[Render] near_fade_cell` 2; 0.7.0)
+
+`render set near_fade_cell 1|2|4` tries it live; `gFade.x` in the shaders. The near-camera screen door dropped single pixels, and Elden Ring rebuilds each pixel's colour
+partly from its neighbours': a 1-pixel door mixed Snake's pixels with the background's and his see-through ghost showed false
+colours that changed with the background -- orange and blue, magenta and green, the two chroma axes (as a colour packed with its
+chroma shared between neighbouring pixels would give; inferred from the frames, not from Elden Ring's shaders). The door now drops
+2x2 cells, so each of Snake's pixels has one of his own beside it. Live 2026-11-03 (the real MGSV's Snake from a recording, the
+camera pushed into him against a wall, `near_fade_cell 1` vs `2` side by side): 1 -- the ghost's body orange and its launcher
+blue; 2 -- the ghost in his own olive and black; the door's dots show a little more. 4 (tried on the test model) is coarse. With
+both games (0.7.0 integration, the Rampart Tower room, Snake walked into a wall and the camera turned against it): the see-through
+near the camera (D-Walker's panel and Snake's launcher) in their own colours, 0 magenta and 6 green-ish pixels (channel lead > 60) of
+864,000 in the near half of the frame.
 
 #### Not done yet / next
 
@@ -2119,8 +2288,56 @@ them). VERIFIED live (`hud shot`, run.prrec, Elden Ring's HUD forced on with CSF
 0.73-0.86 with the rune counter clear below, the notification at y 0.59 above where the skill label goes; 8 pieces per
 frame. `hud set hud_weapon_offset 0, -0.08` etc. live.
 
+**Elden Ring's bars while Snake plays** (0.7.0; `er/ErBars.*`, `[Overlay] er_bars` = auto | none | all; console `hud bars
+none|all|auto|ini`). Snake's life, ammo and items are MGSV's HUD; Elden Ring's FP and stamina bars were the hidden Tarnished's
+and meant nothing, its HP bar only mirrored Snake's life. `none` (auto, the default): all three go, through CSFeMan's own HUD
+switch (singleton `CSFeMan`, RTTI `CS::CSFeManImp`; +0x78 hud_state, fromsoftware-rs CSFeManHudState: 0 HP / FP / stamina hidden,
+1 shown, 2 a popup menu's, 3 the default), written 0 by the camera task (group 107) only while it is 3, so Elden Ring's menus keep
+theirs, and put back to 3 when Snake stops (Tarnished mode, a menu, a load, a death). `all`: as before. **FP and stamina alone
+could not be hidden** (tried live with the HUD forced On): CSFeMan's front-end values (fp, fp max, stamina, stamina max,
++0x98..+0xB8) and the Auto HUD's per-element "shown" bytes (+0x4EB8: 1 HP, 2 FP, 3 stamina) written 0 every frame after
+CSMenuMan's update (task groups 126 and 107) left both bars drawn full -- Elden Ring's bars take their values elsewhere -- so the
+mode that kept the HP bar was dropped. Live 2026-11-03 (HUD forced On, frames side by side: `all` / `none`): `all` the three bars
+under the portrait; `none` the portrait and all three gone; Elden Ring's map and menu still show its own HUD.
+- **On a ladder** (review 0.7.0): Snake drawn on Elden Ring's ladder (`Puppet::ClimbVisual`, the puppet held) is still his screen,
+  as for MGSV's HUD layer: the bars stay hidden through the climb (they came back next to MGSV's HUD for every ladder).
+- **hud_state 0 also hides CSMenuMan UI state 7** (found in the 0.7.0 integration with both games): the HUD signal the interactions
+  ("Interactions" above) and the "Auto" HUD detector follow. Live: every takeover logged `ER HUD hidden (UI state 7) -- nothing on
+  screen explains it`, the second one `Elden Ring's HUD looks set to "Auto"` (the press-less screens went off for the session), and a
+  rest at the Rampart Tower grace ended after its 3.5 s minimum with the grace menu still up -- Snake had the pad (B reloaded his
+  pistol) and only Tarnished mode could leave the menu. Now `ErBars::HidesHud()` (we hid it, or put it back less than 300 ms ago)
+  makes `HudHidden` ignore UI state 7, and after one of Elden Ring's screens (any frame Snake's screen isn't up) the bars come back
+  only 1.5 s later, so the screen that follows one still shows its own hide (the 1 s chain). And an interaction whose HUD was hidden
+  at the press but came up since (a rest shows it at the sit-down) lets it tell the end from then on (`ER interaction: its HUD came
+  up N ms after the press`). Live after the fix: 0 `nothing on screen` lines in the session; Y on the rest prompt -> `ER interaction
+  (ActionButtonParam 6101)`, the HUD hid 2.3 s later (the grace menu, frame: "Rampart Tower", Pass time ... Leave, no MGSV HUD), B
+  -> `ER interaction over after 13882 ms (its HUD is back)`, Snake back (frame). Tarnished mode with the HUD set On: the three bars
+  (frame); back to Snake: gone (frame).
+
+**The controls card** (0.7.0; `[Overlay] controls_card` first | always | off, `card_seconds` 12, `card_button` dpad_up,
+`card_scale`; `Hud::CardTimer`, `ControlsCardText`, tests in test_host_overlay.inc). The first time Snake takes control (once per
+install: `PhantomRingHost.firstrun` next to the ini remembers it; delete it to see the card again) a panel at the top centre of the
+screen lists his controls: the jump (`[Input]` jump button), Y climbs / vaults / ladders and Elden Ring's prompts, View + X the
+flask, View + D-pad down the next item, View tapped the map, View held MGSV's iDroid, View + Start held 1 s Tarnished mode, LB held
+the buddy's orders, View + `card_button` this card again (the button names come from the ini). It fades after `card_seconds` or at
+any press (one made after every button was let go since it appeared: the takeover's own buttons or a View
+still held don't close it). **A closes it and does nothing else** (0.7.0 integration: the A also crouched Snake): while the card is
+open on Snake's screen (`InputBridge::SetCardUp`), an A pressed is counted (`CardCloses`) and kept out of MGSV's pad until let go;
+the card's last line says "A: close". **Only where it can be seen** (review 0.7.0): a card shown while Elden Ring's or MGSV's menu, a
+cutscene, a load or a death is up keeps its time and ignores the presses made meanwhile (`CardTimer::Update` a_visible), the first
+takeover's card starts only on Snake's screen, and `PhantomRingHost.firstrun` is written once the card was drawn (a takeover at a
+grace's menu used to use it up unseen). View + D-pad up (a View shift like the
+flask's, `PadGate` help) or `pr er "hud card"` shows it again. Live 2026-11-03: `overlay: the controls
+card (Snake's first takeover; it fades after 12 s or at a press)`, `overlay: first controls card (45 px, 1601x394) drawn`; View +
+D-pad up through the virtual pad -> `overlay: the controls card (View + D-pad up; ...)`; A dismissed it (frames: the card's seven lines at the top
+centre over the Stormveil courtyard, then none). Live with both games (0.7.0 integration): `overlay: the controls card (Snake's
+first takeover ...)`, `the first controls card is on screen -- PhantomRingHost.firstrun written` 0.36 s later (frame: the seven
+lines and "A: close" over Stormveil, MGSV's weapon box with the pistol's SUP gauge); View + D-pad up -> shown again; A -> `the
+controls card closed with A (that A kept from MGSV until let go)`, Snake still `Crouching` (the guest's flags before and after; an
+A without the card then stood him up).
+
 Console: `hud` (model + draw counters), `hud set <key> <value>` (the `[Overlay]` keys), `hud aim on|off|auto`
-(force `kGuestAiming` for a test), `hud msg`. Cost: inside the renderer's 0.05 ms/frame CPU average; one
+(force `kGuestAiming` for a test), `hud msg`, `hud card` (the controls card now), `hud bars none|all|auto|ini`. Cost: inside the renderer's 0.05 ms/frame CPU average; one
 1280x720 copy (3.7 MB) per new guest HUD frame while the layer shows.
 
 **Verified live (2026-10-12, ER 1.17.1 4K SDR, `fake_mgsv --model humanoid` on `/dev/shm/phantomring_h`).**
@@ -2199,6 +2416,21 @@ after Snake died the Tarnished knelt on screen (his death, HP 0) and Snake wasn'
   View + Start held during it counted no chord at all, so the refusal above is unit-tested only. After a respawn load the new player
   object can be fully visible (`the Tarnished VISIBLE ... base transparency 0.92 ... another character` at 14.0 s) while Elden Ring's
   loading screen is still up; the puppet hides him in the frame it closes (no frame showed him).
+- **The respawn's Tarnished hidden from his first frame** (0.7.0; `[Puppet] respawn_hide`, `respawn_hide_max_ms` 15000;
+  `Puppet::RespawnHide` in Decide and AfterPhysics): the line above was not the whole story -- frames after the 0.6.0 review showed
+  the new player object for up to ~4 s at the grace before the puppet's start. Now, through a death of Snake's, the player's ChrIns
+  is compared with the one that died each frame: a new one is hidden at once (render bit cleared, its own base transparency
+  kept; the originals saved so the puppet's `Start()` keeps them instead of saving hidden values) and stays so through the
+  respawn until Snake takes over on it. Tarnished mode, MGSV gone or no takeover within 15 s of the respawn show him again; the
+  death trace's `another character` lines say whether we hid him. Live 2026-11-03 (fake MGSV, two deaths of Snake's):
+  `puppet: the respawn's new Tarnished hidden from his first frame (14.1 s after Snake's death; render bit 1, base transparency
+  1.00 kept) -- Snake takes over after the respawn`, `ER player respawned (17.3 s after the death, after the load)`, `puppet: the
+  respawn's Tarnished stayed hidden 3.2 s, from his first frame to Snake's start` (the second: 14.2 s, 3.0 s); a frame after
+  the takeover: Snake's model at the grace, no Tarnished (the hidden window itself is from the log). With both games (0.7.0
+  integration, the real MGSV): five deaths of Snake's (a beast, Stormveil's soldiers twice, a 21 m fall, the courtyard group) --
+  each `the respawn's new Tarnished hidden from his first frame (14.1-14.2 s after Snake's death ...)`, `ER player respawned (11.3-17.3
+  s after ...)`, `stayed hidden 3.1-3.2 s, from his first frame to Snake's start`; the death traces `the Tarnished hidden ... Snake
+  drawn` at 0.3-9 s; a frame after the respawn (the Rampart Tower room): Snake and D-Walker, no Tarnished.
 
 Verified live: `!die` → `killed the ER player`, `puppet OFF (player dead)`; a screenshot ~0.5 s later shows
 Snake and D-Walker half dissolved, ~2 s later nothing but Elden Ring's world (no Tarnished), 6 s later `ER

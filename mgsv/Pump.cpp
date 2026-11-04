@@ -13,6 +13,7 @@
 #include "Offline.h"
 #include "Pad.h"
 #include "SaveGuard.h"
+#include "Suppressor.h"
 #include "State.h"
 #include "WindowHidden.h"
 
@@ -394,6 +395,24 @@ namespace phantom::guest::pump
 				a_then.empty() ? std::string() : std::format(" -- {}", a_then));
 		}
 
+		// [Loadout] Suppressors for PR.PreLoadout (docs/GUEST.md 18.18): the mode, or '' (the suppressor vars left alone) unless MGSV's
+		// saves are blocked and the guest can set MGSV's full life natively after the load (PreLoadout's is provisional).
+		std::string SuppressArg(bool a_log)
+		{
+			const auto& c = Cfg();
+			const char* why = !suppressor::SettersAvailable() ? "MGSV's suppressor setters unverified" : !SavesGuarded() ? "MGSV's saves aren't blocked" : nullptr;
+			if (why && a_log) {
+				Log::Info("boot: suppressors ({}): left as the save has them ({})", c.loadoutSuppressors, why);
+			}
+			return why ? std::string() : c.loadoutSuppressors;
+		}
+
+		unsigned LoadoutSlots()
+		{
+			const auto& c = Cfg();
+			return (c.loadoutPrimary.empty() ? 0u : 1u) | (c.loadoutPrimary2.empty() ? 0u : 2u) | (c.loadoutSecondary.empty() ? 0u : 4u);
+		}
+
 		void BoxStep(const lua::Ctx& a_ctx, ULONGLONG a_now, ULONGLONG a_since)
 		{
 			const auto& c = Cfg();
@@ -759,7 +778,8 @@ namespace phantom::guest::pump
 						}
 						// The [Loadout] weapons into the sortie loadout first: the mission loads their models (docs/GUEST.md 18.7).
 						if (LoadoutWeapons()) {
-							Log::Info("boot: loadout before the load: {}", Call(a_ctx, std::format("return PhantomRing.PreLoadout({})", LoadoutArgs())));
+							Log::Info("boot: loadout before the load: {}",
+								Call(a_ctx, std::format("return PhantomRing.PreLoadout({}, '{}')", LoadoutArgs(), SuppressArg(true))));
 						}
 						// Direct first (IH loadDirect), then the ReserveMissionClear route.
 						const char* method = g_boot.tries % 2 == 0 ? "direct" : "reserve";
@@ -822,13 +842,17 @@ namespace phantom::guest::pump
 						if (missing != "0" && g_boot.loadoutReloads == 0) {
 							++g_boot.loadoutReloads;
 							Log::Info("boot: {} loadout weapon(s) not in this mission: {}; reloading the sandbox: {}", missing,
-								Call(a_ctx, std::format("return PhantomRing.PreLoadout({})", LoadoutArgs())),
+								Call(a_ctx, std::format("return PhantomRing.PreLoadout({}, '{}')", LoadoutArgs(), SuppressArg(false))),
 								Call(a_ctx, std::format("return PhantomRing.LoadMission({}, 'direct')", c.mission)));
 							g_boot.awaitReload = a_now;
 							Enter(Boot::kWaitGame, a_now);
 							break;
 						}
 						Log::Info("boot: loadout weapons: {}", missing == "0" ? std::string("all in the mission") : std::format("{} still missing after a reload", missing));
+						// v16: their suppressors at MGSV's full life ([Loadout] Suppressors), now that the guns' parameters are loaded
+						if (!SuppressArg(false).empty()) {
+							Log::Info("boot: suppressors ({}): {}", c.loadoutSuppressors, suppressor::ApplyLoadout(c.loadoutSuppressors, LoadoutSlots()));
+						}
 					}
 					if (!c.loadoutSupport.empty()) {
 						Log::Info("boot: loadout support: {}", Call(a_ctx, std::format("return PhantomRing.Loadout('', '', '', '{}')", LuaName(c.loadoutSupport))));

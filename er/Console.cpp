@@ -25,6 +25,7 @@
 #include "MemDiff.h"
 #include "MenuWatch.h"
 #include "Decoys.h"
+#include "Noise.h"
 #include "Mines.h"
 #include "Pacing.h"
 #include "PacingProbe.h"
@@ -642,10 +643,11 @@ namespace phantom::er::Console
 			"throw [status | arc on|off|auto|ini | meshes on|off]   Snake's thrown grenades we fly (er/Throw.h); arc on = draw it without MGSV aiming\n"
 			"mines [detonate <id>]                   Snake's placed explosives (er/Mines.h)\n"
 			"decoys [add [m] [plain|active|shock] | pop <id>]  Snake's decoys (er/Decoys.h)\n"
+			"noise [status | emit [r] [ahead] | mode sound|heard|off|ini | set <key> <v> | who [r]]   shots heard by Elden Ring's enemies (er/Noise.h)\n"
 			"stealth [hide on|off | speffect <id>]   Snake in MGSV's cardboard box (er/Stealth.h)\n"
 			"cqc [status | grab | throw | choke | interrogate | release | on | off | set <key> <v>]   CQC holds and throws on Elden Ring enemies (er/Cqc.h)\n"
 			"fulton [status | nearest [fail] | 0x<handle> [fail] | forget]   MGSV's Fulton on an Elden Ring enemy, as kGEvFulton (er/Fulton.h)\n"
-			"mark [status | binoculars on|off|auto | nearest | clear]   binocular marks over Elden Ring characters (er/Marking.h)\n"
+			"mark [status | binoculars on|off|auto | nearest | handle <0x..> | clear]   binocular marks over Elden Ring characters (er/Marking.h)\n"
 			"timeskip [status | <minutes> | clear]   MGSV's Phantom Cigar on Elden Ring's clock, as kGEvTimeSkip (er/TimeSkip.h)\n"
 			"geom [learn [use] | near|all [radius] | ladders [radius] | dump <ins>]   map assets around the player (er/GeomProbe.h)\n"
 			"progression [off|level|weapon|both]   the Tarnished's level and right-hand armament, Snake's damage factor ([Progression]; switch live)\n"
@@ -765,6 +767,9 @@ namespace phantom::er::Console
 		}
 		if (cmd == "decoys") {
 			return Decoys::Console(w, a_f);
+		}
+		if (cmd == "noise") {
+			return Noise::Console(w, a_f);
 		}
 		if (cmd == "stealth") {
 			return Stealth::Console(w, a_f);

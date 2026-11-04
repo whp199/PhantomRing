@@ -222,4 +222,18 @@ static void TestMarking()
 		CHECK(faded.size() == 3 && Near(faded[0].color[3], 0.5f) && Near(faded[2].color[3], 0.5f));
 		CHECK(behind.empty());
 	}
+	{  // (0.7.0) the mark over his own capsule's top, not a fixed 2.2 m (inside a troll or a boss)
+		using phantom::er::combat::ChrCapsule;
+		const Vec3 feet{ 10, 5, -3 };
+		const auto soldier = std::optional(ChrCapsule(feet, 1.75f, 0.4f));
+		const auto troll = std::optional(ChrCapsule(feet, 5.6f, 1.6f));
+		CHECK(Near(phantom::er::marking::MarkHeight(soldier, feet, 2.2f, 0.35f), 2.1f));
+		CHECK(Near(phantom::er::marking::MarkHeight(troll, feet, 2.2f, 0.35f), 5.95f));
+		CHECK(Near(phantom::er::marking::MarkHeight(std::nullopt, feet, 2.2f, 0.35f), 2.2f));  // no capsule: [Marking] height
+		const auto silly = std::optional(ChrCapsule(feet, 90.0f, 0.4f));
+		CHECK(Near(phantom::er::marking::MarkHeight(silly, feet, 2.2f, 0.35f), 2.2f));          // not a sane one
+		CHECK(Near(phantom::er::marking::AimHeight(soldier, feet), 1.1375f));                   // his chest
+		CHECK(Near(phantom::er::marking::AimHeight(troll, feet), 3.64f));
+		CHECK(Near(phantom::er::marking::AimHeight(std::nullopt, feet), phantom::er::marking::kAim));
+	}
 }

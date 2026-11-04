@@ -39,6 +39,20 @@ namespace phantom::er::quickitem
 	// a_quantity: how many the inventory holds (consumables: 0 = none left).
 	Verdict Classify(const Goods& a_goods, int a_quantity);
 
+	// (0.7.0) Spirit ashes for Snake (View + X with the Spirit Calling Bell's ashes in the quick slot): the hidden Tarnished rings
+	// the bell; Elden Ring summons the spirits only where its summoning icon shows (near enemies in many areas, not in others) and
+	// with the HP / FP the ashes cost. What came of it, a_waitedMs after the press: the spirits Elden Ring's HUD counts
+	// (CSFeMan's summoned_spirit_ash_count) went up, or a new ally appeared next to the Tarnished -> summoned; neither once
+	// kSpiritWaitMs passed -> refused (the corner says so); else still waiting.
+	inline constexpr std::uint64_t kSpiritWaitMs = 4500;  // the bell's ring and the spirits rising take ~2-3 s
+	enum class SpiritOutcome : std::uint8_t
+	{
+		kWaiting,
+		kSummoned,
+		kRefused,
+	};
+	SpiritOutcome SpiritCheck(int a_countBefore, int a_countNow, int a_newAllies, std::uint64_t a_waitedMs);
+
 	// "Flask of Crimson Tears +3", "Spirit ashes", ...; empty when this table doesn't know it.
 	std::string Name(int a_goodsId);
 	// Name(), or "Quick item" when it isn't known.

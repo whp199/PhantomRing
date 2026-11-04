@@ -44,7 +44,7 @@ cbuffer FrameCB : register(b0)
 	float4 gPrevCamPos;
 	float4 gGbuf;         // stage C: x light-set index / 255, y RT1.w, z RT1.z (translucency), w albedo scale
 	float4 gMat;          // x gloss scale, y gloss bias, z metal scale, w alpha-test reference
-	float4 gFade;         // xy unused; zw velocity scale (NDC delta -> ER units)
+	float4 gFade;         // x near-fade dither cell (pixels, [Render] near_fade_cell), y unused; zw velocity scale (NDC delta -> ER units)
 	float4 gMisc;         // xy velocity bias, z frame index, w 1 = project with Elden Ring's view constants (b4)
 };
 cbuffer DrawCB : register(b1)
@@ -359,7 +359,7 @@ void ScreenDoor(VSOut i)
 	if (gDrawNear.y > gDrawNear.x) {
 		fade = min(fade, saturate((length(i.wpos - gCamPos.xyz) - gDrawNear.x) / (gDrawNear.y - gDrawNear.x)));
 	}
-	if (fade < 1.0 && fade <= Bayer4(i.pos.xy)) {
+	if (fade < 1.0 && fade <= Bayer4(floor(i.pos.xy / max(gFade.x, 1.0)))) {
 		discard;
 	}
 }

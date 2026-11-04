@@ -74,6 +74,13 @@ namespace phantom::er::marking
 	inline constexpr float kLosBodySlack = 0.3f;  // m
 	bool RayClear(const Vec3& a_from, const Vec3& a_to, const Vec3& a_hit, const std::optional<combat::Capsule>& a_body);
 
+	// (0.7.0) Where a mark sits and where the cone / ray look, from his own hit capsule (NpcParam hitHeight / hitRadius, the
+	// physics module's): the mark a_above m over the capsule's top -- not a fixed [Marking] height (2.2 m: inside a troll,
+	// a giant, a boss) -- and the aim at his chest, a_chest of his height. Without a sane capsule, a_fallback / kAim.
+	inline constexpr float kAim = 1.2f;  // m over the feet without a capsule (a soldier's chest)
+	float MarkHeight(const std::optional<combat::Capsule>& a_body, const Vec3& a_feet, float a_fallback, float a_above);
+	float AimHeight(const std::optional<combat::Capsule>& a_body, const Vec3& a_feet, float a_chest = 0.65f);
+
 	// Marks belong to one Elden Ring world: a new one starts after a load screen of at least kMinLoadMs (fast travel, a death,
 	// the title, another save: placed characters come back with the same handles, runtime ones may reuse them), or when the
 	// Tarnished's ChrIns changes under us. Update says when to forget them (once per new world).

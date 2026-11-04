@@ -402,6 +402,54 @@ static void TestLadder()
 		in.nowMs += 16;
 		CHECK(l.Update(in) == Ev::kNone);  // Snake plays on: nothing until the next ladder
 	}
+	{  // (0.7.0) the climb over for good and MGSV has Snake home: the short settle (50 ms), not 300 ms
+		LadderHandOver l;
+		in = {};
+		in.nowMs = 1000;
+		in.snake = true;
+		in.onLadder = true;
+		CHECK(l.Update(in) == Ev::kStarted && l.Current() == LadderHandOver::State::kClimbing);
+		in.snake = false;
+		in.onLadder = false;  // EndTop -> none
+		in.endedForGood = true;
+		in.nowMs += 16;
+		CHECK(l.Update(in) == Ev::kNone && l.Current() == LadderHandOver::State::kSettling);
+		in.nowMs += 100;  // MGSV still has him on its ladder: the settle runs on
+		CHECK(l.Update(in) == Ev::kNone && l.Holding());
+		in.guestHome = true;  // home at +116 ms
+		CHECK(l.Update(in) == Ev::kEnded && !l.Holding());
+	}
+	{  // ... home at once: 50 ms after the end; a flicker of none (not over for good) keeps the full settle
+		LadderHandOver l;
+		in = {};
+		in.nowMs = 1000;
+		in.snake = true;
+		in.onLadder = true;
+		CHECK(l.Update(in) == Ev::kStarted);
+		in.snake = false;
+		in.onLadder = false;
+		in.guestHome = true;
+		in.nowMs += 16;
+		CHECK(l.Update(in) == Ev::kNone && l.Current() == LadderHandOver::State::kSettling);
+		in.nowMs += 100;
+		CHECK(l.Update(in) == Ev::kNone && l.Holding());  // not over for good: 300 ms
+		in.endedForGood = true;
+		CHECK(l.Update(in) == Ev::kEnded);
+		in = {};
+		in.nowMs = 1000;
+		in.snake = true;
+		in.onLadder = true;
+		LadderHandOver m;
+		CHECK(m.Update(in) == Ev::kStarted);
+		in.onLadder = false;
+		in.endedForGood = in.guestHome = true;
+		in.nowMs += 16;
+		CHECK(m.Update(in) == Ev::kNone);
+		in.nowMs += 49;
+		CHECK(m.Update(in) == Ev::kNone && m.Holding());
+		in.nowMs += 1;
+		CHECK(m.Update(in) == Ev::kEnded);
+	}
 	{  // a press Elden Ring never turns into a climb (out of reach, grayed out): Snake plays on after ladder_wait_ms
 		LadderHandOver l;
 		in = {};

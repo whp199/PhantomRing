@@ -608,10 +608,12 @@ namespace phantom::er::combat
 		return static_cast<std::uint32_t>(std::min(whole, 1000000.0));
 	}
 
-	std::uint64_t HitKey(std::uint16_t a_amount, std::uint16_t a_correction, bool a_fire, float a_poise, std::uint8_t a_dmgLevel, std::int32_t a_sleep)
+	std::uint64_t HitKey(std::uint16_t a_amount, std::uint16_t a_correction, bool a_fire, float a_poise, std::uint8_t a_dmgLevel, std::int32_t a_sleep,
+		bool a_quiet)
 	{
 		// Exactly the values SpawnHitBullet writes: amount, correction, element, poise (as atkStam and atkSuperArmor),
-		// dmgLevel and the sleep build-up (its spEffectId rungs).
+		// dmgLevel (6 bits: Elden Ring's levels are 0..11), whether the attack is quiet (its AI sounds: bit 53) and the sleep
+		// build-up (its spEffectId rungs).
 		const auto poise = static_cast<std::uint64_t>(std::clamp(a_poise, 0.0f, 999.0f) * 16.0f) & 0x3FFF;
 		// The sleep sum has the top 10 bits (54..63). The rungs are a greedy decomposition, so the sum names the set; the
 		// default ladder tops out at 5 x 200 = 1000. A larger sum (a ladder configured bigger) can't be told apart in 10
@@ -621,7 +623,7 @@ namespace phantom::er::combat
 		}
 		const auto sleep = static_cast<std::uint64_t>(std::max(a_sleep, 0));
 		return static_cast<std::uint64_t>(a_amount) | static_cast<std::uint64_t>(a_correction) << 16 | static_cast<std::uint64_t>(a_fire) << 32 |
-		       poise << 33 | static_cast<std::uint64_t>(a_dmgLevel & 0x7F) << 47 | sleep << 54;
+		       poise << 33 | static_cast<std::uint64_t>(a_dmgLevel & 0x3F) << 47 | static_cast<std::uint64_t>(a_quiet) << 53 | sleep << 54;
 	}
 
 	bool MayFly(const std::vector<InFlight>& a_inFlight, const void* a_chr, std::uint64_t a_key, bool a_hp)

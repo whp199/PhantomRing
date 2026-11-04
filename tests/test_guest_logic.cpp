@@ -956,8 +956,44 @@ static void TestJump()
 	}
 }
 
+// Snake's suppressor: MGSV's reader 0x141050870 replicated (mgsv/Suppressor.cpp, docs/GUEST.md 18.18), with the live values of
+// 2026-11-03 (the WU S.PISTOL's gun traits 0x55, the SVG-76's 0x11; its slot records).
+static void TestSuppressor()
+{
+	SuppressorInputs pistol{ .gunFlags = 0x40, .equip = 7, .mode = 0, .slotType = 0x200e2, .haveRecord = true, .recordLife = 30, .recordFlags = 0x12, .gunTraits = 0x55 };
+	auto             r = SuppressorOf(pistol);
+	CHECK(r.firearm && r.on && r.life == 30 && r.Working());
+	pistol.recordLife = 1;
+	CHECK(SuppressorOf(pistol).Working());  // the last suppressed round
+	pistol.recordLife = 0;
+	r = SuppressorOf(pistol);
+	CHECK(r.firearm && !r.on && r.life == 0 && !r.Working());  // worn out: MGSV says off
+	pistol.recordLife = 30, pistol.recordFlags = 0x10;
+	CHECK(!SuppressorOf(pistol).Working());  // not on
+	// The SVG-76 with the save's shotgun's suppressor left in its record (life 15, on): it takes none (traits 0x11) -> off
+	const SuppressorInputs rifle{ .gunFlags = 0x40, .equip = 36, .slotType = 0x481, .haveRecord = true, .recordLife = 15, .recordFlags = 0x12, .gunTraits = 0x11 };
+	r = SuppressorOf(rifle);
+	CHECK(r.firearm && !r.on && r.life == 15 && !r.Working());
+	// Not a firearm (a grenade in hand: 0x80), a thrown one, no equip, mode 4, a non-gun slot (type 9), no record: 0 / 0
+	for (auto bad : { SuppressorInputs{ .gunFlags = 0x80, .equip = 354, .slotType = 0x1, .haveRecord = true, .recordLife = 30, .recordFlags = 2, .gunTraits = 0x40 },
+		     SuppressorInputs{ .gunFlags = 0x840, .equip = 7, .slotType = 0x2, .haveRecord = true, .recordLife = 30, .recordFlags = 2, .gunTraits = 0x40 },
+		     SuppressorInputs{ .gunFlags = 0x40, .equip = 0, .slotType = 0x2, .haveRecord = true, .recordLife = 30, .recordFlags = 2, .gunTraits = 0x40 },
+		     SuppressorInputs{ .gunFlags = 0x40, .equip = 7, .mode = 4, .slotType = 0x2, .haveRecord = true, .recordLife = 30, .recordFlags = 2, .gunTraits = 0x40 },
+		     SuppressorInputs{ .gunFlags = 0x40, .equip = 7, .slotType = 0x9, .haveRecord = true, .recordLife = 30, .recordFlags = 2, .gunTraits = 0x40 },
+		     SuppressorInputs{ .gunFlags = 0x40, .equip = 7, .slotType = 0x2, .haveRecord = false } }) {
+		r = SuppressorOf(bad);
+		CHECK(!r.firearm && !r.on && r.life == 0);
+	}
+	// The alternate magazine (an under-barrel launcher): its own bit 0x40 for both, life 0xFF (never worn)
+	const SuppressorInputs alt{ .gunFlags = 0x240, .equip = 36, .slotType = 0x1, .haveRecord = true, .recordLife = 0, .recordFlags = 0x40, .gunTraits = 0 };
+	r = SuppressorOf(alt);
+	CHECK(r.on && r.life == 0xFF && r.Working());
+	CHECK(!SuppressorOf({ .gunFlags = 0x240, .equip = 36, .slotType = 0x1, .haveRecord = true, .recordLife = 9, .recordFlags = 0x02, .gunTraits = 0x40 }).Working());
+}
+
 int main()
 {
+	TestSuppressor();
 	TestCopyStale();
 	TestIDroidRequest();
 	TestJump();

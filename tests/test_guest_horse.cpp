@@ -484,9 +484,101 @@ static void TestWalkerLead()
 	CHECK((walker - snake).LengthXZ() < 3.5f);
 }
 
+// The lead's leg gate (2026-11-03): never faster than its legs -- standing legs: not moved (idleSpeed 0); walking: at most
+// legSpeed, reached at most accel m/s per second; unknown legs (-1): as before.
+static void TestWalkerLegs()
+{
+	namespace wp = walker::plan;
+	wp::LeadSettings s;
+	s.legGate = true;
+	const float   dt = 1.0f / 60.0f;
+	wp::Lead      lead;
+	wp::LeadInput in;
+	in.allowed = true, in.dt = dt, in.nowMs = 1000, in.snake = { 0, 0, 0 }, in.velocity = { 0, 0, 5.0f }, in.viewYaw = 0.0f;
+	in.walker = { 2.8f, 0, 0 }, in.legs = 0x05;
+	auto o = lead.Update(in, s);
+	CHECK(o.place && o.started && o.speed == 0.0f && !o.glide && Near(o.to, { 2.8f, 0, 0 }));  // legs idle: it stays
+	float glided = 0.0f, maxSpeed = 0.0f, maxJerk = 0.0f, last = 0.0f;
+	Vec3  snake{ 0, 0, 0 };
+	for (int i = 0; i < 180; ++i) {  // Snake runs 3 s; its legs walk from 1 s
+		snake = snake + in.velocity * dt;
+		in.snake = snake, in.nowMs += 16, in.walker = { o.to.x, 0, o.to.z };
+		in.legs = i < 60 ? 0x05 : 0x0A;
+		const bool behind = (in.walker - wp::LeadSpot(in, s)).LengthXZ() > s.acquire;  // review 0.7.0: far behind, it may go maxSpeed
+		o = lead.Update(in, s);
+		if (!behind) {
+			maxSpeed = std::max(maxSpeed, o.speed);
+		}
+		CHECK(o.place);
+		if (i < 60) {
+			CHECK(o.speed == 0.0f);
+		}
+		glided += o.glide ? dt : 0.0f;
+		CHECK(o.speed <= s.maxSpeed + 1e-3f);
+		maxJerk = std::max(maxJerk, (o.speed - last) / dt);
+		last = o.speed;
+	}
+	CHECK(glided == 0.0f);
+	CHECK(maxSpeed <= s.legSpeed + 1e-3f && maxJerk <= s.accel + 0.5f);
+	// 2 s of walking at up to 6.5 m/s (8 m/s per s to get there) after 1 s still: it is catching up with the spot beside him
+	const float gap = (Vec3{ o.to.x, 0, o.to.z } - wp::LeadSpot(in, s)).LengthXZ();
+	CHECK(gap < 5.0f && gap > 0.5f);
+	// Unknown legs (Follow hasn't read them): the old lead (maxSpeed alone; glides are counted only with known legs)
+	wp::Lead old;
+	in.legs = -1, in.walker = { 2.8f, 0, 0 }, in.snake = { 0, 0, 0 };
+	o = old.Update(in, s);
+	o = old.Update(in, s);
+	CHECK(o.place && o.speed > 4.0f && !o.glide);
+	// Review 0.7.0: a dashing Snake (~7 m/s, faster than legSpeed) with the legs standing 2.2 s at the start: far behind, its legs
+	// walking, it catches up at maxSpeed (it used to fall ever further back), never faster than maxSpeed and never gliding.
+	{
+		wp::Lead dash;
+		wp::LeadInput d = in;
+		d.legs = 0x05, d.snake = { 0, 0, 0 }, d.walker = { 2.8f, 0, 0 }, d.velocity = { 0, 0, 7.0f }, d.nowMs = 1000;
+		auto  od = dash.Update(d, s);
+		float worst = 0.0f, fastest = 0.0f, glide2 = 0.0f, gapAt12 = 0.0f;
+		Vec3  sn{ 0, 0, 0 };
+		for (int i = 0; i < 12 * 60; ++i) {
+			sn = sn + d.velocity * dt;
+			d.snake = sn, d.nowMs += 16, d.walker = { od.to.x, 0, od.to.z };
+			d.legs = i < 132 ? 0x05 : 0x0A;
+			od = dash.Update(d, s);
+			CHECK(od.place && !od.stopped);
+			const float gap = (Vec3{ od.to.x, 0, od.to.z } - wp::LeadSpot(d, s)).LengthXZ();
+			worst = std::max(worst, gap);
+			fastest = std::max(fastest, od.speed);
+			glide2 += od.glide ? dt : 0.0f;
+			gapAt12 = gap;
+		}
+		CHECK(worst > s.acquire && fastest <= s.maxSpeed + 1e-3f && glide2 == 0.0f);
+		CHECK(gapAt12 < s.acquire + 1.5f);  // caught up to about acquire, and holds there (6.5 <-> 9 m/s around it)
+		// Its legs never walk (MGSV dropped the order): far behind for farReleaseMs, the lead lets it go (Follow's catch-up).
+		wp::Lead stuck;
+		d.legs = 0x05, d.snake = { 0, 0, 0 }, d.walker = { 2.8f, 0, 0 }, d.nowMs = 1000;
+		auto os = stuck.Update(d, s);
+		bool released = false;
+		sn = { 0, 0, 0 };
+		for (int i = 0; i < 10 * 60 && !released; ++i) {
+			sn = sn + d.velocity * dt;
+			d.snake = sn, d.nowMs += 16, d.walker = { os.to.x, 0, os.to.z };
+			os = stuck.Update(d, s);
+			released = os.stopped && os.farBehind;
+		}
+		CHECK(released && !stuck.Active());
+	}
+	// Gate off: the 0.6.0 glide, now measured
+	s.legGate = false;
+	wp::Lead glide;
+	in.legs = 0x05;
+	o = glide.Update(in, s);
+	o = glide.Update(in, s);
+	CHECK(o.place && o.speed > 4.0f && o.glide);
+}
+
 int main()
 {
 	TestWalkerLead();
+	TestWalkerLegs();
 	TestPick();
 	TestTracker();
 	TestShifted();

@@ -14,7 +14,7 @@ game's `regulation.bin` (`test_host_combat`). The original live test plan is §6
 
 | Event | Guest (MGSV) | Host (Elden Ring) |
 |---|---|---|
-| a round leaves Snake's gun | ShotSolver hook: `kGEvFire` (muzzle, direction, weapon, ammo kind, pellets, `pad[0]` = bulletId \| 0x80000000 explosive) | anchor-mapped ray: ER's world ray gives the first wall, ray-vs-capsule over every character nearby gives the first body before it → hit effect → applied (§2) |
+| a round leaves Snake's gun | ShotSolver hook: `kGEvFire` (muzzle, direction, weapon, ammo kind, `b` = pellets in its low 16 bits \| `kFireSuppressed` (bit 31, v16), `pad[0]` = bulletId \| 0x80000000 explosive) | anchor-mapped ray: ER's world ray gives the first wall, ray-vs-capsule over every character nearby gives the first body before it → hit effect → applied (§2); an unsuppressed shot also makes an Elden Ring AI sound at the muzzle (§2a) |
 | D-Walker fires | `kGEvBuddyFire`; its flamethrower (no rounds): ~8 events/s while it burns, `pad[1]` = reach (12 m) | same, × `buddy_mult`; flame: a stream as long as the reach, bodies within 0.6 m of it burn, **fire** damage (ER's fire absorption, its burning VFX) |
 | CQC strike | attack-serial poll: `kGEvMelee` (strike sphere, facing, kind) | the nearest hostile the sphere touches, or in reach (`melee_range`) inside the arc (`melee_arc_deg`) in front of Snake |
 | grenade/rocket | `kGEvThrow` / `kGEvPlaced` (v5), then `kGEvExplosion` (pad[1] = its id; kind = lethal/sleep/stun/smoke), or an explosive round's hit point (gun-fired) | our copy flown through ER's world / the mine kept where it lies (HOST.md); every hostile inside the blast, damage falling to 25% at the edge; ER enemies near a mine -> `kHEvDetonate` |
@@ -68,6 +68,12 @@ is `CSTeamTypeEnemy` or `CSTemaTypeRival` (sic). Read offline, the Tarnished (te
   2 HP or less, the sleep correction when there is no damage at all. A stun grenade's fixed 15% used to kill a target at
   1 HP: Elden Ring never clamps its own hits).
 - CQC: punch/kick damage + `melee_strike_poise`; throw: `melee_throw_poise`, large flinch.
+- **Quiet hits** (0.7.0, protocol v16): a hit from a suppressed shot (`kFireSuppressed`: the tranquilizer pistol, a suppressed
+  rifle) is `HitEffect.quiet`: its hit bullet's AtkParam row (the Throwing Dagger's, 10170000: appear AI sound 2100, hit 2000 --
+  4 m round the target) gets both written -1, so the soldier hit makes no noise his neighbours hear; a loud hit puts the row's
+  own values back. The quiet bit is part of `HitKey` (bit 53), so a patched row is never shared by a quiet and a loud hit.
+  Live 2026-11-03: a suppressed dart to the head put one of three soldiers in a Stormveil courtyard to sleep, the two beside him
+  never heard anything (`noise who`: `last AI sound 0` for 25 s); docs/HOST.md "Noise".
 
 **Routes** (`[Combat] route`):
 
@@ -131,6 +137,23 @@ is `CSTeamTypeEnemy` or `CSTemaTypeRival` (sic). Read offline, the Tarnished (te
   soldiers of resistance 169 and 197 in one cloud): +39 each per puff, 68 sleep build-ups, 0 lost, three of them slept.
   `HitKey` keeps the sleep sum in 10 bits (up to 1023; the default ladder tops at 1000); more never shares the row.
 - Rate limit: `max_hits_per_second` token bucket. Drops are counted.
+
+### 2a. Noise: Elden Ring's enemies hear Snake's shots (`er/Noise*`, `[Noise]`; 0.7.0)
+
+Each unsuppressed shot (Snake's or the buddy's) makes Elden Ring's own AI sound at the muzzle, owned by the hidden Tarnished:
+AiSoundParam `sound_row` (2010, a weapon hit, rank 1) scaled to the weapon class's radius (pistol 20, rifle 35, sniper 40,
+shotgun 45, launcher 55, flamethrower 10 m), and an unsuppressed round striking the world `impact` (5 m) where it lands. Enemies
+within it that haven't seen Snake react as to any noise of the Tarnished's: they turn, walk over to look, search, and join the
+fight when they find him. A suppressed shot makes none (`suppressed` 0), shows no muzzle flash (`muzzle_suppressed`) and its
+hit is quiet (above). `mode = heard` is the fallback (a token, damage-free hit on the enemies within the radius that aren't
+fighting yet: they come for the Tarnished; since the review after the shot's own hit, at most 4 a shot, never the shot's target, a
+sleeper, a held foe or one heard in the last 10 s); `off` none. "Suppressor worn out" in the corner when MGSV's suppressor comes off.
+Until the guest reports a suppressor this session, tranquilizer rounds stay quiet (the pre-v16 rule: a guest whose suppressor reading
+is off can't say "suppressed"). Live with both games (0.7.0 integration): the real MGSV's suppressed head dart slept one of four
+soldiers with no AI sound and the other three calm for 18 s; an SVG-76 round beside them: three in battle 1.9-2.7 s later.
+Live 2026-11-03 (fake MGSV, Stormveil): a 20 m pistol shot -> the four soldiers at 11-17.7 m had it as their sound target
+0.35 s later, walked over and were in battle 5.2 s after it; one at 22.8 m did not; the same shots suppressed: nobody.
+Mechanism, console (`pr er noise ...`) and the full live record: docs/HOST.md "Noise".
 
 ### Damage that syncs: the damage ladder (`[Combat] damage_route = speffect`, off by default; the rows arrive live, the split needs work: §10; roadmap §4 C1)
 
@@ -290,7 +313,10 @@ mode switched live between shots): off 35, level 31, weapon 35, both 31 (`progre
 | `round_flight`, `round_speed_rocket`, `round_speed_grenade` | true, 16, 80 | explosive rounds fly (m/s) from Snake's muzzle (§9) |
 | `round_speed_rocket_boost`, `round_rocket_boost_after` | 60, 1 | a rocket's motor: from 16 to 60 m/s over 0.3 s after 1 s (docs/HOST.md "Rocket motor") |
 | `flame_fx`, `flame_per_second`, `flame_speed` | true, 6, 14 | D-Walker's flamethrower drawn with Elden Ring flames |
-| `muzzle_flash`, `muzzle_per_second`, `muzzle_life`, `muzzle_ahead`, `muzzle_tranq` | true, 10, 0.1, 0.1, false | (roadmap 5.4; on since 2026-10-31, fake MGSV's rifle shots; seen 2026-11-01 with the real MGSV's SVG-76: orange sparks in front of the rifle) a muzzle flash at each shot: `explosion_muzzle` (`10030001 300522`: the Fire Pot's bullet with the Spark Aromatic's ~0.4 m burst of sparks instead of its 1-3 m fireball) cut after `muzzle_life` s, carrier 10302005 (docs/HOST.md "Projectile meshes and muzzle flashes") |
+| `muzzle_flash`, `muzzle_per_second`, `muzzle_life`, `muzzle_ahead`, `muzzle_suppressed` | true, 10, 0.1, 0.1, false | (roadmap 5.4; on since 2026-10-31, fake MGSV's rifle shots; seen 2026-11-01 with the real MGSV's SVG-76: orange sparks in front of the rifle) a muzzle flash at each shot: `explosion_muzzle` (`10030001 300522`: the Fire Pot's bullet with the Spark Aromatic's ~0.4 m burst of sparks instead of its 1-3 m fireball) cut after `muzzle_life` s, carrier 10302005 (docs/HOST.md "Projectile meshes and muzzle flashes"); none for a suppressed shot (v16 `kFireSuppressed`) unless `muzzle_suppressed` (0.7.0; was `muzzle_tranq`, still read as its fallback) |
+| `[Noise] mode`, `sound_row` | sound, 2010 | (0.7.0, §2a) sound: Elden Ring's AI sound at the muzzle; heard: the token-hit fallback; off. The AiSoundParam row the sounds use (2010: a weapon hit, 12 m, scaled) |
+| `[Noise] pistol`, `rifle`, `sniper`, `shotgun`, `launcher`, `flame`, `suppressed`, `impact` | 20, 35, 40, 45, 55, 10, 0, 5 | metres a shot carries by MGSV's weapon class; a suppressed one (0 = silent); where an unsuppressed round strikes the world |
+| `[Noise] per_second`, `worn_note`, `worn_window_ms` | 8, true, 1000 | AI sounds a second at most; "Suppressor worn out" when kGuestSuppressorOn drops within the window of a suppressed shot and stays off 0.3 s, same weapon in hand |
 | `[Puppet] motion`, `catch_up`, `unstick`, `unstick_seconds` | kinematic, 0.6, true, 0.5 | docs/HOST.md "Motion" |
 | `[Stealth] box_hide`, `speffect`, `still_speed`, `slow_speed`, `slow_grace`, `reveal_distance` | true, 20004999, 0.4, 1.8, 1.5, 2 | the cardboard box (docs/HOST.md) |
 | `[Stealth] poster`, `poster_range`, `poster_stare`, `poster_cooldown` | true, 15, 4, 12 | enemies stop and stare at a poster box |
@@ -378,6 +404,9 @@ pr er "combat set tranq_share|tranq_share_head|gas_share|choke_share|sleep_corre
 pr er "combat route auto|bullet|hp|ini"
 pr er "combat damage_route [topup|speffect|ini]"   the damage route (§2 "Damage that syncs"): ladder rows written?, confirmed?,
                                      rows arrived / missing, guarded, topped up, % of the wanted damage dealt, the guard rule
+pr er noise                          (§2a) mode, radii, sounds made / quiet shots / failed, suppressors worn out;
+                                     "noise emit [r] [ahead]", "noise who [r]" (each NPC's AI: calm/BATTLE, last AI sound, target),
+                                     "noise mode sound|heard|off|ini", "noise set <key> <v>"
 pr er "boom lethal|stun|sleep|smoke [radius]"   an explosion visual 5 m in front of the Tarnished (§9); `boom` = status
 pr er "boom mode auto|bullet|sfx|off|ini"       `boom restore` puts the carrier rows back now
 pr er status                         the puppet line includes host falls and "DYING for Snake"
@@ -389,12 +418,16 @@ pr er cqc                            CQC holds and throws (§7a): on/off, counts
 
 fake_mgsv (`pr fake-mgsv`, guest console `pr lua '!…'`): `!walk on|off`, `!autofire on|off`,
 `!fire <lethal|handgun|rifle|sniper|buck|tranq|stun|explosive> [n] [yaw_deg] [pitch_deg]`,
-`!cqc <punch|kick|throw|choke>`, `!grab <grab|hold|throw|choke|interrogate|release>` (v13 kGEvCqc, §7a), `!blast [radius]`, `!die`.
+`!cqc <punch|kick|throw|choke>`, `!grab <grab|hold|throw|choke|interrogate|release>` (v13 kGEvCqc, §7a), `!blast [radius]`, `!die`,
+`!suppressor on [shots] | off` (v16 kGuestSuppressorOn; worn out after `shots` suppressed shots, 4 by default, 0 never),
+`!fire ... [suppressed|loud]` (kFireSuppressed; without either word every shot is suppressed while the suppressor is on).
 
 ## 5. Files
 
 - Explosion visuals (§9): `er/ExplosionLogic.{h,cpp}` (pure), `er/Explosion.{h,cpp}`, `er/BulletSpawn.h` (SpawnBullet's
   argument block, shared with `er/Combat.cpp`).
+- Noise (§2a, 0.7.0): `er/NoiseLogic.{h,cpp}` (pure: weapon classes, radii, the request's scale, the suppressor watch),
+  `er/Noise.{h,cpp}` (Elden Ring's AI sound system, the heard fallback, `noise`); tests `tests/test_host_noise.inc` (in test_host).
 - Thrown / placed explosives (v5/v6): `er/ThrowLogic.{h,cpp}` (pure: flight, bounce, roll, the aiming arc),
   `er/Throw.{h,cpp}`, `er/Mines.{h,cpp}`, `er/RenderMarkers.{h,cpp}` (+ the marker pipeline in `er/Renderer.cpp`,
   shaders in `er/Shaders.cpp`), `er/WorldShift.{h,cpp}`; tests `tests/test_host_throw.inc` (in test_host_combat).

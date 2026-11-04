@@ -109,6 +109,20 @@ namespace phantom::guest
 		float       buddyWalkerLeadMaxSpeed{ 9.0f };
 		float       buddyWalkerLeadAcquire{ 6.0f };
 		float       buddyWalkerLeadTurnRate{ 6.0f };  // rad/s the walker is turned toward where it goes (0 = its own facing)
+		// (2026-11-03) The lead never moves it faster than its legs: while its AI doesn't walk, at most WalkerLeadIdleSpeed (m/s);
+		// walking, at most WalkerLeadLegSpeed; its speed changes by at most WalkerLeadAccel (m/s per s). False = the glide of 0.6.0.
+		bool        buddyWalkerLeadLegs{ true };
+		float       buddyWalkerLeadLegSpeed{ 6.5f };
+		float       buddyWalkerLeadIdleSpeed{ 0.0f };
+		float       buddyWalkerLeadAccel{ 8.0f };
+		// The order given when Snake starts moving (and when its AI stood while he runs): this far ahead of him in the lead's lane
+		// (m): one within ~3 m of the walker its AI takes as "there" and stands. 0 = the follow spot as before.
+		float       buddyWalkerLeadOrderAhead{ 8.0f };
+		// [Climb] HudThawMs: MGSV's HUD layer stays frozen this long after a ladder climb or a climb-up / vault ends (its ladder
+		// prompt fades out over ~100 ms once Snake is home: live 2026-11-03); the odometer's own settle (300 ms) is separate.
+		int         climbHudThawMs{ 150 };
+		// Led while Snake moves: a new order when its AI stood this long (ms) and as long since the last (was 800 / 1500).
+		int         buddyWalkerLeadReorderMs{ 500 };
 		// The treadmill moves D-Walker by its location object in the same frame as Snake (no Lua SetPosition a frame or two later:
 		// Elden Ring saw it flash the radius away and back).
 		bool        buddyWalkerTreadmill{ true };
@@ -245,6 +259,9 @@ namespace phantom::guest
 		std::string loadoutPrimary2{ "EQP_WP_West_ms_010" };  // PRIMARY_2 (back): the FB MR R-LAUNCHER (unguided rockets)
 		std::string loadoutSecondary{ "EQP_WP_West_thg_010" };  // SECONDARY (handgun): the WU S.PISTOL, tranquilizer darts
 		std::string loadoutSupport;    // SUPPORT, comma list (up to 8)
+		// Which [Loadout] guns get MGSV's own suppressor (docs/GUEST.md 18.18): "sleep" (the tranquilizer darts' guns: the WU
+		// S.PISTOL), "all" (every one that takes one), "none". Only while MGSV's saves are blocked.
+		std::string loadoutSuppressors{ "sleep" };
 		std::string boxPoster{ "moe_v" };   // the poster put on Snake's first cardboard box (moe_v/moe_h anime, gravure_v/h, sol_*); empty = none
 		std::string box{ "EQP_IT_CBox" };   // the box given into a free item slot when the save has none
 

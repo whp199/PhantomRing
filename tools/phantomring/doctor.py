@@ -260,7 +260,9 @@ def check_saves(r: Report, m: L.Machine) -> None:
 	size = sum(f.stat().st_size for p in sets for f in p.rglob("*") if f.is_file())
 	if size > BACKUPS_WARN_BYTES:
 		r.add(WARN, "save backups", f"{len(sets)} in {L.BACKUPS} ({size / 1e9:.1f} GB)",
-			"prune: pr launch --keep-backups N (or PHANTOMRING_KEEP_BACKUPS=N) keeps the newest N per game and the first")
+			f"pr launch keeps the newest {L.keep_backups_default()} of its own backups per game (and the first, every pre-restore and "
+			"every one made by hand with pr backup-saves) and deletes the rest when it backs up: a smaller --keep-backups N (or "
+			"PHANTOMRING_KEEP_BACKUPS=N) keeps fewer; delete backups made by hand yourself")
 	else:
 		r.add(OK, "save backups", f"{len(sets)} in {L.BACKUPS} ({size / 1e9:.1f} GB)" if sets else "none yet (pr launch makes one before every start)")
 

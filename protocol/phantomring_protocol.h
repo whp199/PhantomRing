@@ -28,7 +28,7 @@
 namespace phantom::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x47524850;  // "PHRG"
-	inline constexpr std::uint32_t kVersion = 15;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
+	inline constexpr std::uint32_t kVersion = 16;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
 	                                              // v5: kGEvThrow, kGEvPlaced, kGEvPlacedGone, kHEvDetonate;
 	                                              // v6: GuestState aimThrow* (0xA8..0xC4) + kGuestThrowAim; v7: kGEvBuddyOrder;
 	                                              // v8: kGuestInBox, kGuestBoxPoster, kGEvFire pad[1] = MGSV damage share;
@@ -39,7 +39,8 @@ namespace phantom::proto
 	                                              // v13: kGuestBinoculars, kGuestDiving, kGEvTimeSkip, kGEvCqc, kAmmoDecoy,
 	                                              //      kOwnerProjectile;
 	                                              // v14: kGuestJumping;
-	                                              // v15: kGuestClimbing, kGuestMantling, kHEvClimb, kHEvMantle
+	                                              // v15: kGuestClimbing, kGuestMantling, kHEvClimb, kHEvMantle;
+	                                              // v16: kGuestSuppressorOn, kFireSuppressed (kGEvFire b)
 	inline constexpr wchar_t       kDefaultMapping[] = L"file:Z:\\dev\\shm\\phantomring_v1";
 
 	// ---- region offsets ---------------------------------------------------------------------
@@ -164,6 +165,7 @@ namespace phantom::proto
 		kGuestClimbing = 1u << 20,   // (v15) MGSV plays Snake's own ladder climb for an Elden Ring ladder (after kHEvClimb a = 1): the host
 		                             // draws him on that ladder instead of showing the Tarnished
 		kGuestMantling = 1u << 21,   // (v15) MGSV plays Snake's climb-up / vault (after kHEvMantle) until it ends
+		kGuestSuppressorOn = 1u << 22,  // (v16) Snake's weapon in hand has a suppressor on that isn't worn out (MGSV's suppressorLife > 0)
 	};
 
 	struct GuestState
@@ -288,7 +290,7 @@ namespace phantom::proto
 	enum GuestEventType : std::uint32_t
 	{
 		kGEvFire = 1,          // a shot left Snake's weapon: a = weaponId | (ammoKind << 16), v0 = muzzle (MGSV world),
-		                       // v1 = direction (unit, MGSV world), b = pellets (shotguns) or 1,
+		                       // v1 = direction (unit, MGSV world), b = pellets (shotguns) or 1 (low 16 bits) | kFireSuppressed (v16),
 		                       // pad[0] = MGSV bulletId (TppEquip.BL_*) | 0x80000000 if explosive, 0 = unknown
 		                       // (ammo-counter fallback); the host's damage class comes from it (docs/COMBAT.md);
 		                       // (v8) pad[1] = MGSV's lethal damage of one body hit as a share of a standard MGSV soldier's life,
@@ -344,6 +346,10 @@ namespace phantom::proto
 	// host's puppet restarted, a new host session). v0 is then MGSV's point, NOT where it lies in Elden Ring: a host that knows
 	// the id keeps its own place; one that doesn't can't know where it is (it was placed through an anchor of before).
 	inline constexpr std::uint32_t kPlacedAgain = 1u << 16;
+
+	// (v16) kGEvFire / kGEvBuddyFire b bit: the shot went through a working suppressor (MGSV's own: quiet shot, no muzzle flash).
+	// Pellets are b & 0xFFFF; the host masks before using them.
+	inline constexpr std::uint32_t kFireSuppressed = 1u << 31;
 
 	enum AmmoKind : std::uint32_t
 	{

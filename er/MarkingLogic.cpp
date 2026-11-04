@@ -310,4 +310,32 @@ namespace phantom::er::marking
 			a_out.push_back(m);
 		}
 	}
+
+	namespace
+	{
+		// The capsule's top over his feet, if it is a sane one (as tall as a rat .. a dragon).
+		std::optional<float> Top(const std::optional<combat::Capsule>& a_body, const Vec3& a_feet)
+		{
+			if (!a_body) {
+				return std::nullopt;
+			}
+			const float top = std::max(a_body->a.y, a_body->b.y) + a_body->r - a_feet.y;
+			if (!std::isfinite(top) || top < 0.3f || top > 40.0f) {
+				return std::nullopt;
+			}
+			return top;
+		}
+	}
+
+	float MarkHeight(const std::optional<combat::Capsule>& a_body, const Vec3& a_feet, float a_fallback, float a_above)
+	{
+		const auto top = Top(a_body, a_feet);
+		return top ? *top + std::max(0.0f, a_above) : a_fallback;
+	}
+
+	float AimHeight(const std::optional<combat::Capsule>& a_body, const Vec3& a_feet, float a_chest)
+	{
+		const auto top = Top(a_body, a_feet);
+		return top ? *top * std::clamp(a_chest, 0.2f, 1.0f) : kAim;
+	}
 }

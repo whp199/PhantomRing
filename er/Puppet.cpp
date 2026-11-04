@@ -106,6 +106,14 @@ namespace phantom::er::Puppet
 		bool           g_hiddenForDeath{ false };  // the puppet stopped with the Tarnished still hidden (g_saved holds the originals)
 		Vec3           g_deathPos{};               // where the dying player was (er/Revival.h: a revival moves it)
 		bool           g_deathPosValid{ false };
+		// (0.7.0) The respawn's new Tarnished (another player object, behind Elden Ring's loading screen) hidden from his first frame
+		// when it was Snake's death: Snake takes over after the respawn, and that player object used to be fully visible for up to
+		// ~4 s until the puppet's start hid him (live 2026-11-01: `the Tarnished VISIBLE ... another character`). g_saved holds his
+		// originals meanwhile.
+		bool           g_snakesDeath{ false };     // the death under way is Snake's (the Tarnished was hidden for it)
+		std::uint8_t*  g_respawnChr{ nullptr };    // that new player object, hidden by us until the puppet starts
+		ULONGLONG      g_respawnHiddenAt{ 0 };
+		ULONGLONG      g_respawnedAt{ 0 };         // the respawn was declared (er/Revival.h) while he was hidden
 		// Ladders ([Ladder] snake, er/Ladder.h): the Tarnished stays hidden while Elden Ring climbs with him, and Snake is drawn at
 		// g_anchor (SetClimbAnchor) instead. g_saved keeps the originals meanwhile.
 		bool           g_climbWanted{ false };
@@ -397,15 +405,22 @@ namespace phantom::er::Puppet
 			g_mantle.Abort();
 			g_runBlockedS = g_hintBlockedS = 0;
 			g_ledgePressesSeen = InputBridge::LedgePresses();  // presses before the start (the ladder's Y) are no climb
-			if (!(g_hiddenForDeath && g_deathChr == p.chr) && !(g_hiddenForClimb && g_climbChr == p.chr)) {  // else still hidden by us: g_saved has the originals
+			if (!(g_hiddenForDeath && g_deathChr == p.chr) && !(g_hiddenForClimb && g_climbChr == p.chr) &&
+				g_respawnChr != p.chr) {  // else still hidden by us: g_saved has the originals
 				g_saved.renderBit = game::GetBit(p.chr + game::kChrFlags1C5, 0x08);
 				g_saved.transparencyMod = SafeRead<float>(p.chr + game::kChrTransparencyMod).value_or(0.0f);
 				// A sane opacity (a Mimic's Veil or a fade could be mid-way): put back as 1 if it isn't one.
 				const float base = SafeRead<float>(p.chr + game::kChrBaseTransparency).value_or(1.0f);
 				g_saved.baseTransparency = std::isfinite(base) && base > 0.0f && base <= 1.0f ? base : 1.0f;
 			}
+			if (g_respawnChr == p.chr) {
+				Log::Info("puppet: the respawn's Tarnished stayed hidden {:.1f} s, from his first frame to Snake's start", (::GetTickCount64() - g_respawnHiddenAt) / 1000.0);
+			}
 			g_hiddenForDeath = false;
 			g_hiddenForClimb = false;
+			g_respawnChr = nullptr;
+			g_respawnedAt = 0;
+			g_snakesDeath = false;
 			g_deathAt = 0;
 			g_saved.dataDebug = SafeRead<std::uint8_t>(p.data + game::kDataDebug).value_or(0);
 			Hide(p, true);
@@ -494,6 +509,7 @@ namespace phantom::er::Puppet
 			if (same) {
 				if (dying) {
 					g_hiddenForDeath = true;  // until the respawn (AfterPhysics) or the next puppet start
+					g_snakesDeath = true;
 					g_deathChr = g_chr;
 					if (!reasonDead) {
 						Log::Info("puppet: stopped ({}) during Snake's death ({}) -- the Tarnished stays hidden until the respawn", a_why,
@@ -936,8 +952,61 @@ namespace phantom::er::Puppet
 		return missing == nullptr;
 	}
 
+	namespace
+	{
+		// (0.7.0) The respawn's Tarnished, hidden from his first frame after Snake's death until Snake takes over (g_respawnChr).
+		// Called at FrameBegin (Decide) and after physics: whichever comes first in the frame the new player object appears in.
+		void RespawnHide(const Frame& a_f)
+		{
+			const auto now = ::GetTickCount64();
+			if (!Cfg().respawnHide || g_active || !a_f.player) {
+				return;
+			}
+			auto* chr = a_f.player.chr;
+			if (g_respawnChr && chr != g_respawnChr && !(g_deathAt && g_snakesDeath)) {
+				g_respawnChr = nullptr;  // yet another player object (a load, the title): Elden Ring's, as it made it
+				g_respawnedAt = 0;
+			}
+			// Snake's death, a new player object (the respawn load): hidden at once, his own render bit and opacity kept for later.
+			if (g_deathAt && g_snakesDeath && chr != g_deathChr && chr != g_respawnChr && a_f.guestAlive && !Held(Hold::kTarnished)) {
+				g_saved.renderBit = game::GetBit(chr + game::kChrFlags1C5, 0x08);
+				g_saved.transparencyMod = SafeRead<float>(chr + game::kChrTransparencyMod).value_or(0.0f);
+				const float base = SafeRead<float>(chr + game::kChrBaseTransparency).value_or(1.0f);
+				g_saved.baseTransparency = std::isfinite(base) && base > 0.0f && base <= 1.0f ? base : 1.0f;
+				g_respawnChr = chr;
+				g_respawnHiddenAt = now;
+				g_respawnedAt = 0;
+				Hide(a_f.player, true);
+				Log::Info("puppet: the respawn's new Tarnished hidden from his first frame ({:.1f} s after Snake's death; render bit {}, base transparency "
+				          "{:.2f} kept) -- Snake takes over after the respawn",
+					(now - g_deathAt) / 1000.0, g_saved.renderBit ? 1 : 0, g_saved.baseTransparency);
+				return;
+			}
+			if (!g_respawnChr || chr != g_respawnChr) {
+				return;
+			}
+			const char* why = nullptr;
+			if (Held(Hold::kTarnished)) {
+				why = "Tarnished mode";
+			} else if (!a_f.guestAlive) {
+				why = "MGSV is gone: no Snake to take over";
+			} else if (g_respawnedAt && now - g_respawnedAt > static_cast<ULONGLONG>(std::max(1000, Cfg().respawnHideMaxMs))) {
+				why = "Snake didn't take over in time";
+			}
+			if (why) {
+				Hide(a_f.player, false);
+				Log::Info("puppet: the respawn's Tarnished shows ({}) after {:.1f} s hidden", why, (now - g_respawnHiddenAt) / 1000.0);
+				g_respawnChr = nullptr;
+				g_respawnedAt = 0;
+				return;
+			}
+			Hide(a_f.player, true);  // Elden Ring re-sets the render bit around its warps
+		}
+	}
+
 	void Decide(const Frame& a_f)
 	{
+		RespawnHide(a_f);
 		if (g_deathAt && (!a_f.inGame || !a_f.player || a_f.player.chr != g_deathChr)) {
 			// The respawn load is under way (AfterPhysics declares the respawn once the player lives again).
 			g_deathLoad = true;
@@ -1001,6 +1070,7 @@ namespace phantom::er::Puppet
 			if (same && g_deathAt && g_deathChr == g_climbChr) {
 				// He died on the ladder (an arrow, a fall off it): hidden as for any death, Snake fading at the ladder (g_anchor).
 				g_hiddenForDeath = true;
+				g_snakesDeath = g_climbWanted;  // Snake's own death if he was drawn climbing it
 				g_hiddenForClimb = false;
 			} else if (!same) {
 				g_hiddenForClimb = false;  // another character (a load): Elden Ring's as it made it
@@ -1456,7 +1526,7 @@ namespace phantom::er::Puppet
 			          "HP {}/{}, {}, MGSV {}{}",
 				static_cast<double>(a_now - g_deathAt) / 1000.0, DeathSeconds() >= 0.0f ? "Snake's death" : "the Tarnished's, Snake not playing",
 				g_active ? "ON" : "off", shows ? "VISIBLE" : "hidden", render ? 1 : 0, base,
-				g_hiddenForDeath ? "yes" : "no", same ? "" : ", another character", a_f.dead ? 1 : 0, game::Hp(a_f.player), game::MaxHp(a_f.player),
+				g_hiddenForDeath || (g_respawnChr && g_respawnChr == a_f.player.chr) ? "yes" : "no", same ? "" : ", another character", a_f.dead ? 1 : 0, game::Hp(a_f.player), game::MaxHp(a_f.player),
 				RenderScene::DyingDraw(), a_f.guestReady ? "ready" : "not ready", g_killedByGuest ? ", killed for Snake's death" : "");
 			if (shows && same && !g_active && (g_hiddenForDeath || g_killedByGuest)) {
 				Log::Warn("puppet: the Tarnished is visible {:.1f} s into Snake's death (hidden by us: {})", static_cast<double>(a_now - g_deathAt) / 1000.0,
@@ -1476,6 +1546,7 @@ namespace phantom::er::Puppet
 			if (g_hiddenForClimb && !g_active && a_f.player.chr == g_climbChr) {
 				Hide(a_f.player, true);  // ...and through a ladder's climb
 			}
+			RespawnHide(a_f);  // ...and the respawn's new Tarnished, until Snake takes over
 			if (g_killedByGuest && a_f.dead) {
 				g_killConfirmed = true;
 			}
@@ -1509,9 +1580,19 @@ namespace phantom::er::Puppet
 				Log::Info("ER player respawned{} -> kHEvRespawn, kHEvRested 1 (Snake's life and ammo refilled)",
 					g_deathAt ? std::format(" ({:.1f} s after the death{})", (now - g_deathAt) / 1000.0, g_deathLoad ? ", after the load" : "") : "");
 				if (g_hiddenForDeath && !g_active && a_f.player.chr == g_deathChr) {
-					Hide(a_f.player, false);  // Elden Ring's again unless Snake takes over (the next puppet start hides it)
+					if (Cfg().respawnHide && g_snakesDeath && a_f.guestAlive && !Held(Hold::kTarnished)) {
+						// (0.7.0) Snake takes over: he stays hidden until the puppet's start (RespawnHide keeps him), not shown meanwhile.
+						g_respawnChr = a_f.player.chr;
+						g_respawnHiddenAt = now;
+					} else {
+						Hide(a_f.player, false);  // Elden Ring's again unless Snake takes over (the next puppet start hides it)
+					}
+				}
+				if (g_respawnChr && a_f.player.chr == g_respawnChr) {
+					g_respawnedAt = now;  // RespawnHide shows him if Snake hasn't taken over respawn_hide_max_ms from now
 				}
 				g_hiddenForDeath = false;
+				g_snakesDeath = false;
 				g_deathAt = 0;
 				g_deathLoad = false;
 				g_aliveSince = 0;

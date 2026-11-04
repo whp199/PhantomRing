@@ -26,6 +26,9 @@ namespace phantom::guest::vars
 		std::array<std::uint16_t, 23> stockCounts{};     // vars.ammoStockCounts: 0/2/4 weapon slots 0-2 (+1 their sub), 5 hand,
 		                                                  // 6-13 support items, 14-21 items (Ammo.cpp)
 		std::uint32_t itemIndex{ 0 };                     // vars.currentItemIndex: the item slot in use (0 none)
+		bool          suppressorOk{ false };              // both suppressor vars verified and read
+		std::array<std::uint8_t, 6> suppressorLives{};    // vars.suppressorLives / isUseSuppressor: the weapon slots' copies
+		std::array<std::uint8_t, 6> isUseSuppressor{};    // (a mission load builds the ammo component's records from them)
 		std::uint8_t  buddyType{ 0 };
 		std::uint16_t buddyGearAmmo[2]{};
 		std::uint8_t  buddyGearMainWp{ 0 };
@@ -47,4 +50,7 @@ namespace phantom::guest::vars
 	// vars.ammoStockCounts[] -- MGSV writes them itself at Snake's next shot or throw; until then GuestState would show the old
 	// counts. False if either var isn't verified.
 	bool WriteAmmoCopies(const std::array<std::uint16_t, 3>& a_magazines, const std::array<std::uint16_t, 23>& a_counts);
+	// vars.suppressorLives[slot] / isUseSuppressor[slot] after Suppressor.cpp set the slot's record (Lua thread); false if either
+	// var isn't verified. Only while MGSV's saves are blocked (the callers check).
+	bool WriteSuppressorCopy(int a_slot, std::uint8_t a_life, bool a_on);
 }

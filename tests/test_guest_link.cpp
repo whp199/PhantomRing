@@ -104,7 +104,12 @@ static void TestShippedIni(const wchar_t* a_path)
 	      shipped.buddyFollowSideRunning == d.buddyFollowSideRunning && shipped.buddyFollowCatchUp == d.buddyFollowCatchUp &&
 	      shipped.buddyFollowMethod == d.buddyFollowMethod && shipped.buddyFollowModes == d.buddyFollowModes && d.buddyFollowMethod == "record" &&
 	      shipped.walkerVolume == d.walkerVolume && shipped.safePauseMenu == d.safePauseMenu && shipped.blockMissions == d.blockMissions &&
-	      shipped.loadoutPrimary == d.loadoutPrimary && shipped.loadoutPrimary2 == d.loadoutPrimary2 && shipped.loadoutSecondary == d.loadoutSecondary && shipped.loadoutSupport == d.loadoutSupport && shipped.boxPoster == d.boxPoster && shipped.box == d.box);
+	      shipped.loadoutPrimary == d.loadoutPrimary && shipped.loadoutPrimary2 == d.loadoutPrimary2 && shipped.loadoutSecondary == d.loadoutSecondary && shipped.loadoutSupport == d.loadoutSupport && shipped.boxPoster == d.boxPoster && shipped.box == d.box &&
+	      shipped.loadoutSuppressors == d.loadoutSuppressors && d.loadoutSuppressors == "sleep");
+	CHECK(shipped.buddyWalkerLeadLegs == d.buddyWalkerLeadLegs && shipped.buddyWalkerLeadLegSpeed == d.buddyWalkerLeadLegSpeed &&
+	      shipped.buddyWalkerLeadIdleSpeed == d.buddyWalkerLeadIdleSpeed && shipped.buddyWalkerLeadAccel == d.buddyWalkerLeadAccel &&
+	      shipped.buddyWalkerLeadOrderAhead == d.buddyWalkerLeadOrderAhead && shipped.buddyWalkerLeadReorderMs == d.buddyWalkerLeadReorderMs);
+	CHECK(shipped.climbHudThawMs == d.climbHudThawMs && d.climbHudThawMs == 150);
 
 	// And a non-default file parses into what it says.
 	const std::wstring custom = L"test_guest_custom.ini";

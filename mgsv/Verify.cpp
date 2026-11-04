@@ -79,9 +79,10 @@ namespace phantom::guest
 	{
 		bool Compare(std::uintptr_t a_va, std::initializer_list<std::uint8_t> a_bytes, const char* a_what)
 		{
-			std::array<std::uint8_t, 64> found{};
-			SIZE_T                       read = 0;
-			const auto                   n = a_bytes.size() < found.size() ? a_bytes.size() : found.size();
+			// every byte of the site (a site longer than 64 bytes used to fail as if it differed: 2026-11-03, the suppressor reader)
+			std::vector<std::uint8_t> found(a_bytes.size());
+			SIZE_T                    read = 0;
+			const auto                n = found.size();
 			if (!::ReadProcessMemory(::GetCurrentProcess(), reinterpret_cast<const void*>(a_va), found.data(), n, &read) || read != n) {
 				Log::Error("verify {}: {:#x} is not readable", a_what, a_va);
 				return false;
@@ -89,11 +90,14 @@ namespace phantom::guest
 			std::size_t i = 0;
 			for (auto b : a_bytes) {
 				if (i >= n || found[i] != b) {
-					std::string hex;
-					for (std::size_t k = 0; k < n; ++k) {
+					// a window around the first difference (review 0.7.0: only the first 64 bytes were shown, so a difference past +0x40
+					// in a long site never showed)
+					std::string       hex;
+					const std::size_t from = i > 16 ? i - 16 : 0;
+					for (std::size_t k = from; k < n && k < from + 64; ++k) {
 						hex += std::format("{:02x} ", found[k]);
 					}
-					Log::Error("verify {}: bytes at {:#x} differ (found {}) -- feature disabled", a_what, a_va, hex);
+					Log::Error("verify {}: bytes at {:#x} differ from +{:#x} (found from +{:#x}: {}) -- feature disabled", a_what, a_va, i, from, hex);
 					return false;
 				}
 				++i;

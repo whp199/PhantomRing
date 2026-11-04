@@ -5,6 +5,7 @@
 
 #include "KbmMap.h"
 #include "MantleParams.h"
+#include "NoiseLogic.h"
 
 #include <array>
 #include <cstdint>
@@ -34,6 +35,7 @@ namespace phantom::er
 		// (roadmap 5.4) Snake's flown grenades / rockets drawn with MGSV's own meshes (er/Projectiles.h); UNVERIFIED live: off
 		bool        projectileMeshes{ true };
 		float       projectileSpin{ 9.0f };  // rad/s a thrown one tumbles about its flight while it flies
+		bool        projectileStore{ true };  // (0.7.0) keep the learned templates across sessions (PhantomRingHost.projectiles next to the DLL)
 		bool        albedoSrgb{ true };      // UNORM albedo textures hold sRGB values
 		std::string normalXy{ "auto" };      // auto | rg | ag (normal map channels)
 		float       hdrPaperWhite{ 200.0f };  // nits of 1.0 on an HDR swap chain
@@ -61,7 +63,7 @@ namespace phantom::er
 		float       albedoScale{ 1.0f };
 		// Stage C: a minimum light on Snake (roadmap 5.3; dark towers at night): his albedo x this written into Elden Ring's RT4, which
 		// its emissive materials fill and its lighting adds unlit (UNVERIFIED which: `render set min_ambient` compares live). 0 = off.
-		float       minAmbient{ 0.004f };
+		float       minAmbient{ 0.008f };      // 0.7.0: 0.004 -> 0.008 (Stormveil's torch-lit tower room at night, beside the Tarnished)
 		float       glossScale{ 1.0f };          // gloss = (1 - roughness)^2 * scale + bias
 		float       glossBias{ 0.0f };
 		float       metalScale{ 1.0f };          // SRM blue as metalness
@@ -81,6 +83,8 @@ namespace phantom::er
 		// per pixel, everything else (D-Walker...) also as a whole by its nearest part.
 		float       nearFade[2]{ 0.25f, 0.6f };
 		float       nearFadeOther[2]{ 0.5f, 1.5f };
+		int         nearFadeCell{ 2 };       // the dither's cell (pixels): 2 = 2x2 blocks (er/Shaders.cpp ScreenDoor); 1 per pixel (before 0.7.0:
+		                                     // false colours -- orange/blue, magenta/green -- in the ghost, live 2026-11-03)
 		// MGSV fades what stands between its camera and Snake: a non-player object with a part within
 		// occluder_radius of the camera-to-Snake line, in front of him, is drawn at occluder_fade (not while riding).
 		float       occluderFade{ 0.15f };
@@ -140,6 +144,14 @@ namespace phantom::er
 		float       hudWeaponOffset[2]{ 0.0f, -0.05f };                // up: clear of Elden Ring's rune counter and its "+N"
 		float       hudNotifyRegion[4]{ 0.0f, 0.30f, 0.40f, 0.72f };  // notifications (left; the centre stays: reticle)
 		float       hudNotifyOffset[2]{ 0.0f, 0.0f };
+		// (0.7.0) The controls card: the key controls, shown the first time Snake takes control (er/Hud.h ControlsCard).
+		std::string   controlsCard{ "first" };   // first (once per install: PhantomRingHost.firstrun next to the DLL) | always (every session) | off
+		float         cardSeconds{ 12.0f };      // it fades after this long, or at any press
+		std::uint16_t cardButton{ 0x0001 };      // View + this button (D-pad up) shows it again (0 = none)
+		std::string   cardButtonName{ "D-pad up" };
+		float         cardScale{ 1.0f };
+		// (0.7.0) Elden Ring's own HP / FP / stamina bars while Snake plays (er/ErBars.h): auto (= none) | none (all three hidden) | all
+		std::string   erBars{ "auto" };
 
 		bool operator==(const OverlayConfig&) const = default;
 	};
@@ -162,9 +174,25 @@ namespace phantom::er
 		std::string distance{ "always" };  // always | centre (only marks near the view centre) | off
 		float       size{ 0.012f };        // the triangle's half height, share of the screen height
 		float       textSize{ 0.75f };     // a digit's half height, share of the triangle's
-		float       height{ 2.2f };        // m over a character's feet where the mark's tip is
+		float       height{ 2.2f };        // m over a character's feet where the mark's tip is, when his hit capsule can't be read
+		float       above{ 0.35f };        // (0.7.0) m over the top of his hit capsule (NpcParam hitHeight): where the mark's tip is
 
 		bool operator==(const MarkingConfig&) const = default;
+	};
+
+	// [Noise] Snake's shots heard by Elden Ring's enemies (er/Noise.h; protocol v16 kFireSuppressed / kGuestSuppressorOn).
+	struct NoiseConfig
+	{
+		std::string  mode{ "sound" };   // sound: Elden Ring's own AI sound at the muzzle | heard: the fallback (a token hit on the enemies
+		                                // within the radius that aren't fighting: aggro, no search) | off
+		int          soundRow{ 2010 };  // AiSoundParam row, its radius scaled to the weapon's: 2010 = what the Tarnished's weapon hits make
+		noise::Radii radii;             // m by weapon class; suppressed = a shot through a working suppressor
+		float        impact{ 5.0f };    // m: an unsuppressed round that strikes the world makes this much where it lands (0 = none)
+		float        perSecond{ 8.0f }; // AI sounds a second at most (automatic fire)
+		bool         wornNote{ true };  // the corner says "Suppressor worn out"
+		int          wornWindowMs{ 1000 };  // ... when kGuestSuppressorOn drops this soon after a suppressed shot, the same weapon in hand
+
+		bool operator==(const NoiseConfig&) const = default;
 	};
 
 	struct Config
@@ -212,6 +240,7 @@ namespace phantom::er
 		int              ladderPressDelayMs{ 100 };    // ...the puppet steps aside on the press, which reaches Elden Ring this much later
 		int              ladderWaitMs{ 1500 };         // ...until the climb starts (at most this long after the press)
 		int              ladderSettleMs{ 300 };        // ...and back this long after the Tarnished got off the ladder
+		int              ladderHomeSettleMs{ 50 };     // ...or this long once Elden Ring's climb is over for good and MGSV has Snake home
 		bool             ladderEndEarly{ true };       // kHEvClimb a = 0 at Elden Ring's EndTop/EndBottom -> none, not after the settle (console
 		                                               // `ladder early on|off`, for before/after measurements; not in the ini)
 		// [Ladder] Snake climbs Elden Ring's ladders himself (protocol v15 kHEvClimb / kGuestClimbing, er/Ladder.h ClimbPace): Elden
@@ -242,6 +271,8 @@ namespace phantom::er
 		float fallWatchSeconds{ 4.0f };  // a fall with no landing after this long (s) ... (NoDead: a chasm's kill volume can't kill the puppet)
 		float fallWatchDrop{ 60.0f };    // ... or this deep (m) is Snake's death (YOU DIED); 0 = that check off
 		bool  hitHook{ true };     // catch ER hits in ReceiveDamage and cancel them (re-backlog E2)
+		bool  respawnHide{ true };      // after Snake's death the respawn's Tarnished stays hidden from his first frame until Snake takes over
+		int   respawnHideMaxMs{ 15000 };  // ... at most this long after the respawn (then Elden Ring's again: Snake didn't come)
 		bool  noDead{ true };
 		bool  noDamage{ false };   // NoDamage hides hits from us (we detect hits by HP loss), so off by default
 		bool  mirrorLife{ true };  // ER HP bar shows Snake's life fraction
@@ -334,6 +365,7 @@ namespace phantom::er
 		int           flaskPressMs{ 150 };         // how long the hidden Tarnished's press lasts
 		int           flaskConfirmMs{ 3000 };      // a consumable whose count hasn't dropped this long after the press: not used
 		bool          flaskWhileRiding{ true };    // also while Snake rides D-Walker / D-Horse (the Tarnished is on foot)
+		bool          flaskWakeHud{ true };        // (0.7.0) Elden Ring's Auto HUD hiding its slots: a wake press before the switch
 
 		// [Axes] (UNVERIFIED conventions; confirmed live and pinned here)
 		float mirrorX{ -1 };         // Fox and Havok differ in handedness (verified live 2026-10-12)
@@ -488,7 +520,7 @@ namespace phantom::er
 		float         muzzlePerSecond{ 10.0f };     // flashes per second at most (automatic fire)
 		float         muzzleLife{ 0.1f };           // s the flash lasts (its effect is cut with the bullet; at 0.06 s 300522 never showed)
 		float         muzzleAhead{ 0.1f };          // m in front of MGSV's muzzle point
-		bool          muzzleTranq{ false };         // also for tranquilizer rounds (MGSV's are suppressed: no flash)
+		bool          muzzleSuppressed{ false };    // also for suppressed shots (v16 kFireSuppressed; MGSV shows no flash for them)
 
 		// [Stealth] Snake in MGSV's cardboard box (protocol v8 kGuestInBox, er/Stealth.h)
 		bool          boxHide{ true };
@@ -574,6 +606,7 @@ namespace phantom::er
 		Kbm::Params   keyboard;  // [Keyboard] keyboard and mouse play Snake (er/Kbm.h; off by default)
 		OverlayConfig overlay;
 		MarkingConfig marking;  // [Marking]
+		NoiseConfig   noise;    // [Noise]
 
 		bool Load(const std::wstring& a_path);
 	};

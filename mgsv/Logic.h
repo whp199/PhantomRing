@@ -511,4 +511,27 @@ namespace phantom::guest::logic
 		std::uint32_t equip{ 0 }, rounds{ 0 }, sub{ 0 };
 	};
 	bool ParseMagazines(std::string_view a_text, std::array<SlotMagazine, 3>& a_out);
+
+	// Snake's suppressor (Suppressor.cpp, docs/GUEST.md 18.18): MGSV's own reader 0x141050870 (Addresses.h kSuppressorState), the
+	// arithmetic half, over values read from the WeaponState w, the ammo component's slot type and record. FireWeapon fires
+	// pellet i suppressed while on && i < life, and then wears life by the pellets (not 0xFF).
+	struct SuppressorInputs
+	{
+		std::uint32_t gunFlags{ 0 };     // [w+0x27C]
+		std::uint32_t equip{ 0 };        // [w+0x24C]
+		std::uint8_t  mode{ 0 };         // [w+0x3D5] (4: no suppressor reading)
+		std::uint32_t slotType{ 0 };     // [[comp+0x40] + idx*4] (low 5 bits: 1..8 a gun slot)
+		bool          haveRecord{ false };
+		std::uint8_t  recordLife{ 0 };   // rec[4]
+		std::uint8_t  recordFlags{ 0 };  // rec[5]
+		std::uint8_t  gunTraits{ 0 };    // [w+0x23A] (0x40: the gun takes a suppressor)
+	};
+	struct SuppressorReading
+	{
+		bool          firearm{ false };  // a gun slot MGSV reads a suppressor for at all
+		bool          on{ false };       // MGSV's "on" output (the alternate mode's: its own bit)
+		std::uint8_t  life{ 0 };         // MGSV's "life" output (rounds left; 0xFF = never wears)
+		[[nodiscard]] bool Working() const { return on && life > 0; }  // the next round goes through it
+	};
+	SuppressorReading SuppressorOf(const SuppressorInputs& a_in);
 }

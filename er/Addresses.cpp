@@ -186,6 +186,32 @@ namespace phantom::er
 			{ A::VtGameRend, "vt CS::GameRend", Kind::kVtable, 0x2A84438, nullptr, 0, 0, 0, nullptr, ".?AVGameRend@CS@@" },
 			{ A::VtSnipeCollector, "vt CS::CSClosestHitCollectorForSnipe", Kind::kVtable, 0x2B96768, nullptr, 0, 0, 0, nullptr,
 				".?AVCSClosestHitCollectorForSnipe@CS@@" },
+
+			// ---- AI sounds (er/Noise.h; docs/HOST.md "Noise") ----
+			// CS::CSWorldAiManager (static singleton finder: slot 0x3D69568), read at 0x2BCD3C as in 2.7.1.0 (0x3D66548 there).
+			{ A::WorldAiManager, "CSWorldAiManager", Kind::kGlobalSite, 0x3D69568, "48 8B 0D ?? ?? ?? ?? 8B 1B 8B 38 48 85 C9", 3, 7, 0x2BCD3C },
+			// Its AddAiSound: `cmp [rcx+0x7628],0` (the sound system), builds the request (0x348890 -> 0x348760) and hands it to the
+			// system's add (0x34A1B0). The whole AI sound family kept its RVAs in 2.7.2.0 (0x32A8E0..0x37A6C0, the same code).
+			{ A::AiSoundEmit, "CSWorldAiManager::AddAiSound", Kind::kFunc, 0x37A6C0,
+				"40 53 48 81 EC A0 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 90 00 00 00 48 83 B9 28 76 00 00 00 48 8B D9 48 8B 84 24 D0 00 00 00 "
+				"74 20 48 8D 4C 24 30 48 89 44 24 20 E8 91 E1 FC FF 48 8B 8B 28 76 00 00 48 8D 54 24 30 E8 A0 FA FC FF" },
+			{ A::AiSoundAdd, "AI sound system add", Kind::kFunc, 0x34A1B0,
+				"48 8B C4 56 57 41 54 41 56 41 57 48 81 EC E0 00 00 00 48 C7 44 24 20 FE FF FF FF 48 89 58 18 48 89 68 20 48 8B 05 ?? ?? ?? ?? "
+				"48 33 C4 48 89 84 24 D0 00 00 00 4C 8B F2 48 8B E9 4C 8D 79 20" },
+			{ A::AiSoundRequest, "AI sound request builder", Kind::kFunc, 0x348760,
+				"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 0F 28 02 48 8B F1 0F 11 01 48 83 C1 10 49 8B D0 0F 29 74 24 30 "
+				"49 8B F9 49 8B D8 E8 0C 05 00 00 8B 43 18 F3 0F 10 35 ?? ?? ?? ?? 89 46 28" },
+			{ A::VtTargetingSystem, "vt CS::CSTargetingSystem", Kind::kVtable, 0x2A1FAE8, nullptr, 0, 0, 0, nullptr, ".?AVCSTargetingSystem@CS@@" },
+			{ A::VtAiTargetingOwner, "vt CS::CSAiTargetingSystemOwner", Kind::kVtable, 0x2A20550, nullptr, 0, 0, 0, nullptr,
+				".?AVCSAiTargetingSystemOwner@CS@@" },
+			{ A::VtTargetSearchSys, "vt CS::CSTargetSearchSys", Kind::kVtable, 0x2A20420, nullptr, 0, 0, 0, nullptr, ".?AVCSTargetSearchSys@CS@@" },
+			// CSAiTargetingSystemOwner's slots 14 / 15 (+0x70 / +0x78: is_battle_state / is_not_in_any_search_state, fromsoftware-rs
+			// CSTargetingSystemOwnerVmt), read by er/Noise.cpp ReadAi (review 0.7.0: it called them unverified). The same RVAs and code
+			// in 2.7.1.0 (its Ghidra project: 0x142A1E5B0 -> 0x140345E50, 0x142A1E5B8 -> 0x140345E60) and 2.7.2.0 (its exe: the vtable at
+			// 0x2A20550 holds 0x140345E50 / 0x140345E60); ReadAi also checks that the live vtable slot is this very function.
+			{ A::AiOwnerIsBattle, "CSAiTargetingSystemOwner::IsBattleState", Kind::kFunc, 0x345E50, "48 8B 49 08 E9 87 D3 F7 FF" },
+			{ A::AiOwnerNoSearch, "CSAiTargetingSystemOwner::IsNotInAnySearchState", Kind::kFunc, 0x345E60,
+				"40 53 48 83 EC 20 48 8B D9 48 8B 49 08 E8 ?? ?? ?? ?? 84 C0 75 13 48 8B 4B 08 E8 ?? ?? ?? ?? 84 C0 75 06 48 83 C4 20 5B C3 B0 01 48 83 C4 20 5B C3" },
 		};
 
 		// eldenring.exe 2.7.1.0 (App 1.17.1 WW): the table PhantomRing 0.1-0.4 was built and live-tested on.
@@ -330,6 +356,30 @@ namespace phantom::er
 			{ A::VtGameRend, "vt CS::GameRend", Kind::kVtable, 0x2A82338, nullptr, 0, 0, 0, nullptr, ".?AVGameRend@CS@@" },
 			{ A::VtSnipeCollector, "vt CS::CSClosestHitCollectorForSnipe", Kind::kVtable, 0x2B94678, nullptr, 0, 0, 0, nullptr,
 				".?AVCSClosestHitCollectorForSnipe@CS@@" },
+
+			// ---- AI sounds (er/Noise.h): found in the Ghidra project of this build (2026-11-03): the AiSoundParam getter's
+			// callers (0x32A8E0, 0x33F940 ...: the listeners), CSWorldAiManager+0x7628 and its add / builder; same RVAs in 2.7.2.0. ----
+			{ A::WorldAiManager, "CSWorldAiManager", Kind::kGlobalSite, 0x3D66548, "48 8B 0D ?? ?? ?? ?? 8B 1B 8B 38 48 85 C9", 3, 7, 0x2BCD3C },
+			{ A::AiSoundEmit, "CSWorldAiManager::AddAiSound", Kind::kFunc, 0x37A6C0,
+				"40 53 48 81 EC A0 00 00 00 48 8B 05 ?? ?? ?? ?? 48 33 C4 48 89 84 24 90 00 00 00 48 83 B9 28 76 00 00 00 48 8B D9 48 8B 84 24 D0 00 00 00 "
+				"74 20 48 8D 4C 24 30 48 89 44 24 20 E8 91 E1 FC FF 48 8B 8B 28 76 00 00 48 8D 54 24 30 E8 A0 FA FC FF" },
+			{ A::AiSoundAdd, "AI sound system add", Kind::kFunc, 0x34A1B0,
+				"48 8B C4 56 57 41 54 41 56 41 57 48 81 EC E0 00 00 00 48 C7 44 24 20 FE FF FF FF 48 89 58 18 48 89 68 20 48 8B 05 ?? ?? ?? ?? "
+				"48 33 C4 48 89 84 24 D0 00 00 00 4C 8B F2 48 8B E9 4C 8D 79 20" },
+			{ A::AiSoundRequest, "AI sound request builder", Kind::kFunc, 0x348760,
+				"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 0F 28 02 48 8B F1 0F 11 01 48 83 C1 10 49 8B D0 0F 29 74 24 30 "
+				"49 8B F9 49 8B D8 E8 0C 05 00 00 8B 43 18 F3 0F 10 35 ?? ?? ?? ?? 89 46 28" },
+			{ A::VtTargetingSystem, "vt CS::CSTargetingSystem", Kind::kVtable, 0x2A1DAD8, nullptr, 0, 0, 0, nullptr, ".?AVCSTargetingSystem@CS@@" },
+			{ A::VtAiTargetingOwner, "vt CS::CSAiTargetingSystemOwner", Kind::kVtable, 0x2A1E540, nullptr, 0, 0, 0, nullptr,
+				".?AVCSAiTargetingSystemOwner@CS@@" },
+			{ A::VtTargetSearchSys, "vt CS::CSTargetSearchSys", Kind::kVtable, 0x2A1E410, nullptr, 0, 0, 0, nullptr, ".?AVCSTargetSearchSys@CS@@" },
+			// CSAiTargetingSystemOwner's slots 14 / 15 (+0x70 / +0x78: is_battle_state / is_not_in_any_search_state, fromsoftware-rs
+			// CSTargetingSystemOwnerVmt), read by er/Noise.cpp ReadAi (review 0.7.0: it called them unverified). The same RVAs and code
+			// in 2.7.1.0 (its Ghidra project: 0x142A1E5B0 -> 0x140345E50, 0x142A1E5B8 -> 0x140345E60) and 2.7.2.0 (its exe: the vtable at
+			// 0x2A20550 holds 0x140345E50 / 0x140345E60); ReadAi also checks that the live vtable slot is this very function.
+			{ A::AiOwnerIsBattle, "CSAiTargetingSystemOwner::IsBattleState", Kind::kFunc, 0x345E50, "48 8B 49 08 E9 87 D3 F7 FF" },
+			{ A::AiOwnerNoSearch, "CSAiTargetingSystemOwner::IsNotInAnySearchState", Kind::kFunc, 0x345E60,
+				"40 53 48 83 EC 20 48 8B D9 48 8B 49 08 E8 ?? ?? ?? ?? 84 C0 75 13 48 8B 4B 08 E8 ?? ?? ?? ?? 84 C0 75 06 48 83 C4 20 5B C3 B0 01 48 83 C4 20 5B C3" },
 		};
 		// clang-format on
 

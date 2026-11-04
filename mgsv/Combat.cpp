@@ -7,6 +7,7 @@
 #include "Link.h"
 #include "Log.h"
 #include "ProjectileTag.h"
+#include "Suppressor.h"
 #include "Verify.h"
 
 #include <windows.h>
@@ -41,6 +42,9 @@ namespace phantom::guest::combat
 		std::atomic<std::uint32_t> g_lastAttack{ 0 }, g_lastShare{ 0 }, g_soldierLife{ 0 };
 		// Cqc.cpp's view of the CQC state (game thread only, like PollMelee).
 		CqcProbe g_probe;
+		// v16: Snake's suppressed shots (kFireSuppressed) and the rest, for `!shots`
+		std::atomic<std::uint64_t> g_suppressed{ 0 }, g_unsuppressed{ 0 };
+		std::atomic<int>           g_lastLife{ -1 };
 
 		// CQC poll state (game thread only)
 		logic::StrikeEdge g_strike;  // one kGEvMelee per MGSV strike (Logic.h)
@@ -162,7 +166,26 @@ namespace phantom::guest::combat
 				e.type = snake ? proto::kGEvFire : proto::kGEvBuddyFire;
 				const std::uint32_t ammo = kind == BulletKind::kTranq ? proto::kAmmoTranq : kind == BulletKind::kStun ? proto::kAmmoStun : proto::kAmmoLethal;
 				e.a = (equip.value_or(0) & 0xFFFF) | (ammo << 16);
-				e.b = pellets;
+				e.b = pellets & 0xFFFF;
+				// v16: through a working suppressor? MGSV's own reading, here before FireWeapon's pellet loop and its wear (the
+				// first pellet is suppressed while on && life > 0: Suppressor.h)
+				if (snake) {
+					const auto sup = suppressor::Read(reinterpret_cast<std::uintptr_t>(a_c), w, a_index);
+					// Every pellet through it (MGSV marks pellet i < life suppressed: a multi-pellet shot on the last few lives is partly
+					// loud, review 0.7.0), or a suppressor that never wears.
+					const bool whole = sup.Working() && (sup.life == addr::kSuppressorEndless || sup.life >= pellets);
+					if (whole) {
+						e.b |= proto::kFireSuppressed;
+					}
+					(whole ? g_suppressed : g_unsuppressed).fetch_add(1, std::memory_order_relaxed);
+					g_lastLife.store(sup.valid ? sup.life : -1, std::memory_order_relaxed);
+					static std::atomic<int> logged{ 0 };
+					const bool wearsOut = sup.Working() && sup.life != addr::kSuppressorEndless && sup.life <= pellets;
+					if (sup.valid && sup.firearm && (sup.on || sup.life) && (wearsOut || logged.fetch_add(1) < 40)) {
+						Log::Info("shots: equip {} {} (suppressor life {} before the shot{})", equip.value_or(0), sup.Working() ? "SUPPRESSED" : "not suppressed",
+							sup.life, wearsOut ? ": it wears out with this one" : "");
+					}
+				}
 				e.frame = static_cast<std::uint32_t>(g_frame.load(std::memory_order_relaxed));
 				std::memcpy(e.v0, a_origin, sizeof(e.v0));
 				// A round aimed at a proxy standing on the sandbox ground goes to its Elden Ring enemy's real height ([Proxies]
@@ -213,10 +236,14 @@ namespace phantom::guest::combat
 
 	std::string DescribeDamage()
 	{
-		return std::format("damage share: {} ({} rounds with a share, {} without; last attack {} share {}; soldier life {})",
+		return std::format("damage share: {} ({} rounds with a share, {} without; last attack {} share {}; soldier life {}); suppressed shots {}, not {} (last "
+		                   "life before a shot {})",
 			g_damageOk.load() ? "on" : "off (table unverified)", g_shared.load(), g_unshared.load(), g_lastAttack.load(), g_lastShare.load(),
-			g_soldierLife.load());
+			g_soldierLife.load(), g_suppressed.load(), g_unsuppressed.load(), g_lastLife.load());
 	}
+
+	std::uintptr_t Character() { return g_character.load(std::memory_order_relaxed); }
+	std::uint32_t  SnakeIndex() { return g_snakeIndex.load(std::memory_order_relaxed); }
 
 	bool NativeShots() { return g_native.load(); }
 	std::uint64_t BuddyRounds() { return g_buddyRounds.load(); }

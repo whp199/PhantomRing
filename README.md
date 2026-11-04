@@ -26,7 +26,8 @@ player in Skyrim.
 >   from your own MGSV install.
 > - **Play offline only.** PhantomRing always starts Elden Ring offline through Mod Engine 3, which
 >   neutralises Arxan and never loads Easy Anti-Cheat. Never take a PhantomRing save or setup online.
-> - **Back up your saves.** `pr launch` backs up both games' saves before every start, and Elden Ring plays on
+> - **Back up your saves.** `pr launch` backs up both games' saves before every start (and since 0.7.0 prunes its own older
+>   backups: the newest 10 per game and the first are kept), and Elden Ring plays on
 >   its own copy of your save (`PhantomRing0000.sl2`). Mods can still go wrong: keep your own backups too.
 > - Use at your own risk.
 
@@ -64,7 +65,10 @@ game runs as usual.
    your character, and Snake takes over after 2-4 minutes. `tools/pr stop` when you're done.
 6. **Updating.** Replace the whole folder (both plugins come from one release: `tools/pr --version` lists them). Mixed
    plugins don't link up, and Elden Ring's corner says so in red ("PhantomRing versions differ: ... -- reinstall both").
-   Every launch keeps a ~140 MB save backup; `tools/pr doctor` warns when they pile up (`--keep-backups N` prunes).
+   Every launch keeps a ~140 MB save backup. Since 0.7.0 `pr launch` keeps the newest 10 of its own backups per game, plus the very
+   first one, every `*-pre-restore` one and every one you made with `pr backup-saves`, and deletes older ones; its log folders the
+   same way (`--keep-backups 0` / `--keep-logs 0`, or `PHANTOMRING_KEEP_BACKUPS=0`, keeps everything). See
+   [Saves, safety and uninstalling](#saves-safety-and-uninstalling).
 
 Something wrong? Run `tools/pr collect-logs` and [open an issue](https://github.com/whp199/PhantomRing/issues/new/choose)
 with the zip it writes.
@@ -300,7 +304,9 @@ few times you hold LB it also shows how, and it tells you when you let go withou
 **D-Horse**, **D-Dog** or **D-Walker** and confirm the drop point (A; GMP is spent in memory only, MGSV never saves), or **Dismiss**
 the one that is out. MGSV sends the old one away (a dismissed D-Horse leaves under a Fulton balloon, in Elden Ring's sky too) and
 the new one arrives in 10-30 s; the corner says "Buddy: D-Dog is out" / "D-Walker dismissed -- no buddy now". With no buddy out
-nothing is drawn or placed. D-Dog follows Snake and marks Elden Ring's enemies ("D-Dog: Found enemy"); Quiet is untested. The next
+nothing is drawn or placed. D-Dog follows Snake, but doesn't fight or mark Elden Ring's enemies yet (its "D-Dog: Found enemy" is MGSV
+talking about MGSV's own sandbox; D-Dog as a real battle buddy is the next step, [docs/research/ddog.md](docs/research/ddog.md));
+Quiet is untested. The next
 launch deploys the ini's buddy again (`[Buddy] Type`).
 
 **D-Horse instead of D-Walker** (optional): set `[Buddy] Type = horse` in `PhantomRingGuest.ini` (in MGSV's folder) before
@@ -358,7 +364,30 @@ where they hit. The tranquilizer pistol: two body darts, or one in the head, put
 Each shot shows a small burst of Elden Ring's sparks at the muzzle (`[Combat] muzzle_flash`, on since 0.6.0; seen live with the
 real MGSV's rifle). Grenades and rockets in flight are drawn with MGSV's own models (`[Render] projectile_meshes` and the guest's
 `[Capture] ProjectileMeshes`, both on since 0.6.0; learned from MGSV's own draws on the first throw -- seen with both games: MGSV's
-blue sleep-grenade canister in flight; a rocket shows as its bright exhaust flying away), otherwise as simple shapes.
+blue sleep-grenade canister in flight; a rocket shows as its bright exhaust flying away), otherwise as simple shapes. Since 0.7.0
+the models learned are kept across sessions (`PhantomRingHost.projectiles` next to the ini): the first throw of a session is
+already MGSV's grenade.
+
+**The sleep pistol's suppressor and being heard** (new in 0.7.0, tried live with both games). Snake's WU S.PISTOL now carries
+MGSV's own suppressor (`[Loadout] Suppressors = sleep` in `PhantomRingGuest.ini`: the guns firing tranquilizer darts; `all`, `none`):
+MGSV's weapon box shows `SUP` and its gauge, the shot is quiet, with no muzzle flash. And Elden Ring's enemies now **hear** Snake's
+shots: an unsuppressed round makes Elden Ring's own AI sound at the muzzle (pistol 20 m, rifle 35, sniper 40, shotgun 45, launchers
+55; `[Noise]` in `PhantomRingHost.ini`), so the soldiers nearby turn, come to look and fight; a suppressed one makes none. Live:
+a head dart put one of four soldiers in a Stormveil courtyard to sleep and the three around him never heard a thing (18 s), while one
+SVG-76 round beside them had three in battle 2-3 s later. A suppressor wears down by one per shot, at MGSV's full value for the gun
+(30 for the WU S.PISTOL): when it is spent, MGSV's gauge goes, the corner says "Suppressor worn out" and the shots are loud. Resting
+at a grace (or a respawn, or picking up ammo) puts a fresh one on. **With MGSV's Infinity Bandana on** (it is your MGSV save's
+choice -- MGSV shows the reserve as "∞") MGSV never wears a suppressor down: it stays full, as in MGSV itself. Some of Elden
+Ring's enemies never react to sounds (Stormveil's upper-rampart soldiers and a sentry did not, even to a 60 m sound).
+
+**The controls card** (new in 0.7.0). The first time Snake takes control a small panel at the top of the screen lists his
+controls (jump, climb, flask, map, iDroid, Tarnished mode, the buddy's orders). **A** closes it (that A does nothing else), it fades
+after 12 s or at any other press, and **View + D-pad up** shows it again. It waits while one of Elden Ring's or MGSV's menus is up.
+It comes once per install (`PhantomRingHost.firstrun` next to the ini remembers it: delete it to see it again; `[Overlay]
+controls_card = always | off`).
+
+**Elden Ring's bars** (new in 0.7.0). While you play Snake, Elden Ring's HP, FP and stamina bars are hidden (Snake's life is MGSV's
+HUD); they are back in Tarnished mode, Elden Ring's menus and its screens (`[Overlay] er_bars = all` keeps them).
 
 **Progression** (optional, off by default): `[Progression] damage_scaling = level | weapon | both` in `PhantomRingHost.ini`
 makes the Tarnished's rune level and his right-hand weapon's upgrade scale Snake's damage ([docs/COMBAT.md](docs/COMBAT.md)):
@@ -432,10 +461,14 @@ A boss counts as many soldiers: one 30-round SVG-76 magazine takes about 14.5% o
 - **MGSV never saves** while PhantomRing runs (its writes stay in memory), so your MGSV progress stays as it
   was.
 - **Backups.** Every `pr launch` first copies both games' saves to `backups/<time>/` and verifies them by
-  sha256. All of them are kept unless you ask for pruning (`--keep-backups N` or `$PHANTOMRING_KEEP_BACKUPS=N`:
-  for each game the newest N and the very first one survive, and every `*-pre-restore` one; each ER backup is
-  ~140 MB, so prune now and then). `pr backup-saves` makes one by hand;
-  `pr restore-saves <time> --yes` puts one back (and backs up the current saves first). For Elden Ring it restores
+  sha256. Each Elden Ring backup is ~140 MB (one player had 18.8 GB of them), so **since 0.7.0 `pr launch` prunes its own old
+  backups** right after the new one has verified: for each game it keeps the newest 10 it took and the very first one (your saves
+  before PhantomRing ever ran, named in `backups/.first.json`), and it never deletes a `*-pre-restore` backup, a backup you made with
+  `pr backup-saves`, anything from the last 24 hours, or any other folder you put there (a copy, notes). Backups from before 0.7.0
+  count as launch backups only while their launch's folder is still in `logs/`; otherwise they are treated as made by hand and kept.
+  To keep everything: `--keep-backups 0` or `PHANTOMRING_KEEP_BACKUPS=0` (`--keep-backups N` keeps another count). The launch log
+  folders in `logs/` are pruned the same way (`--keep-logs N`, `PHANTOMRING_KEEP_LOGS`). `pr backup-saves` makes one by hand (never
+  pruned); `pr restore-saves <time> --yes` puts one back (and backs up the current saves first). For Elden Ring it restores
   only `PhantomRing0000.sl2` (and its `.bak`), never your other saves in that folder (`--all-er-files` does).
 - **Online.** Elden Ring always runs offline: me3's profile sets `start_online = false` and `pr launch`
   passes `--online=false`, and Easy Anti-Cheat is never loaded. MGSV runs offline too (`[Online] Offline =
@@ -446,7 +479,7 @@ A boss counts as many soldiers: one 30-round SVG-76 magazine takes about 14.5% o
   `dinput8.dll` from another mod (IHHook, Infinite Heaven): move that aside while you play PhantomRing.
 - **Uninstall.** `tools/pr stop`, then `tools/pr uninstall-guest` (removes the two files from MGSV's folder, only
   if they are the ones it installed), then delete this folder. `backups/` holds your save backups: keep what
-  you want first.
+  you want first (copy them out: `pr launch` prunes old launch backups, and deleting this folder deletes them all).
 
 ## Known issues
 
@@ -480,18 +513,23 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   aim onto a stand-in, the fourth stand-in switches between two equally near enemies every ~20 s, and `location objects lost`
   climbed to 4. MGSV's marker shows at the stand-in, i.e. at Snake's ground height, not on an enemy on a ledge.
 - D-Walker: since 0.6.0 PhantomRing leads it beside Snake (a median 2.8 m from him while he runs, live with both games; before,
-  4.8 m behind and up to 10 m), but MGSV's own walking AI starts 0.2-3 s after Snake does, so for the first moments of a run it
-  glides beside him with its legs still; it takes each order 1-2 s late. Its footsteps are much quieter since 0.6.0 (`[Audio] WalkerDistance` 8: MGSV's whole output while running with
-  it following, median -36.5 dBFS, about Snake's own running; before, -29 dBFS with peaks near -5).
-- Binocular marks (live 2026-10-14: a Stormveil soldier marked half a second after the binoculars came up): a mark sits a
-  fixed 2.2 m over the feet, inside a giant or a boss; MGSV plays no marking sound for Elden Ring's characters. If real soldiers
-  never get marked, try `[Marking] rendered_only = false` (it skips characters Elden Ring doesn't render) and report it.
-  Through the binoculars MGSV's lens no longer paints MGSV's airport around the view (fixed 2026-10-14).
+  4.8 m behind and up to 10 m). Since 0.7.0 it never glides: at a run's start it stands until MGSV's own walking AI moves its legs
+  (~2 s after a stand, whatever the orders: why MGSV's walker drops its first order is still open), so for the first seconds of a run
+  it is up to ~8 m behind him, then catches up (at up to 9 m/s when it is far behind, so a dashing Snake doesn't lose it; standing far
+  behind for 4 s it is whistled over as before). It takes each order 1-2 s late. Its footsteps are much quieter since 0.6.0 (`[Audio]
+  WalkerDistance` 8: MGSV's whole output while running with it following, median -36.5 dBFS, about Snake's own running; before, -29
+  dBFS with peaks near -5).
+- Binocular marks (live 2026-10-14: a Stormveil soldier marked half a second after the binoculars came up): since 0.7.0 a mark sits
+  0.35 m over the character's own height (a soldier's at 2.25 m, a big enemy's at 4.85 m; live with both games: just over a hooded
+  Stormveil soldier's head, "11m"); MGSV plays no marking sound for Elden Ring's characters. If real soldiers never get marked, try
+  `[Marking] rendered_only = false` (it skips characters Elden Ring doesn't render) and report it. Through the binoculars MGSV's lens
+  no longer paints MGSV's airport around the view (fixed 2026-10-14).
 - MGSV's own effects (explosions, smoke, flames) are replaced by Elden Ring's pot effects and Dragonfire flames; a muzzle flash
   is a small burst of Elden Ring's sparks (`[Combat] muzzle_flash`, on since 0.6.0). Grenades and rockets in flight are drawn with
   MGSV's own meshes once the guest tags them (`[Render] projectile_meshes`, on; the guest's `[Capture] ProjectileMeshes`, on),
   otherwise as simple shapes. Live with both games: MGSV's sleep grenade in flight; a rocket only from behind (its exhaust glow
-  hides its body). The first throw of each item in a session is still the simple shape (the model is learned from it).
+  hides its body). Since 0.7.0 a model once learned is kept (`PhantomRingHost.projectiles`): only the very first throw of each item
+  ever is the simple shape (live with both games: the session's first sleep grenade was MGSV's canister 0.02 s after the release).
 - C4 goes off by PhantomRing's backup (MGSV's own detonator never answers); next to a supply box a tap of Y with C4 in hand
   may set one off too (untested).
 - Throwing or placing (grenades, C4, decoys): keep LT held until the throw has left; a quick RT tap is enough now (0.5.0: 4 of 4
@@ -510,7 +548,8 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   the respawn; the revival screen itself not reproduced). If it still happens: hold View + Start (Tarnished mode), choose, and
   hold them again once Snake's world is back.
 - Elden Ring opens no map while an enemy is after Snake (its own rule): View then seems to do nothing.
-- With the camera pushed into Snake (a wall, an enemy right behind him) his see-through model can show magenta and green tints.
+- With the camera pushed into Snake (a wall, an enemy right behind him) his see-through model showed magenta and green tints: fixed
+  in 0.7.0 (`[Render] near_fade_cell` 2; live with both games, the camera against a wall: none). Tell us if you still see them.
 - Sturdy objects (Limgrave's palisade fences) don't break, even in a blast.
 - The cardboard box doesn't shake off an enemy that has already spotted Snake.
 - Keyboard and mouse driving Snake (`[Keyboard]`): opt-in (off by default), tried live only with keys and mouse events sent into
@@ -519,7 +558,8 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
 - Flasks no longer need Tarnished mode: View held + X uses Elden Ring's quick item (tried live with both games in 0.6.0: the heal,
   the count, Snake walking through the drink, the empty flask refused; spirit ashes not yet tried: for them the corner says
   "pressed", as Elden Ring may still refuse the summon). Torrent, Memory of Grace and the fingers still need Tarnished mode. View +
-  D-pad down often needs Elden Ring's second press (PhantomRing makes it; the corner then names the item ~0.8 s later). Memory of
+  D-pad down switches with one press since 0.7.0 (Elden Ring's "Auto" HUD wanted a press to show its slots first: PhantomRing makes
+  that wake press itself, and quick presses queue). Spirit ashes are untested (no Spirit Calling Bell in the test save). Memory of
   Grace's question used from Elden Ring's inventory now gives Elden Ring the controller while it is up (fixed in 0.6.0; before,
   Snake kept the pad and B reloaded in MGSV): A on NO closes it.
 - Teleport-style travel into a spot Elden Ring hasn't loaded yet (the dev console's `call setpos`; not fast travel) can drop
@@ -536,11 +576,19 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   so over a 1.3 m fence it looks a little short. MGSV's HUD layer is hidden for the first 1.6 s of a climb (its last prompt used to
   linger).
 - Ladders: Snake is drawn on the ladder where the Tarnished would be; his hands may sit a little off Elden Ring's rungs
-  (`[Ladder] offset`). After a climb Snake walks again about half a second after Elden Ring's climb ends (live 0.44-0.52 s: MGSV
-  takes him back from its own ladder, then his first step; a stick pushed through the end is no longer lost). Going
-  down a narrow shaft, Elden Ring's camera hangs close over his head; inside dark towers at night he was hard to see: a small floor of light on him now (`[Render] min_ambient` 0.004; raise it if he is still too dark,
-  `tools/pr er "render set min_ambient 0.01"` tries it live; not yet tried in a tower).
+  (`[Ladder] offset`). After a climb Snake takes over ~0.23 s after Elden Ring's climb ends since 0.7.0 (live with both games: MGSV back on the
+  sandbox +0.21 s, Snake's start +0.23 s; 0.6.0: +0.30 s), and MGSV's HUD comes back 150 ms after (was 300). A stick held through
+  the end does nothing until you let it go and push again (so he doesn't run off a tower's landing). Going
+  down a narrow shaft, Elden Ring's camera hangs close over his head. Inside dark towers he had been hard to see: a small floor of
+  light on him (`[Render] min_ambient` 0.008 since 0.7.0, chosen from frames in a dark Stormveil tower; raise it if he is still too
+  dark, `tools/pr er "render set min_ambient 0.01"` tries it live).
 - Snake's life can tick up by up to ~2% for a moment after a hit before MGSV's recovery curve holds it back again.
+- Elden Ring's bars: only all three (HP, FP, stamina) can be hidden; keeping the HP bar alone didn't work. After one of Elden Ring's
+  menus or screens they show for 1.5 s before they hide again (so Elden Ring's next screen is still recognised).
+- The suppressor: after a rest MGSV's weapon box shows the old gauge until the next shot or weapon change. With the Infinity Bandana
+  on, MGSV never wears it down. MGSV's own supply drop was not tried (an ammo pickup refills it).
+- Being heard: some Elden Ring enemies never react to sounds (Stormveil's upper-rampart soldiers, a sentry); the fallback `[Noise]
+  mode = heard` (the enemies near a shot are aggroed directly) is untested live.
 - Fixed in 0.6.0 (seen once in testing): 2 s after Snake died to an enemy the Tarnished showed, kneeling, where Snake had been.
   Anything that stopped Snake's control in a death's first frames (a stray View + Start, MGSV's heartbeat) showed him; live with
   both games after the fix, a console death, a 36 m fall and four kills by Godrick soldiers: Snake lying where he died, never the
@@ -636,6 +684,27 @@ run the offline tests above first, and keep to the project's rules:
 | 6 | MGSV collision from Elden Ring (vault, climb, cover), proxies for native MGSV combat | done, live (0.5.0): climb up / vault over Elden Ring's ledges and Snake on its ladders with MGSV's own moves; Fulton of sleeping enemies done; cover not yet; full proxies experimental, off |
 | 7 | Windows players ([docs/WINDOWS.md](docs/WINDOWS.md)) | built, tested under Wine; not yet run on Windows |
 | 8 | Seamless Co-op | planned |
+| -- | D-Dog as a real battle buddy (orders on Elden Ring's enemies, its bite) | next: design study [docs/research/ddog.md](docs/research/ddog.md) |
+
+## What's new in 0.7.0
+
+From the player's 0.6.0 feedback ("plays great"; a silencer for the sleep pistol, the remaining rough edges), run live with both games:
+- **A silencer on the sleep pistol, and Elden Ring's enemies hear Snake.** The WU S.PISTOL carries MGSV's own suppressor (gauge,
+  wear, quiet shots, no muzzle flash); unsuppressed shots make Elden Ring's own AI sound, so the soldiers nearby come looking. A
+  suppressed dart sleeps one soldier of a group and the others don't notice; a rifle shot beside them starts the fight. The corner
+  says when the suppressor is worn out; a grace puts a new one on. With the Infinity Bandana MGSV never wears it (MGSV's rule).
+- **One press switches the quick item** (View + D-pad down): Elden Ring's "Auto" HUD swallowed the first press after a pause.
+- **The controls card** at Snake's first takeover (A closes it, View + D-pad up shows it again).
+- **Elden Ring's HP / FP / stamina bars** are hidden while you play Snake, back in Tarnished mode.
+- **Snake walks sooner after a ladder** (~0.08 s), MGSV's HUD back in 150 ms after a climb; **no Tarnished after a respawn** (he was
+  visible for up to ~4 s at the grace); **marks** over a character's real height; **no magenta / green tints** with the camera pushed
+  into Snake; **grenade and rocket models kept** across sessions (the first throw is MGSV's model); **a little more light** on Snake in
+  dark places; **D-Walker never glides** at a run's start.
+- **Backups and logs are pruned**: the newest 10 of `pr launch`'s own per game, the first, every pre-restore and every hand-made one
+  stay (`--keep-backups 0` keeps all).
+- Fixes from two code reviews and the integration run (resting at a grace now keeps Elden Ring's menu up until you leave it with the
+  bars hidden; a hand-made backup is never pruned; ...): [Changes](#changes).
+- Protocol v16: both plugins must come from this release.
 
 ## What's new in 0.6.0
 
@@ -680,6 +749,19 @@ From the feedback on the video ("Snake can't jump", "it switches back to the Tar
 - Protocol v15: both plugins must come from this release.
 
 ## Changes
+
+**0.7.0-alpha (2026-11-03).** The sleep pistol's suppressor and shots heard by Elden Ring's enemies (protocol v16:
+`kGuestSuppressorOn`, `kFireSuppressed`), the one-press quick item, the controls card, Elden Ring's bars hidden for Snake, the
+respawn's Tarnished hidden, real mark heights, no tints, kept projectile models, the ladder settle, D-Walker without the glide,
+pruned backups and logs ([What's new in 0.7.0](#whats-new-in-070)). Fixes of the round's code review: pruning only ever takes
+`pr launch`'s own backups with a launcher-made name, keeps the first per game in `backups/.first.json`, keeps everything on a bad
+`PHANTOMRING_KEEP_*` value and never follows a symlink; the AI-state getters byte-verified; mode heard's token hits after the shot's
+own hit and never on sleepers; darts quiet until the guest reports a suppressor; no false "worn out" on a weapon switch; the card
+only where it can be seen; no double switch after the wake press; the projectile store validated; never-wearing suppressors, every
+tranquilizer gun, partly-suppressed shotgun shots; D-Walker catching up when far behind. Found in the integration run and fixed:
+with the bars hidden Elden Ring's HUD signal read "hidden" all the time, so a rest at a grace ended after 3.5 s with its menu still up
+(Snake had the pad) -- now the menu keeps Elden Ring's controller until you leave it. Run live with both games on Elden Ring 1.17.2
+([docs/STATUS.md](docs/STATUS.md)).
 
 **0.6.0-alpha (2026-11-01).** Flasks as Snake, seamless ladders, paced climb-ups, D-Walker beside Snake, rail fences vaulted, muzzle
 flashes and projectile models on, deaths that keep the Tarnished hidden, Elden Ring's questions as menus, and the fixes of two code

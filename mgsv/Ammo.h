@@ -8,6 +8,7 @@
 // of the three weapon slots (TppEquip.GetAmmoInfo), and its result (OnResults, MGSV's Lua thread) applies everything.
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -28,4 +29,12 @@ namespace phantom::guest::ammo
 	// on the Lua thread with the next Tick's results (OnResults), never on the console's worker thread; `!ammo` shows the outcome.
 	std::string Describe();
 	std::string Drain();
+
+	// The local player's ammo component (Player.GetAmmoStockBySlot's way; vtable checked) and player index; nullopt and why.
+	struct ComponentRef
+	{
+		std::uintptr_t self{ 0 };
+		std::uint32_t  player{ 0 };
+	};
+	std::optional<ComponentRef> FindComponent(std::string& a_why);
 }

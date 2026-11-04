@@ -1,5 +1,7 @@
 #include "QuickItem.h"
 
+#include "Addresses.h"
+#include "Combat.h"
 #include "Config.h"
 #include "Game.h"
 #include "Hud.h"
@@ -8,8 +10,13 @@
 #include "Mem.h"
 #include "Params.h"
 #include "Puppet.h"
+#include "QuickItemLogic.h"
+#include "Singletons.h"
 
+#include <algorithm>
 #include <format>
+#include <optional>
+#include <vector>
 
 #include <windows.h>
 
@@ -48,6 +55,93 @@ namespace phantom::er::QuickItem
 		std::uint64_t         g_cycleRetried{ 0 };
 		std::uint64_t         g_uses{ 0 }, g_used{ 0 }, g_notUsed{ 0 }, g_refused{ 0 }, g_cycles{ 0 };
 		std::string           g_last;          // the last outcome (console)
+		// (0.7.0) Elden Ring's Auto HUD wakes on a D-pad press (its equipment slots fade out while you play): CSFeMan's auto-hide
+		// controller (fromsoftware-rs CSFeManImp +0x4E70 auto_hide_ctrl) holds a float timer per HUD element at +0x10 and a
+		// "shown" byte per element at +0x48 (CSFeMan +0x4EB8); live 2026-11-03 the equipment group, elements 5..10, went 0 -> 1
+		// on the first D-pad down after ~10 s idle (which switched nothing) and back to 0 when it faded. GameDataMan +0x58 ->
+		// GameSettings +9 hud_type: 0 off, 1 on, 2 auto (fromsoftware-rs HudType; the player's save: 2).
+		constexpr std::uint32_t kAutoHideShown = 0x4EB8;
+		constexpr int           kEquipFirst = 5, kEquipLast = 10;
+		constexpr std::uint64_t kWakePressMs = 70;
+		constexpr std::uint64_t kWakeGapMs = 170;  // the wake press, then a released frame or two, then the switch
+		std::uint64_t           g_wakeThenAt{ 0 };   // a switch press due then (after a wake press, or queued behind another press)
+		bool                    g_afterWake{ false };  // ...and it follows a wake press: re-read first (the wake may have switched)
+		int                     g_switchesQueued{ 0 }; // more of the player's switches waiting behind that one (review 0.7.0)
+		std::uint64_t           g_lastCyclePress{ 0 }; // when the last switch / wake press went to Elden Ring
+		std::uint64_t           g_wakes{ 0 }, g_wakeSwitched{ 0 }, g_queued{ 0 };
+		constexpr int           kMaxQueued = 3;
+		constexpr std::uint64_t kReleaseGapMs = 60;  // a press, then this long released before the next (ErPresses has no release edge)
+
+		// true: the Auto HUD has its equipment slots hidden (a D-pad press would only show them); false: shown, or not Auto;
+		// nullopt: unreadable (no wake: the old retry covers it).
+		std::optional<bool> AutoHudHidden()
+		{
+			auto* gdm = Addr().Instance(A::GameDataMan);
+			auto* settings = gdm ? SafePtr(gdm + 0x58) : nullptr;
+			const auto hudType = settings ? SafeRead<std::uint8_t>(settings + 9) : std::nullopt;
+			if (!hudType || *hudType > 2) {
+				return std::nullopt;
+			}
+			if (*hudType != 2) {
+				return false;  // On: always shown; Off: never (a press switches without showing anything)
+			}
+			auto* slot = SingletonSlot("CSFeMan");
+			auto* fe = slot ? SafePtr(slot) : nullptr;
+			if (!fe || game::RttiName(fe) != "CS::CSFeManImp") {
+				return std::nullopt;
+			}
+			std::uint8_t shown[16]{};
+			if (!SafeReadBytes(fe + kAutoHideShown, shown, sizeof(shown))) {
+				return std::nullopt;
+			}
+			for (int i = kEquipFirst; i <= kEquipLast; ++i) {
+				if (shown[i] > 1) {
+					return std::nullopt;  // not the flags we know
+				}
+				if (shown[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+
+		// (0.7.0) A spirit ash pressed: what came of it (quickitem::SpiritCheck).
+		std::uint64_t         g_spiritAt{ 0 };
+		int                   g_spiritCount0{ -1 };
+		std::vector<std::uint64_t> g_spiritAllies0;  // non-hostile characters near the Tarnished at the press
+		std::uint64_t         g_spiritsSummoned{ 0 }, g_spiritsRefused{ 0 };
+
+		// CSFeMan's front-end values: summoned_spirit_ash_count (fromsoftware-rs FrontEndViewValues +0x4D58, CSFeMan +0x80); -1 unreadable.
+		int SpiritCount()
+		{
+			auto* slot = SingletonSlot("CSFeMan");
+			auto* fe = slot ? SafePtr(slot) : nullptr;
+			if (!fe || game::RttiName(fe) != "CS::CSFeManImp") {
+				return -1;
+			}
+			const auto n = SafeRead<std::int32_t>(fe + 0x80 + 0x4D58).value_or(-1);
+			return n >= 0 && n <= 16 ? n : -1;
+		}
+
+		// Characters near the Tarnished that are no enemy of his (a spirit is his ally): handles.
+		std::vector<std::uint64_t> AlliesNear(const Frame& a_f)
+		{
+			std::vector<std::uint64_t> out;
+			if (!a_f.player) {
+				return out;
+			}
+			const Vec3 me = game::Position(a_f.player);
+			const auto myTeam = SafeRead<std::uint8_t>(a_f.player.chr + game::kChrTeam).value_or(0);
+			for (const auto& ch : game::Characters(48)) {
+				if (ch.isPlayer || ch.chr == a_f.player.chr || ch.dead || Length(ch.pos - me) > 12.0f) {
+					continue;
+				}
+				if (!Combat::HostileToPlayer(a_f, ch.team) || ch.team == myTeam) {
+					out.push_back(ch.handle);
+				}
+			}
+			return out;
+		}
 
 		bool Is(const std::uint8_t* a_obj, int a_slot, std::string_view a_name, std::string& a_why, std::string_view a_where)
 		{
@@ -172,6 +266,11 @@ namespace phantom::er::QuickItem
 			}
 			InputBridge::PressErButtons(c.flaskErUse, static_cast<unsigned>(c.flaskPressMs));
 			g_tracker.Begin(SlotOf(r), r.goods.consume, ::GetTickCount64());
+			if (r.goods.menuType == quickitem::kMenuSpiritAshes) {
+				g_spiritAt = ::GetTickCount64();
+				g_spiritCount0 = SpiritCount();
+				g_spiritAllies0 = AlliesNear(a_f);
+			}
 			g_trackName = name;
 			Log::Info("flask: {} -> the hidden Tarnished presses his item button ({:#06x}, {} ms): {}; HP {}/{}", a_how, c.flaskErUse, c.flaskPressMs, Describe(r),
 				game::Hp(a_f.player), game::MaxHp(a_f.player));
@@ -185,10 +284,41 @@ namespace phantom::er::QuickItem
 				return;
 			}
 			++g_cycles;
-			InputBridge::PressErButtons(c.flaskErCycle, static_cast<unsigned>(c.flaskPressMs));
-			g_cycleAt = ::GetTickCount64();
+			const auto now = ::GetTickCount64();
+			// Review 0.7.0: a press still held for Elden Ring (or a wake's switch still to come) would merge with this one (ErPresses only
+			// raises a deadline, no release in between): one switch for two presses. Queue it behind, released in between.
+			if (g_wakeThenAt || (g_lastCyclePress && now - g_lastCyclePress < static_cast<std::uint64_t>(c.flaskPressMs) + kReleaseGapMs)) {
+				if (!g_wakeThenAt) {
+					g_wakeThenAt = g_lastCyclePress + static_cast<std::uint64_t>(c.flaskPressMs) + kReleaseGapMs;
+					g_afterWake = false;
+				} else if (g_switchesQueued < kMaxQueued) {
+					++g_switchesQueued;
+				} else {
+					Log::Info("flask: {} (next quick item) -- {} switches already waiting: this one dropped", a_how, g_switchesQueued + 1);
+					return;
+				}
+				++g_queued;
+				Log::Info("flask: {} -> queued behind the switch still pressed ({} waiting)", a_how, g_switchesQueued + 1);
+				return;
+			}
 			g_cycleFrom = Read(a_f).selected;
 			g_cycleRetries = 0;
+			// (0.7.0) Elden Ring's "Auto" HUD with its equipment slots faded out: its first D-pad press only brings them back
+			// (live 2026-11-03, the Tarnished's own press too: the slots showed, the item stayed). Then a short wake press first, and the
+			// switch kWakeGapMs later -- one press of the player's switches.
+			const auto hidden = c.flaskWakeHud ? AutoHudHidden() : std::nullopt;
+			if (hidden && *hidden) {
+				++g_wakes;
+				InputBridge::PressErButtons(c.flaskErCycle, static_cast<unsigned>(kWakePressMs));
+				g_lastCyclePress = now;
+				g_wakeThenAt = now + kWakeGapMs;
+				g_afterWake = true;
+				g_cycleAt = 0;
+				Log::Info("flask: {} -> Elden Ring's Auto HUD has its equipment slots hidden: a wake press, the switch {} ms later", a_how, kWakeGapMs);
+				return;
+			}
+			InputBridge::PressErButtons(c.flaskErCycle, static_cast<unsigned>(c.flaskPressMs));
+			g_cycleAt = g_lastCyclePress = now;
 			Log::Info("flask: {} -> the hidden Tarnished's next quick item ({:#06x})", a_how, c.flaskErCycle);
 		}
 	}
@@ -291,16 +421,42 @@ namespace phantom::er::QuickItem
 			}
 		}
 		const auto now = ::GetTickCount64();
+		if (g_wakeThenAt && now >= g_wakeThenAt) {
+			// The switch after the wake press (Next), or one queued behind the last press.
+			g_wakeThenAt = 0;
+			const auto r = Read(a_f);
+			if (g_afterWake && r.valid && g_cycleFrom >= 0 && r.selected >= 0 && r.selected != g_cycleFrom) {
+				// Review 0.7.0: the wake press switched by itself (the slots were still showing after all): a second press would
+				// switch twice.
+				++g_wakeSwitched;
+				Log::Info("flask: the wake press switched by itself (slot {} -> {}) -- no second press", g_cycleFrom, r.selected);
+			} else {
+				if (!g_afterWake) {
+					g_cycleFrom = r.selected;
+					g_cycleRetries = 0;
+				}
+				InputBridge::PressErButtons(c.flaskErCycle, static_cast<unsigned>(c.flaskPressMs));
+				g_lastCyclePress = now;
+				Log::Info("flask: the switch press {} ({:#06x})", g_afterWake ? "after the wake" : "queued behind the last one", c.flaskErCycle);
+			}
+			g_afterWake = false;
+			g_cycleAt = now;
+			if (g_switchesQueued > 0) {
+				--g_switchesQueued;
+				g_wakeThenAt = now + static_cast<std::uint64_t>(c.flaskPressMs) + kReleaseGapMs;
+			}
+		}
 		if (g_cycleAt && now - g_cycleAt >= kCycleCheckMs) {
 			g_cycleAt = 0;
 			const auto r = Read(a_f);
 			// Not while a use is being followed (review of 0.6.0): the retry would switch the item under the use tracker, which then
 			// says "couldn't use it now" for a flask that was drunk.
-			if (r.selected >= 0 && r.selected == g_cycleFrom && g_cycleRetries == 0 && !g_tracker.Pending() && OtherItems(a_f) && !Refusal(a_f)) {
+			if (r.selected >= 0 && r.selected == g_cycleFrom && g_cycleRetries == 0 && !g_wakeThenAt && !g_tracker.Pending() && OtherItems(a_f) &&
+				!Refusal(a_f)) {
 				++g_cycleRetries;
 				++g_cycleRetried;
 				InputBridge::PressErButtons(c.flaskErCycle, static_cast<unsigned>(c.flaskPressMs));
-				g_cycleAt = now;
+				g_cycleAt = g_lastCyclePress = now;
 				Log::Info("flask: the quick slot is still {} -- one more press", r.selected);
 				return;
 			}
@@ -309,6 +465,41 @@ namespace phantom::er::QuickItem
 				Hud::Notify(quickitem::CycleText(r.goods.id, r.quantity, empty), empty ? Hud::Tone::kWarn : Hud::Tone::kInfo);
 			}
 			Log::Info("flask: the quick item is now {}", Describe(r));
+		}
+		// (0.7.0) Spirit ashes: summoned, or refused cleanly (the corner says why it may be).
+		if (g_spiritAt && (a_f.loading || a_f.dead || a_f.dying || Puppet::Dying() || !Puppet::Active())) {
+			// Review 0.7.0: a death, a load or Snake stopping (Tarnished mode) ends the watch: its "refused" over a death misled.
+			g_spiritAt = 0;
+			g_last = "spirit ashes: watch dropped";
+			Log::Info("flask: spirit-ash watch dropped (death / load / Snake stopped) -- no verdict");
+		}
+		if (g_spiritAt) {
+			const auto now2 = ::GetTickCount64();
+			int        newAllies = 0;
+			for (const auto h : AlliesNear(a_f)) {
+				newAllies += std::ranges::find(g_spiritAllies0, h) == g_spiritAllies0.end() ? 1 : 0;
+			}
+			const int count = SpiritCount();
+			switch (quickitem::SpiritCheck(g_spiritCount0, count, newAllies, now2 - g_spiritAt)) {
+			case quickitem::SpiritOutcome::kSummoned:
+				++g_spiritsSummoned;
+				Hud::Notify("Spirit ashes: summoned -- they fight beside Snake", Hud::Tone::kGood);
+				g_last = "spirit ashes summoned";
+				Log::Info("flask: spirit ashes summoned {} ms after the press (Elden Ring's HUD counts {} -> {} spirits, {} new allies near the Tarnished)",
+					now2 - g_spiritAt, g_spiritCount0, count, newAllies);
+				g_spiritAt = 0;
+				break;
+			case quickitem::SpiritOutcome::kRefused:
+				++g_spiritsRefused;
+				Hud::Notify("Spirit ashes: can't be summoned here (no summoning icon, or not enough FP / HP)", Hud::Tone::kWarn);
+				g_last = "spirit ashes refused";
+				Log::Info("flask: spirit ashes -- no spirit {} ms after the press (HUD count {} -> {}, no new ally): Elden Ring refused the summon here", now2 - g_spiritAt,
+					g_spiritCount0, count);
+				g_spiritAt = 0;
+				break;
+			case quickitem::SpiritOutcome::kWaiting:
+				break;
+			}
 		}
 		if (!g_tracker.Pending()) {
 			return;
@@ -327,7 +518,9 @@ namespace phantom::er::QuickItem
 			// Not a consumable (spirit ashes): nothing to count, and Elden Ring may still refuse it (no summoning area): "pressed",
 			// never "used" (review of 0.6.0).
 			++g_used;
-			Hud::Notify(std::format("{}: pressed", g_trackName), Hud::Tone::kInfo);
+			if (!g_spiritAt) {
+				Hud::Notify(std::format("{}: pressed", g_trackName), Hud::Tone::kInfo);
+			}
 			g_last = std::format("{} pressed (not counted)", g_trackName);
 			Log::Info("flask: {} pressed (not a consumable: nothing to count, Elden Ring may still refuse it)", g_trackName);
 			break;
@@ -371,9 +564,13 @@ namespace phantom::er::QuickItem
 		}
 		const auto& c = Cfg();
 		return std::format("[Flask] {} (View + {} uses, View + {} next; Elden Ring's buttons {:#06x} / {:#06x}, {} ms); presses {} ({} used, {} not used, {} refused), "
-		                   "cycles {} ({} pressed twice); last: {}; now {}",
+		                   "cycles {} ({} pressed twice, {} after a wake of the Auto HUD ({} switched by the wake itself), {} queued; it is {}); spirit ashes {} summoned, "
+		                   "{} refused; last: {}; now {}",
 			c.flask ? "on" : "off", c.flaskButtonName, c.flaskCycleName, c.flaskErUse, c.flaskErCycle, c.flaskPressMs, g_uses, g_used, g_notUsed, g_refused, g_cycles,
-			g_cycleRetried,
+			g_cycleRetried, g_wakes, g_wakeSwitched, g_queued, [] {
+				const auto h = AutoHudHidden();
+				return h ? (*h ? "hiding its equipment slots" : "showing them (or not Auto)") : "unreadable";
+			}(), g_spiritsSummoned, g_spiritsRefused,
 			g_last.empty() ? "-" : g_last, Describe(Read(a_f)));
 	}
 }

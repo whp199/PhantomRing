@@ -1,6 +1,7 @@
 #include "Projectiles.h"
 
 #include "Config.h"
+#include "Ini.h"
 #include "Log.h"
 #include "ProjectileLogic.h"
 #include "Puppet.h"
@@ -9,7 +10,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -55,6 +60,153 @@ namespace phantom::er::Projectiles
 
 		std::string KeyName(std::uint64_t a_key) { return std::format("{} {}", IsThrow(a_key) ? "throw equip" : "round bullet", a_key & 0xFFFFFFFF); }
 
+		// (0.7.0) The templates kept across sessions ([Render] projectile_store; PhantomRingHost.projectiles next to the DLL): the
+		// first throw of each item in a session was the simple shape, its model learned only from it. What is kept is no MGSV
+		// asset -- the guest's content hashes of the meshes and textures (the same in every session), the material id and each
+		// part's matrix in the projectile's frame; the meshes themselves still come from the guest when MGSV draws them (right
+		// after the release, or in Snake's hand before it), and until they are on the GPU the ball is drawn as before.
+		constexpr std::uint32_t kStoreMagic = 0x4A505250;  // "PRPJ"
+		constexpr std::uint32_t kStoreVersion = 1;
+		bool                    g_loaded{ false };
+		std::set<std::uint64_t> g_fromDisk;     // keys loaded from the store (logged the first time one is drawn)
+		std::set<std::uint64_t> g_drawnFromDisk;
+		std::uint64_t           g_storeWrites{ 0 };
+		std::string             g_storeState{ "not read yet" };
+
+		std::filesystem::path StorePath() { return std::filesystem::path(ModuleDir()) / L"PhantomRingHost.projectiles"; }
+
+		template <class T>
+		void Put(std::string& a_out, const T& a_v)
+		{
+			a_out.append(reinterpret_cast<const char*>(&a_v), sizeof(T));
+		}
+		template <class T>
+		bool Get(const std::string& a_in, std::size_t& a_at, T& a_v)
+		{
+			if (a_at + sizeof(T) > a_in.size()) {
+				return false;
+			}
+			std::memcpy(&a_v, a_in.data() + a_at, sizeof(T));
+			a_at += sizeof(T);
+			return true;
+		}
+
+		// Locked.
+		void Save()
+		{
+			if (!Cfg().render.projectileStore) {
+				return;
+			}
+			std::string out;
+			Put(out, kStoreMagic);
+			Put(out, kStoreVersion);
+			Put(out, static_cast<std::uint32_t>(g_templates.size()));
+			for (const auto& [key, t] : g_templates) {
+				Put(out, key);
+				Put(out, t.extent);
+				Put(out, t.across);
+				Put(out, static_cast<std::uint8_t>(t.refused));
+				Put(out, t.at.x);
+				Put(out, t.at.y);
+				Put(out, t.at.z);
+				Put(out, static_cast<std::uint32_t>(t.parts.size()));
+				for (const auto& part : t.parts) {
+					Put(out, part.record);
+					Put(out, static_cast<std::uint32_t>(part.local.size()));
+					out.append(reinterpret_cast<const char*>(part.local.data()), part.local.size() * sizeof(float));
+				}
+			}
+			std::error_code ec;
+			const auto      path = StorePath();
+			auto            tmp = path;
+			tmp += L".tmp";
+			{
+				std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+				f.write(out.data(), static_cast<std::streamsize>(out.size()));
+				if (!f) {
+					g_storeState = std::format("could not write {}", tmp.string());
+					Log::Warn("projectiles: {}", g_storeState);
+					return;
+				}
+			}
+			std::filesystem::rename(tmp, path, ec);
+			if (ec) {
+				g_storeState = std::format("could not replace {}: {}", path.string(), ec.message());
+				Log::Warn("projectiles: {}", g_storeState);
+				return;
+			}
+			++g_storeWrites;
+			g_storeState = std::format("{} template(s) kept in {}", g_templates.size(), path.filename().string());
+			Log::Info("projectiles: {}", g_storeState);
+		}
+
+		// Locked; once. A store that doesn't read back exactly (another version, cut short) is ignored: learned again.
+		void Load()
+		{
+			if (g_loaded) {
+				return;
+			}
+			g_loaded = true;
+			if (!Cfg().render.projectileStore) {
+				g_storeState = "off ([Render] projectile_store)";
+				return;
+			}
+			std::ifstream f(StorePath(), std::ios::binary);
+			if (!f) {
+				g_storeState = "none yet (learned on the first throw of each item, then kept)";
+				return;
+			}
+			const std::string in((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+			std::size_t       at = 0;
+			std::uint32_t     magic = 0, version = 0, count = 0;
+			std::map<std::uint64_t, projectile::Template> loaded;
+			bool ok = Get(in, at, magic) && Get(in, at, version) && Get(in, at, count) && magic == kStoreMagic && version == kStoreVersion && count <= 256;
+			for (std::uint32_t i = 0; ok && i < count; ++i) {
+				std::uint64_t        key = 0;
+				projectile::Template t;
+				std::uint8_t         refused = 0;
+				std::uint32_t        parts = 0;
+				ok = Get(in, at, key) && Get(in, at, t.extent) && Get(in, at, t.across) && Get(in, at, refused) && Get(in, at, t.at.x) && Get(in, at, t.at.y) &&
+				     Get(in, at, t.at.z) && Get(in, at, parts) && parts >= 1 && parts <= projectile::kMaxParts;
+				t.refused = refused != 0;
+				// Review 0.7.0: a hand-edited or damaged store (a flipped bit inside the floats keeps the size right) is ignored whole:
+				// sizes in range, every number finite, and at least one matrix per part (0 used to emit a draw reading past the
+				// matrices).
+				const float limit = IsThrow(key) ? projectile::kMaxThrownAcross : projectile::kMaxRoundAcross;
+				ok = ok && std::isfinite(t.extent) && t.extent >= 0.0f && t.extent <= projectile::kMaxExtent && std::isfinite(t.across) &&
+				     (t.across < 0.0f || t.refused || t.across <= limit) && Finite(t.at);
+				for (std::uint32_t p = 0; ok && p < parts; ++p) {
+					projectile::Part part;
+					std::uint32_t    floats = 0;
+					ok = Get(in, at, part.record) && Get(in, at, floats) && floats >= 12 && floats % 12 == 0 && floats <= 12 * 256 &&
+					     at + floats * sizeof(float) <= in.size();
+					if (ok) {
+						part.local.resize(floats);
+						std::memcpy(part.local.data(), in.data() + at, floats * sizeof(float));
+						at += floats * sizeof(float);
+						ok = std::ranges::all_of(part.local, [](float v) { return std::isfinite(v); });
+						t.parts.push_back(std::move(part));
+					}
+				}
+				if (ok) {
+					loaded[key] = std::move(t);
+				}
+			}
+			if (!ok || at != in.size()) {
+				g_storeState = std::format("{} unreadable ({} bytes): ignored, learned again", StorePath().filename().string(), in.size());
+				Log::Warn("projectiles: {}", g_storeState);
+				return;
+			}
+			for (auto& [key, t] : loaded) {
+				g_fromDisk.insert(key);
+				Log::Info("projectiles: {} known from an earlier session: {} part(s), first mesh {:016x}{}", KeyName(key), t.parts.size(), t.parts.front().record.mesh,
+					t.refused ? " (refused: too big)" : t.across >= 0.0f ? std::format(", {:.2f} m across", t.across) : std::string());
+				g_templates[key] = std::move(t);
+			}
+			g_storeState = std::format("{} template(s) read from {}", loaded.size(), StorePath().filename().string());
+		}
+
+
 		// Locked. All its meshes uploaded; measures its real size the first time (a mis-learned gun or arm is refused here).
 		bool Ready(std::uint64_t a_key, projectile::Template& a_t)
 		{
@@ -84,9 +236,11 @@ namespace phantom::er::Projectiles
 					Log::Warn("projectiles: the mesh learned for {} is {:.2f} m across (a projectile is at most {:.1f}): not one -- the ball stays until another "
 					          "release learns one",
 						KeyName(a_key), a_t.across, limit);
+					Save();
 					return false;
 				}
 				Log::Info("projectiles: {}'s mesh measures {:.2f} m across{}", KeyName(a_key), a_t.across, anyBox ? "" : " (no mesh box: part origins only)");
+				Save();
 			}
 			return true;
 		}
@@ -101,6 +255,8 @@ namespace phantom::er::Projectiles
 					a_t.parts.front().record.mesh, a_t.extent);
 				g_templates[a_key] = std::move(a_t);
 				g_challengers.erase(a_key);
+				g_fromDisk.erase(a_key);
+				Save();
 				return;
 			}
 			auto signature = projectile::Signature(a_t);
@@ -124,6 +280,8 @@ namespace phantom::er::Projectiles
 				a_t.parts.front().record.mesh);
 			it->second = std::move(a_t);
 			g_challengers.erase(a_key);
+			g_fromDisk.erase(a_key);
+			Save();
 		}
 
 		// Locked, projectile_meshes on: this list's tagged draws for the newest unsettled release.
@@ -185,6 +343,7 @@ namespace phantom::er::Projectiles
 		if (g_pending.size() >= 16) {
 			g_pending.erase(g_pending.begin());
 		}
+		Load();
 		Release r;
 		r.pending.key = a_key;
 		r.pending.atMs = now;
@@ -216,6 +375,7 @@ namespace phantom::er::Projectiles
 		const bool  on = rc.projectileMeshes;
 		const bool  tagged = std::ranges::any_of(a_s.draws, [](const proto::DrawRecord& a_d) { return a_d.owner == proto::kOwnerProjectile; });
 		std::scoped_lock lock(g_lock);
+		Load();
 		if (tagged) {
 			++g_listsWithTags;
 			if (on) {
@@ -246,6 +406,10 @@ namespace phantom::er::Projectiles
 						a_s.matrices);
 					g_placedNow.insert(KeyOf(source, f.id));
 					++g_placed;
+					if (g_fromDisk.contains(f.key) && g_drawnFromDisk.insert(f.key).second) {
+						Log::Info("projectiles: {} drawn with the mesh kept from an earlier session ({:.2f} s after its release: no learning needed)", KeyName(f.key),
+							f.age);
+					}
 				}
 			}
 		}
@@ -267,12 +431,13 @@ namespace phantom::er::Projectiles
 	{
 		std::scoped_lock lock(g_lock);
 		std::string out = std::format("projectile meshes {}: {} releases, {} lists with tagged draws, {} templates learned ({} kept; {} agreeing learns, {} replaced), "
-		                              "{} refused, {} never flew, {} unclaimed, {} handed back to Snake (off); {} copies drawn with a mesh",
+		                              "{} refused, {} never flew, {} unclaimed, {} handed back to Snake (off); {} copies drawn with a mesh | store: {} ({} writes)",
 			Cfg().render.projectileMeshes ? "on" : "off", g_releases, g_listsWithTags, g_learned, g_templates.size(), g_kept, g_replaced, g_rejected, g_unconfirmed,
-			g_unclaimed, g_handedBack, g_placed);
+			g_unclaimed, g_handedBack, g_placed, g_storeState, g_storeWrites);
 		for (auto& [key, t] : g_templates) {
 			const bool ready = Ready(key, t);
-			out += std::format("\n {}: {} part(s), first mesh {:016x}, {}, {}", KeyName(key), t.parts.size(), t.parts.front().record.mesh,
+			out += std::format("\n {}{}: {} part(s), first mesh {:016x}, {}, {}", KeyName(key), g_fromDisk.contains(key) ? " (kept from an earlier session)" : "",
+				t.parts.size(), t.parts.front().record.mesh,
 				t.across >= 0.0f ? std::format("{:.2f} m across", t.across) : std::string("size not measured yet"),
 				t.refused ? "REFUSED (too big)" : ready ? "mesh ready" : "mesh not on the GPU");
 		}

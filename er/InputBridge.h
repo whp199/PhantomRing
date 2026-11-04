@@ -65,6 +65,12 @@ namespace phantom::er
 		// Running counts of the quick item's shift presses ([Flask], er/Chord.h): View + [Flask] button (use), View + cycle_button (next).
 		std::uint32_t ItemUses();
 		std::uint32_t ItemCycles();
+		// (0.7.0) View + [Overlay] controls_card_button (D-pad up): the controls card again (er/Hud.h).
+		std::uint32_t HelpPresses();
+		// (0.7.0) Game thread, every frame: the controls card is on Snake's screen and open. A pressed meanwhile closes it (counted
+		// here) and reaches neither game until let go, so the A that closes the card doesn't also crouch Snake.
+		void          SetCardUp(bool a_up);
+		std::uint32_t CardCloses();
 		// Elden Ring has the pad for an interaction that has not hidden its HUD yet (er/Interaction.h ButtonsOnly):
 		// it gets only kInteractionButtons, neutral sticks and triggers. Used with SetMode(false, true).
 		inline constexpr std::uint16_t kInteractionButtons = 0xF000 /* A B X Y */ | 0x000F /* D-pad */ | 0x0030 /* Start, View */;

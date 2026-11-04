@@ -20,7 +20,11 @@ can be checked against the debug skeleton.
 Combat by hand (docs/COMBAT.md), through the guest console (`tools/pr lua '!<cmd>'`):
     !walk on|off        Snake walks his circle / stands still facing where he faces (aim with the ER camera)
     !autofire on|off    the periodic fire/buddy-fire events
-    !fire <kind> [n] [yaw_deg] [pitch_deg] [share]   kind: lethal|handgun|rifle|sniper|buck|tranq|stun|explosive|rocket|grenade
+    !fire <kind> [n] [yaw_deg] [pitch_deg] [share] [suppressed|loud]   kind: lethal|handgun|rifle|sniper|buck|tranq|stun|explosive|
+                        rocket|grenade; (v16) suppressed: Fire b carries FIRE_SUPPRESSED (a shot through a working suppressor);
+                        without either word a shot is suppressed while !suppressor is on (and wears it)
+    !suppressor on [shots]|off   (v16) GuestFlags.SuppressorOn: the weapon in hand has a working suppressor, worn out after that
+                        many suppressed shots (default 4; 0 = never); the flag drops right after the shot that wears it out
     !cqc <punch|kick|throw|choke>            a strike 1 m in front of Snake
     !grab <grab|hold|throw|choke|interrogate|release>   (v13) kGEvCqc: a CQC hold/throw as the guest reads it from MGSV's pad
                                              (Snake's feet and facing; the host picks the Elden Ring enemy in reach)
@@ -248,6 +252,7 @@ class FakeGuest:
 		self.next_flame = 0.0
 		self.nvg = False          # v10: !nvg on|off -> GuestFlags.Nvg
 		self.binoculars = False   # v13: !binoculars on|off -> GuestFlags.Binoculars
+		self.suppressor = None    # v16: !suppressor on [shots] -> shots left before it wears out (0 = never); None = no suppressor
 		self.parked = False       # v10: kHEvTarnished a=1 -> Snake parks (no walking, no autofire) until a=0
 		self.climb = None         # v15: kHEvClimb a=1 -> {"down", "speed", "since", "phase"} until a=0 (GuestFlags.Climbing)
 		self.mantle = None        # v15: kHEvMantle -> {"vault", "height", "start", "end"} (GuestFlags.Mantling from start to end)
@@ -513,6 +518,8 @@ class FakeGuest:
 			flags |= GuestFlags.Nvg
 		if self.binoculars:
 			flags |= GuestFlags.Binoculars | GuestFlags.FirstPerson  # MGSV's BINOCLE status is first person too (mgsv/Frame.cpp)
+		if self.suppressor is not None:
+			flags |= GuestFlags.SuppressorOn  # v16: the weapon in hand has a working suppressor
 		if climbing and self.ready():
 			flags |= GuestFlags.Climbing
 		if mantling and self.ready():
@@ -620,7 +627,7 @@ class FakeGuest:
 			return 1, str(e)
 
 	def combat_command(self, w: list[str]) -> tuple[int, str]:
-		usage = ("fake guest commands: !status !walk on|off !autofire on|off !fire <kind> [n] [yaw] [pitch] [share] !share <s> !move <speed> [yaw] "
+		usage = ("fake guest commands: !status !walk on|off !autofire on|off !fire <kind> [n] [yaw] [pitch] [share] [suppressed|loud] !suppressor on [shots]|off !share <s> !move <speed> [yaw] "
 			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !grab <action> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
 			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off !binoculars on|off "
@@ -748,7 +755,16 @@ class FakeGuest:
 		if w[0] in ("walk", "autofire") and len(w) > 1:
 			setattr(self, w[0], w[1] == "on")
 			return 0, f"{w[0]} {'on' if getattr(self, w[0]) else 'off'}"
+		if w[0] == "suppressor":
+			if len(w) > 1 and w[1] == "on":
+				self.suppressor = int(w[2]) if len(w) > 2 else 4
+				return 0, f"suppressor on (GuestFlags.SuppressorOn), worn out after {self.suppressor or 'no'} suppressed shots"
+			self.suppressor = None
+			return 0, "suppressor off"
 		if w[0] == "fire":
+			words = [x for x in w if x not in ("suppressed", "loud")]
+			quiet = "suppressed" in w or ("loud" not in w and self.suppressor is not None)
+			w = words
 			kind = w[1] if len(w) > 1 else "lethal"
 			if kind not in FIRE_KINDS:
 				return 1, f"kinds: {' '.join(FIRE_KINDS)}"
@@ -758,12 +774,18 @@ class FakeGuest:
 			pitch = math.radians(float(w[4]) if len(w) > 4 else 0.0)
 			d = (math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch))
 			share = float(w[5]) if len(w) > 5 else self.share
+			worn = False
 			for _ in range(max(1, min(n, 50))):
-				self.push_event(GuestEventType.Fire, a=WEAPON_ID | (int(ammo) << 16), b=pellets, v0=chest, v1=d,
+				self.push_event(GuestEventType.Fire, a=WEAPON_ID | (int(ammo) << 16), b=pellets | (proto.FIRE_SUPPRESSED if quiet else 0), v0=chest, v1=d,
 					pad0=bullet | (0x80000000 if explosive else 0), pad1=int(round(share * 10000)))
 				self.stats["fireSent"] += 1
 				self.spend_round()
-			return 0, f"fired {n} x {kind} (bullet {bullet}, ammo {ammo.name}, pellets {pellets}, share {share:.3f}) dir ({d[0]:.2f}, {d[1]:.2f}, {d[2]:.2f})"
+				if quiet and self.suppressor:
+					self.suppressor -= 1
+					if self.suppressor == 0:
+						self.suppressor, quiet, worn = None, False, True  # MGSV: the spent suppressor comes off; the next shots are loud
+			return 0, (f"fired {n} x {kind} (bullet {bullet}, ammo {ammo.name}, pellets {pellets}, share {share:.3f}{', suppressed' if quiet or worn else ''})"
+				f" dir ({d[0]:.2f}, {d[1]:.2f}, {d[2]:.2f})" + (" -- the suppressor wore out (GuestFlags.SuppressorOn off)" if worn else ""))
 		if w[0] == "cqc":
 			kinds = {k.name.lower(): k for k in proto.MeleeKind}
 			kind = kinds.get(w[1] if len(w) > 1 else "punch")
