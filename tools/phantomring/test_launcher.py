@@ -312,7 +312,8 @@ def main() -> int:
 	except Exception as e:  # noqa: BLE001
 		gone = [f"raised {e!r}"]
 	finally:
-		os.chmod(ps / "20260103-000000/er", 0o700)
+		if (ps / "20260103-000000/er").is_dir():  # root (CI's container) removes it despite 0o500
+			os.chmod(ps / "20260103-000000/er", 0o700)
 	check(gone == ["20260104-000000"] or (os.geteuid() == 0 and gone == ["20260103-000000", "20260104-000000"]),
 		"a symlink is left alone, a folder that can't be removed is logged and skipped, the rest still goes", gone)
 	check(elsewhere.is_dir() and (ps / "20260102-000000").is_symlink(), "...and the symlink's target is untouched")
