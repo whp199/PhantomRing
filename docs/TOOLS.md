@@ -92,6 +92,23 @@ the step guard's point (the dog's published place through its draws' anchor, `fr
 (`buddyguard::Act`), whether each is in view, Snake's Elden Ring place and the old estimate from the draws' matrices; join it with the
 guest's `!dog placetrace on` CSV by `guestFrame`). Leave both traces off for play: they grow ~20 MB an hour.
 With fake_mgsv `--buddy dog`: `!dog attack target <style> full` takes the host's pick (kActorDogTarget); `!order 10` is Bark.
+Quiet and the grace rest (docs/HOST.md "Quiet in Elden Ring", "Resting at a grace with the buddy"; on by default since 0.9.0, her orders
+opt-in): `quiet orders on|off` (her pick, reticle and LB hint: Fire / Take aim), `quiet on|off` (the layer: enabled and posts together),
+`quiet all on|off` (everything, orders included) and `grace on|off` for a session; `quiet pick` (U14's dry run: every character within 80 m and why he is or isn't her pick, the
+PlayerIns NPCs included; nothing is ordered, shot or marked), `quiet test boss`, `quiet post now|none` (`none` fades her out if she is in
+view: the cloak's test), `quiet shoot [0xHANDLE] [lethal|tranq|heavy]` (a Hit as kGEvQuietShot brings it, from her post), `quiet survey
+<label>` / `grace survey [all] <label>` (the post rule's / the seat rule's every ray written to `PhantomRingQuietRays-N.json` /
+`PhantomRingGraceRays-N.json` next to the host DLL: tests/fixtures/quiet/), `quiet record on` / `grace record on` (each search's rays),
+`grace fade` (Elden Ring's InGame fade plate now). The host logs `grace: U12 rest #N -- black from +A to +B ms after the press` for every
+rest. With fake_mgsv `--buddy quiet --no-walk` (then `!autofire off` at once): `!quiet post on`, `!quiet seat on` make it hold her at
+the host's post and seat and echo them; `!quiet shot pick full` with `!quiet weapon lethal|tranq|heavy` sends her Ordered, Hit and
+Released on the host's pick. `!cam <phase> <dist> <height> <look>` fixes the fake camera (the rest's view: behind Snake, toward the
+grace; the phase is MGSV's, so turn it once and read `pr er cam` to find Elden Ring's heading).
+The 0.9.0 integration's helpers (both games): `pr lua "Player.RequestToSetCameraRotation{rotX=<pitch>, rotY=<MGSV yaw from
+\`combat aimat\`>, interpTime=0}; return 1"` turns MGSV's camera onto an Elden Ring point; Elden Ring's map (View tapped) > Y lists the
+sites of grace by region (LB / RB), A travels -- how the round moved between Rampart Tower, Gatefront and The First Step; `puppet off`,
+`call setpos x y z`, `puppet auto` puts Snake at a grace's prompt (Elden Ring's coordinates move with its world shifts: find the grace
+again with `geom all 300 AEG099_060`). `menu open` / `menu auto` give Elden Ring the pad when a screen is up that the host missed.
 The 0.8.0 polish's measures (docs/HOST.md "D-Dog in Elden Ring"): orders through MGSV's call menu from the virtual pad (`!callmenu on
 ordered`, then `pr er "press lb 3000 0 0 32767 0"`, `press lb 3000`, `press lb+r3 3000`, `press lb 3000`, `press none 50` -- each press
 long enough to overlap the next one's start, since `pr er` takes ~0.3 s to run), the dog's one-frame jumps (`!dog blip 7 0 1`, the
@@ -201,6 +218,16 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
   `kBuddyEngaged` coming and going are printed (docs/research/ddog.md §4).
 - HostState carries `HostFlags.DogLayer` (v17, the host's `[Dog]` on: the real guest takes D-Dog's attack orders over only then);
   `pr er doglayer 0|1` clears / sets it.
+- Quiet and the grace rest (v18, docs/research/quiet.md §4): `pr er quietlayer 0|1` (`HostFlags.QuietLayer`, off by default as the
+  real host's `[Quiet]`), `pr er actor 0|1 quiettarget|noquiettarget|quietthreat|noquietthreat` (`kActorQuietTarget` /
+  `kActorQuietThreat`, at most one record each), `pr er post <dx> <dz> [yaw_deg] | none` (her post dx, dz m from Snake, `buddyPostSeq`
+  bumped; `none` = on the move, NaN), `pr er grace 1 [<dx> <dz> [yaw_deg]] | 1 none | 0` (a rest: `kHostAtGrace`, `graceCentre` 1.2 m
+  ahead of Snake, the seat dx, dz m from him -- 1.5, 1.5 by default -- facing the grace, `graceSeq` bumped and kHEvRested 0 sent as
+  the real host does; `none` = a rest without a seat, a talk; `0` = left the grace), `pr er hoststate` (what is published). Posts and
+  seats are kept where they are in Elden Ring and mapped to MGSV's world every frame. kGEvQuietShot (phase, weapon, attack id, share or
+  the lost reason, handle), Quiet's orders (her weapon from `pad[0]`) and the guest's echoes (`buddyPostSeq` / `graceSeqSeated`, the
+  AtPost / Seated / Cloaked / CanRest / QuietMarked / QuietCover bits, her weapon) are printed as they change. `pr status` shows the
+  grace, the post and the echoes once a seq is non-zero.
 
 **fake_mgsv**:
 - Waits for a host session, then publishes Snake walking a circle in a 10 m sandbox (treadmill warp kept out of the odometer), plus the pad's left stick.
@@ -231,6 +258,15 @@ All four stand-ins (`fake-er`, `record` as hosts; `fake-mgsv`, `replay` as guest
   <mode>`. `!order 9` makes the dog wait where it is in Snake's odometer frame (as the real guest's treadmill keeps it; nothing moved
   by Elden Ring's slip), `!order 8` / `16` lets it follow again. `!dog blip <dx> <dz> [frames] [dy]` puts the dog's place and its
   draws off by that much for N frames (1 by default) and back; `!dog move <dx> <dz>` for good (it waits there).
+- Quiet (v18, docs/research/quiet.md; with `--buddy quiet` or `!buddy quiet`, object id 0x2400 as MGSV's): `!quiet weapon
+  <lethal|tranq|heavy|unknown>` (buddyFlags bits 17-19 every frame; `!order 1..3` carry it in `pad[0]`, b = 3), `!quiet post on|off`
+  (held at the host's post while `HostFlags.QuietLayer` is set, `kBuddyAtPost` + `buddyPostSeq` echoed; no post = `kBuddyCloaked`),
+  `!quiet seat on|off` (`kBuddyCanRest`; seated at the host's grace seat while `kHostAtGrace`, `kBuddySeated` + `graceSeqSeated`
+  echoed), `!quiet cloak|cover|marked on|off`, `!quiet hit <s>` (Ordered -> Hit, 1 s by default), `!quiet shot [pick|threat|nearest|
+  none|0xHANDLE] [full|ordered|hit|released|lost|refused] [mgsv|target|cancelled] [weapon]` (kGEvQuietShot on `kActorQuietTarget` by
+  default; full = Ordered with `kBuddyEngaged`, Hit, Released 0.3 s later; lost = Ordered, Lost 0.5 s later with the reason; the
+  attack id 290 / 291 / 292 and MGSV's share 0.9615 / 0.4615 / 1.4615 by weapon), `!quiet status`. The host's picks are logged as
+  they change.
 - `!binoculars on|off` (v13) sets `kGuestBinoculars` + `kGuestFirstPerson`: the real Elden Ring host then marks the characters
   near its camera's centre (docs/HOST.md "Marking"; `pr er 'mark binoculars on'` does the same without any guest flag).
 - Answers `pr lua` (and `!status`) through a tiny Lua subset: `return <exprs>` and `vars.x = <expr>`, with `vars.*`, `BuddyType.*`, `math.*`, `tostring`, `..`, `~=`, and/or/not.
@@ -273,7 +309,7 @@ What each check needs, on a fresh clone:
 | `test_release.py` | `build/` for the package checks, MinGW objdump | package checks skipped |
 | `test_layout.py`, `test_plugins.py` | `build/` (MinGW), wine | fails |
 | `check_host`, `check_guest`, `check_windows` | `build/`, wine (`WINEPREFIX=$(mktemp -d)` keeps them off your prefix; `xvfb-run` on a machine with no display) | fails |
-| `check_guest`'s `test_guest_pump` | `-DPHANTOM_LUA51_SRC=<lua-5.1.5>/src` (the stock Lua 5.1.5 sources) | skipped, with a message |
+| `check_guest`'s `test_guest_pump` | `-DPHANTOM_LUA51_SRC=<lua-5.1.5>/src` (the stock Lua 5.1.5 sources; CI fetches lua.org's tarball, sha256-pinned) | skipped, with a message |
 | `check_host`'s real-regulation checks | `build/er_params`, extracted by `tools/re/er_params.py` (needs an installed Elden Ring and `FSRS_DIR` = a fromsoftware-rs checkout) | skipped |
 | `test_launcher.py --machine` | Steam with both games installed | - |
 

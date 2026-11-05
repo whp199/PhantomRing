@@ -1,7 +1,9 @@
 #include "Pump.h"
 #include "ActorProxy.h"
+#include "Quiet.h"
 
 #include "Addresses.h"
+#include "BuddyLogic.h"
 #include "Config.h"
 #include "FultonAnchor.h"
 #include "GuestScript.h"
@@ -83,6 +85,10 @@ namespace phantom::guest::pump
 			ULONGLONG   buddyHintAt{ 0 };    // D-Dog / Quiet: their skin last looked for near Snake
 			bool        noneLogged{ false }; // the buddy type went NONE without the iDroid: said once
 			ULONGLONG   otherSince{ 0 };     // ...another one has been active since then
+			ULONGLONG   noneSince{ 0 };      // kReady: MGSV's active buddy type has been NONE since then (0: it isn't)
+			std::uint32_t leaveSeq{ 0 };     // the last of MGSV's leave orders taken (state::LastBuddyLeave)
+			std::uint32_t leaveHeldSeq{ 0 }; // ...and the one ReviveBuddy last said it waits for
+			buddy::plan::DismissWatch dismiss;  // the iDroid's DISMISS told apart from a lost buddy (BuddyLogic.h)
 			bool        switching{ false };  // the buddy step runs for an in-session switch (Snake keeps the pad meanwhile)
 			ULONGLONG   switchStarted{ 0 };
 		} g_boot;
@@ -502,17 +508,51 @@ namespace phantom::guest::pump
 		// type every buddy path keys on becomes the new one, or "none" (no revival, no follow), until the next boot, which deploys
 		// the ini's again. A new buddy's place is learned anew: D-Horse is whistled over, D-Dog's and Quiet's skins are looked for
 		// near Snake (they answer no GetPosition either).
+		// A dismissal is told from a buddy MGSV lost by itself by MGSV's own leave order to it with the iDroid open (BuddyLogic.h: Quiet
+		// takes 12-13 s to go, longer than 0.9.0's 15 s window allowed with its 2 s confirmation), else by a NONE soon after the menu.
 		void AdoptBuddy(const lua::Ctx& a_ctx, ULONGLONG a_now, const state::LuaView& a_lua, const state::FrameView& a_fr)
 		{
+			namespace bp = buddy::plan;
 			auto& c = MutableCfg();
 			if (state::MenuOpen()) {
 				g_boot.menuSeenAt = a_now;
+			}
+			// MGSV's leave order to a buddy (its handler's detour noted it): the player's when an MGSV menu was open with it.
+			if (const auto leave = state::LastBuddyLeave(); leave.seq != g_boot.leaveSeq) {
+				g_boot.leaveSeq = leave.seq;
+				const bool menu = bp::LeaveFromMenu(leave.menu, leave.ms, g_boot.menuSeenAt);
+				g_boot.dismiss.OnLeave(leave.type, leave.ms, menu);
+				Log::Info("boot: MGSV ordered {} to leave {} ms ago{}", BuddyName(bp::KindOfType(leave.type)), a_now > leave.ms ? a_now - leave.ms : 0,
+					menu ? " with its menu open (the iDroid: DISMISS, CHANGE EQUIPMENT or another buddy) -- a NONE after it is the player's dismissal"
+						 : " (no MGSV menu open: not the player's choice)");
+			}
+			const int leaving = g_boot.dismiss.Type();
+			if (const auto forgot = g_boot.dismiss.OnActive(a_lua.buddyActive, a_lua.buddyId != kNullId, a_now); forgot != bp::Forgot::kNo) {
+				Log::Info("boot: MGSV's leave order to {} forgotten ({})", BuddyName(bp::KindOfType(leaving)),
+					forgot == bp::Forgot::kBack      ? std::string("it went and is back: a re-equip, not a dismissal")
+					: forgot == bp::Forgot::kAnother ? std::format("{} out instead", BuddyName(bp::KindOfType(a_lua.buddyActive)))
+					                                 : std::format("still out {} s after it", (bp::kLeaveMaxMs + bp::kJudgeSlackMs) / 1000));
+			}
+			if (a_lua.buddyActive == state::kBuddyTypeNone) {
+				g_boot.noneSince = g_boot.noneSince ? g_boot.noneSince : a_now;
+			} else if (a_lua.buddyActive > state::kBuddyTypeNone) {
+				g_boot.noneSince = 0;
 			}
 			// D-Dog / Quiet out and their place not known: their skin near Snake (Skeleton.cpp, as D-Horse's), looked for every 5 s.
 			if ((c.buddy == "dog" || c.buddy == "quiet") && a_lua.buddyActive > state::kBuddyTypeNone && a_lua.buddyId != kNullId && !a_lua.buddyPosValid &&
 				a_fr.valid && a_now - g_boot.buddyHintAt > 5000) {
 				g_boot.buddyHintAt = a_now;
 				state::HintBuddy(a_fr.root, 12.0f, 6000);
+			}
+			// Quiet answers GetPosition (live 2026-11-04), so the rule above never hinted her: her skin gives her real heading and her draws'
+			// root (docs/research/quiet.md Q10). Hinted at her GetPosition while it isn't known.
+			if (a_lua.buddyActive == state::kBuddyTypeQuiet && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_now - g_boot.buddyHintAt > 5000) {
+				logic::Vec3 p;
+				float       yaw = 0.0f;
+				if (!state::BuddyPose(p, yaw)) {
+					g_boot.buddyHintAt = a_now;
+					state::HintBuddy(a_lua.buddyPos, 3.0f, 6000);
+				}
 			}
 			if (a_lua.buddyActive < 0 || a_lua.buddyActive == g_boot.adoptedType) {
 				g_boot.otherSince = 0;
@@ -533,19 +573,28 @@ namespace phantom::guest::pump
 			}
 			if (a_lua.buddyActive == state::kBuddyTypeNone) {
 				g_boot.otherSince = 0;
-				const bool fromMenu = g_boot.menuSeenAt && a_now - g_boot.menuSeenAt < 15000;
-				if (c.buddy != "none" && (!c.buddyDismiss || !fromMenu)) {
+				const int  gone = bp::TypeOfKind(c.buddy);
+				const auto verdict = c.buddyDismiss ? g_boot.dismiss.Judge(gone, g_boot.noneSince, g_boot.menuSeenAt) : bp::Verdict::kLost;
+				if (c.buddy != "none" && verdict == bp::Verdict::kLost) {
 					// Not the iDroid's DISMISS (or it isn't allowed): MGSV lost it by itself -- ReviveBuddy calls it back.
 					if (!g_boot.noneLogged) {
 						g_boot.noneLogged = true;
-						Log::Info("boot: MGSV has no buddy out any more ({} expected, no iDroid DISMISS seen) -- calling it back", BuddyName(c.buddy));
+						Log::Info("boot: MGSV has no buddy out any more ({} expected, no iDroid DISMISS seen{}) -- calling it back", BuddyName(c.buddy),
+							g_boot.menuSeenAt ? std::format(": no leave order, its menu last open {:.1f} s before", (static_cast<double>(g_boot.noneSince) -
+							                                    static_cast<double>(g_boot.menuSeenAt)) / 1000.0)
+							                  : std::string());
 					}
 					return;
 				}
 				g_boot.adoptedType = state::kBuddyTypeNone;
 				g_boot.noneLogged = false;
 				if (c.buddy != "none") {
-					Log::Info("boot: the player dismissed {} from the iDroid -- no buddy until another is deployed", BuddyName(c.buddy));
+					const auto after = [](ULONGLONG a_from, ULONGLONG a_to) { return (static_cast<double>(a_to) - static_cast<double>(a_from)) / 1000.0; };
+					Log::Info("boot: the player dismissed {} from the iDroid ({}) -- no buddy until another is deployed", BuddyName(c.buddy),
+						verdict == bp::Verdict::kDismissedLeave
+							? std::format("MGSV's leave order, NONE {:.1f} s after it", after(g_boot.dismiss.LeaveMs(), g_boot.noneSince))
+							: std::format("NONE {:.1f} s after its menu, no leave order seen", after(g_boot.menuSeenAt, g_boot.noneSince)));
+					g_boot.dismiss.Reset();
 					c.buddy = "none";
 					state::ForgetBuddy("dismissed (iDroid)");
 					state::SetBuddyMissing(false);
@@ -604,6 +653,16 @@ namespace phantom::guest::pump
 			}
 			const auto gone = a_now - g_boot.buddyGoneSince;
 			if (gone < 10000 || a_now < g_boot.buddyRetryAt) {
+				return;
+			}
+			if (g_boot.dismiss.Leaving(buddy::plan::TypeOfKind(c.buddy), a_now)) {
+				// MGSV ordered it to leave from the iDroid: a dismissal (AdoptBuddy follows it once MGSV's type is NONE) or a re-equip
+				// (MGSV brings it back itself) -- never called back meanwhile.
+				if (g_boot.leaveHeldSeq != g_boot.leaveSeq) {
+					g_boot.leaveHeldSeq = g_boot.leaveSeq;
+					Log::Info("boot: {} gone {:.0f} s -- not called back: MGSV ordered it to leave from the iDroid", BuddyName(c.buddy),
+						static_cast<double>(gone) / 1000.0);
+				}
 				return;
 			}
 			g_boot.buddyRetryAt = a_now + (gone > 70000 ? 60000 : 1000);
@@ -674,6 +733,11 @@ namespace phantom::guest::pump
 				const float x = rx + std::sin(yaw) * c.buddyAhead - std::cos(yaw) * c.buddySide;
 				const float z = rz + std::cos(yaw) * c.buddyAhead + std::sin(yaw) * c.buddySide;
 				const char* who = BuddyName(c.buddy);
+				if (c.buddy == "quiet") {
+					// [Quiet] Borrow (Quiet.h): on a save without a deployable Quiet her bits are set in memory first (only while the save guards
+					// are complete); re-applied after a load that dropped them. Logs itself.
+					quiet::BeforeDeploy(SavesGuarded(), [&](const std::string& a_code) { return Call(a_ctx, a_code); });
+				}
 				auto        r = Call(a_ctx, std::format("return PhantomRing.Buddy('{}', {}, {}, {}, {}, {})", c.buddy, x, ry, z, yaw, c.buddyRevive));
 				if (r.starts_with("called")) {
 					// where MGSV puts it, for its skin (no GetPosition); D-Dog / Quiet come to Snake by themselves: anywhere near him (live
@@ -879,6 +943,8 @@ namespace phantom::guest::pump
 				if (since > 1000 && inGame && fr.valid) {
 					state::SetCentre(fr.root);
 					Log::Info("boot: sandbox centre {:.2f}, {:.2f}, {:.2f} (radius {} m)", fr.root.x, fr.root.y, fr.root.z, c.radius);
+					// [Quiet] BorrowListInIdroid: borrowed now so MGSV's BUDDY SUPPORT lists her (or re-applied after this load).
+					quiet::AtReady(SavesGuarded(), [&](const std::string& a_code) { return Call(a_ctx, a_code); });
 					Log::Info("boot: audio refresh: {}", Call(a_ctx, "return PhantomRing.AudioRefresh('boot')"));
 					if (c.cigarTimeSkip) {
 						// The Phantom Cigar in an item slot, so the player can smoke it from the item wheel (live pass B
@@ -947,6 +1013,8 @@ namespace phantom::guest::pump
 						}
 						// ActorProxy v1: the slot soldiers' enable/puppet/sleep/disable and MGSV's Fulton on them (ActorProxyGame.cpp).
 						proxy::LuaStep(a_now, [&](const std::string& a_code) { return Call(a_ctx, a_code); });
+						// Quiet ([Quiet], Quiet.h): her orders, the sit's Enable*, FireOnlyOnOrders, the borrow's guard check, the console's Lua.
+						quiet::LuaStep(a_now, true, SavesGuarded(), [&](const std::string& a_code) { return Call(a_ctx, a_code); });
 						// ActorProxy: MGSV's Auto-Aim Correction on only while every pool soldier is placed (a disabled soldier left standing
 						// pulls the aim, 18.13), and only with the save guards complete (as [Boot] AutoAim). Checked once a second.
 						// [Boot] AutoAim = true keeps MGSV's own setting, proxies or not.
@@ -965,7 +1033,8 @@ namespace phantom::guest::pump
 							}
 						}
 						// Markers stay only while every pool soldier is placed: a marked soldier left at his post pulled the aim (18.13).
-						const bool keepMarkers = c.proxies && c.proxyKeepMarkers && proxy::AllPlaced();
+						// [Quiet] KeepMarks: no wipe while her stand-in is out (MGSV's mark on him makes the call menu's Fire live, quiet.md §3.4).
+						const bool keepMarkers = (c.proxies && c.proxyKeepMarkers && proxy::AllPlaced()) || quiet::KeepMarkers();
 						if (!keepMarkers && c.clearMarkersSec > 0 && a_now - g_boot.markersClearedAt >= static_cast<ULONGLONG>(c.clearMarkersSec) * 1000) {
 							// D-Walker's Search Mode and Snake's own looking mark MGSV soldiers again: kept off.
 							g_boot.markersClearedAt = a_now;
@@ -993,12 +1062,25 @@ namespace phantom::guest::pump
 		}
 	}
 
+#ifdef PHANTOM_GUEST_TESTING
+	namespace
+	{
+		std::atomic<std::uint64_t> g_testSkipMs{ 0 };
+	}
+	void          SkipClockForTests(std::uint64_t a_ms) { g_testSkipMs.fetch_add(a_ms); }
+	std::uint64_t NowForTests() { return ::GetTickCount64() + g_testSkipMs.load(); }
+#endif
+
 	void Run(void* a_L)
 	{
 		if (!a_L) {
 			return;
 		}
+#ifdef PHANTOM_GUEST_TESTING
+		const auto     now = NowForTests();
+#else
 		const auto     now = ::GetTickCount64();
+#endif
 		const lua::Ctx ctx(a_L);
 		void*          g = ctx.GlobalState();
 		if (!g) {

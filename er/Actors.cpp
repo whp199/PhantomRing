@@ -9,6 +9,7 @@
 #include "Link.h"
 #include "Mem.h"
 #include "Puppet.h"
+#include "Quiet.h"
 
 #include <cstdio>
 
@@ -35,6 +36,8 @@ namespace phantom::er::Actors
 		const auto  myTeam = SafeTeam(a_f);
 		const auto  dogTarget = Dog::TargetHandle();  // (v17) D-Dog's pick: at most one record, only a hostile, living non-boss one
 		const bool  bossesOk = Cfg().dog.bosses == "stagger";
+		const auto  quietTarget = Quiet::TargetHandle();  // (v18) Quiet's pick and Cover me's threat: at most one record each, never a boss
+		const auto  quietThreat = Quiet::ThreatHandle();
 		std::uint32_t n = 0;
 		for (const auto& c : game::Characters(static_cast<std::size_t>(Cfg().actorMax) + 1)) {
 			if (c.chr == a_f.player.chr || c.distance > Cfg().actorRadius || n >= static_cast<std::uint32_t>(Cfg().actorMax)) {
@@ -61,6 +64,14 @@ namespace phantom::er::Actors
 			// Checked again here, at the boundary: never on a record that isn't hostile, or is dead, or a boss (bosses = off).
 			if (dogTarget && c.handle == dogTarget && (r.flags & proto::kActorHostile) && !c.dead && c.hp > 0 && (!boss || bossesOk)) {
 				r.flags |= proto::kActorDogTarget;
+			}
+			// (v18) Checked again at the boundary: hostile, alive, never a boss ([Quiet] bosses = off only).
+			const bool quietOk = (r.flags & proto::kActorHostile) && !c.dead && c.hp > 0 && !Cqc::IsBoss(c.npcParam, c.maxHp);
+			if (quietTarget && c.handle == quietTarget && quietOk) {
+				r.flags |= proto::kActorQuietTarget;
+			}
+			if (quietThreat && c.handle == quietThreat && quietOk) {
+				r.flags |= proto::kActorQuietThreat;
 			}
 			const Vec3 p = anchor.PointToMgsv(c.pos);
 			r.pos[0] = p.x;

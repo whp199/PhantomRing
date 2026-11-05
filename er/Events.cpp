@@ -7,6 +7,7 @@
 #include "Decoys.h"
 #include "Dog.h"
 #include "Fulton.h"
+#include "GraceRest.h"
 #include "Host.h"
 #include "InputBridge.h"
 #include "Link.h"
@@ -15,12 +16,15 @@
 #include "Mines.h"
 #include "Noise.h"
 #include "Puppet.h"
+#include "Quiet.h"
 #include "Rounds.h"
 #include "Stealth.h"
 #include "Throw.h"
 #include "TimeSkip.h"
 
 #include <cstdint>
+#include <format>
+#include <iterator>
 
 namespace phantom::er::Events
 {
@@ -74,6 +78,7 @@ namespace phantom::er::Events
 				BuddyOrders::OnOrder(e);
 				Buddy::OnOrder(e.a, e.b);  // (0.8.0 polish) D-Dog's Wait pinned to its Elden Ring spot
 				Dog::OnOrder(a_f, e);      // (v17) D-Dog's style (pad[0]) and Bark
+				Quiet::OnOrder(a_f, e);    // (v18) Quiet's orders (b = 3)
 				break;
 			case proto::kGEvFulton:
 				Fulton::OnEvent(a_f, e);
@@ -87,6 +92,9 @@ namespace phantom::er::Events
 			case proto::kGEvDogAttack:
 				Dog::OnAttack(a_f, e);  // (v17) D-Dog's attack on an Elden Ring target (er/Dog.h; only logged with [Dog] enabled = false)
 				Buddy::OnDogAttack(static_cast<std::uint32_t>(proto::DogAttackPhase(e.a)));  // an order taken from Wait ends the pin
+				break;
+			case proto::kGEvQuietShot:
+				Quiet::OnShot(a_f, e);  // (v18) Quiet's shot at an Elden Ring target (er/Quiet.h; only logged with [Quiet] enabled = false)
 				break;
 			case proto::kGEvLog:
 				Log::Info("guest message {}", e.a);
@@ -108,6 +116,8 @@ namespace phantom::er::Events
 		TimeSkip::Tick(a_f);
 		Cqc::Tick(a_f);
 		Dog::Tick(a_f);  // (v17) D-Dog: spotting, the pick, its holds and stares (after Cqc: a hold that just ended is seen)
+		GraceRest::Tick(a_f);  // (v18) the rest's observed black, the seat and the guest's echo (before Quiet: her place follows it)
+		Quiet::Tick(a_f);      // (v18) Quiet: her post, the pick, spotting, the reticle
 	}
 
 	unsigned long long Count() { return g_count; }

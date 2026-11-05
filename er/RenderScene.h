@@ -45,6 +45,7 @@ namespace phantom::er
 		bool                           draw{ false };  // something to draw this frame
 		float                          dissolve{ 0 };  // death fade: 0 solid .. 1 gone ([Render] death_visual)
 		bool                           riding{ false };  // Snake rides his buddy (kGuestOnVehicle): it never fades as an occluder
+		float                          buddyAlpha{ 1 };  // (v18) the buddy's own fade: 1 solid .. 0 gone (Quiet's cloak for a change of post in view)
 		// MGSV's first person / scope (kGuestFirstPerson): Snake's own draws are not faded near the camera -- they are his arms and
 		// the gun's sights in front of it (session 4: "doesn't register hits when looking down scope" -- with the near fade the
 		// iron sights vanished and MGSV draws no reticle there: nothing to aim with).

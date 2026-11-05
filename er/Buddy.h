@@ -54,6 +54,9 @@ namespace phantom::er
 		// (0.8.0 polish) A waiting D-Dog's Elden Ring correction (er/BuddyGuard.h WaitPin): already in Position(); the renderer adds it to
 		// the dog's draws unsmoothed (it changes as Snake slips at a wall, a few cm a frame). 0 for other buddies and once eased out.
 		[[nodiscard]] Vec3  WaitShift();
+		// (v18) Quiet off her post (MGSV's place) has no Elden Ring floor under her within [Quiet] far_ground_up / far_ground_down: she is
+		// not drawn (never floating, never buried).
+		[[nodiscard]] bool  QuietNoFloor();
 		// kGEvBuddyOrder (er/Events.cpp): D-Dog's Wait (9) starts the pin, its whistle (8) / DD (16) end it.
 		void OnOrder(std::uint32_t a_command, std::uint32_t a_buddyType);
 		// kGEvDogAttack (er/Events.cpp): an attack order MGSV took (kDogOrdered) ends the pin too -- the dog runs from its Wait (review

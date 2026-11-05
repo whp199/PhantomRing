@@ -51,6 +51,9 @@ namespace phantom::guest::capture::hud
 	// D-Dog carries out an order (Dog.cpp): MGSV's own markers of its target soldier and of the dog (DogLogic.h IsMgsvMarkerColor) stay
 	// out of the layer meanwhile -- the host marks the Elden Ring enemy itself.
 	void SetHideDogMarkers(bool a_hide);
+	// Quiet's stand-in is dedicated or her order runs (Quiet.cpp, [Quiet] HideMgsvMarkers): the same filter, its own flag (D-Dog's
+	// LuaTick clears its own every tick while the dog isn't out).
+	void SetHideQuietMarkers(bool a_hide);
 
 	// "!capture hud [on|off|every N|skip <ps hash>]" (Capture.cpp forwards).
 	std::string Command(std::string_view a_args);

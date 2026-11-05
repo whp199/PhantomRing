@@ -25,7 +25,9 @@ namespace phantom::er
 		std::string Describe();
 		// The corner text for an order (pure: tests). a_dogTexts: D-Dog's own texts for its commands 8-16 ([Dog] order_text; else
 		// "Buddy order N" as before 0.8).
-		std::string OrderText(std::uint32_t a_command, std::uint32_t a_buddyType, bool a_dogTexts = true);
+		// (v18) a_quietTexts: Quiet's own texts for her commands 1-7 ([Quiet] enabled and order_text); a_pad0 = kGEvBuddyOrder pad[0] (Quiet:
+		// her weapon + 1 for 1-3, the Fire label follows her rifle).
+		std::string OrderText(std::uint32_t a_command, std::uint32_t a_buddyType, bool a_dogTexts = true, bool a_quietTexts = false, std::uint32_t a_pad0 = 0);
 		// The LB how-to for the buddy out (D-Walker, D-Dog), "" for others.
 		std::string HowToText(std::uint32_t a_buddyType);
 

@@ -1,4 +1,4 @@
-# Status (2026-11-04, 0.8.0-alpha)
+# Status (2026-11-04, 0.9.0-alpha)
 
 The detailed record of what has been tested live, and how. The short version is in the [README](../README.md).
 
@@ -8,6 +8,58 @@ plugin's test pad, with no player; "evening" below marks what it re-tested.
 
 ![Snake and D-Walker at Gatefront, lit by Elden Ring, MGSV's HUD on top](screenshots/snake_walker_gatefront.jpg)
 ![Riding D-Walker into Gatefront Ruins](screenshots/riding_dwalker_gatefront.jpg)
+
+## 0.9.0-alpha, 2026-11-04: Quiet and the grace rest, integration with both games
+
+The player's ask: "let's start on adding Quiet. It would be fun to have her rest with us at Grace sites when she is deployed".
+Design: [research/quiet.md](research/quiet.md); built in rounds I0 (protocol v18), M1-M3 (MGSV with the host stand-in) and E1-E2
+(Elden Ring with the fake guest), then this integration with **both games** (real MGSV 1.0.15.4 + Elden Ring 1.17.2, the shipped inis,
+`--er-headless 3840x2160`, the exclusive virtual pad; `combat set hurt_mult 0` near enemies, 1 after; four launches 12:05-13:10). Saves:
+restored from `backups/20261104-120515` (the session's first backup) -- ER 8 of 8, MGSV 7 of 7 files sha256-equal to before the launch;
+MGSV's 7 were already equal before the restore (nothing reached MGSV's save).
+
+| Item | Live | Evidence |
+|---|---|---|
+| Borrow on the player's own save ("gone") | **works** | `quiet: borrowed for this session (memory only ...): save state gone (... LOST, str_didLostQuiet, bond 0, deployed 46 times)` at the sandbox's start; iDroid Buddy Support lists QUIET (SCOUT) / (ATTACK) (frame); two put-backs `CLEAN (no byte of Quiet's differs)`; borrowed again when a host with the layer came back |
+| Deploy from the iDroid | **works after a fix** | Quiet (Scout) / (Attack) were greyed from the boot (a greyed entry can't be chosen); now greyed only while she is out. Quiet (Attack) -> her HALO drop -> `boot: the player deployed Quiet from the iDroid` -> held at her post once settled |
+| Posts, drawing | **works** | posts published and echoed at once; frames: kneeling at her post 25 m out (Stormveil), on Gatefront's rock ledge (+4.6 m, feet on the rock); in-view post changes faded (E2's frames); indoors mostly no post (unseen) |
+| Cloaked while Snake travels | **not re-shot with both games** | the "on the move" mode needs no hostile within 60 m; every test place had some (Snake's run east from Gatefront ended in the soldiers' camp). E2 with the fake guest showed it; the guest's own cloak flag works (her dashes) |
+| Spotting | **works** | red marks over Stormveil's and Gatefront's soldiers, "Quiet: Enemy spotted (3 nearby)" |
+| Grace rest at Rampart Tower, Gatefront, The First Step | **works after two fixes** | 9 rests with the final build: the seat published inside the black (0 ms into it), the echo once she settled (3269-4145 ms), faded in ~1-2 s after the menu came up, crouched with her rifle upright beside the grace, right of Snake, clear of the menu; one with the camera turned 90 deg (visible, behind Snake's shoulder) and one after a world shift; through Pass time and Level Up (backed out, level 23 kept); walking away she stayed at the seat in view and was moved on out of view |
+| Orders (Fire / Take aim) | **don't work reliably: opt-in** | one try at Gatefront: pick + stand-in OK, MGSV's "sniping position" request brought her beside Snake, Fire never live in 35 s (the MGSV round: 4 of 10) |
+| Boss / non-hostile refusals | **works** | The First Step: Varre "a PlayerIns ... never a candidate", the grace's team-0 one "not hostile", the Tree Sentinel "a boss (never)"; `quiet test boss` refuses every candidate |
+| MGSV alerts / warnings | **0 / 0** | all four sessions, both logs; 10 minutes of play (93 stops, 3 rests) 0 warnings |
+| D-Dog, D-Walker, D-Horse | **work** | D-Dog's "Do it (wound enemy)" on a Gatefront soldier: Ordered -> Connected -> `wound: damage 219 (never below 1 HP)`; D-Walker deployed, `lead #1: 3.6 s led`; D-Horse deployed, its location object confirmed |
+
+**Found live and fixed in this round** (each re-tested live):
+- **No one could deploy her**: `StrikeMgsvPosts` greyed Quiet (Scout) / (Attack) from the boot; now only while she is out.
+- **She hopped beside the grace in view**: MGSV's Quiet takes ~3 s from her MoveToPosition to settle into her rest (a turn, a hop of up
+  to 0.7 m, the crouch) -- the black is ~1.5 s. The guest now echoes the seat once she has settled, and the host fades her in when the
+  echo comes after the black (before: hidden through the rest). Her order also goes out from 2.5 m off the seat, never from her post.
+- **She vanished in view when Snake left the grace**: her get-up order (MoveToPosition with aim) makes her dash cloaked. She now keeps
+  her rest pose at her posts (her object's placement keeps it) and gets up only while unseen (no post).
+- **6 m one way and back**: right after a treadmill jump the host's post (corrected by k 33 ms ago) was off by the jump; the holder
+  waits 250 ms after k moves.
+- **Pass time gave Snake the pad inside the grace menu** (since 0.7.0's Elden Ring bars): ErBars re-hid Elden Ring's HUD 1.5 s after the
+  interaction ended, masking the grace menu's own hide 4 s later. Elden Ring's bars now stay its own while Snake sits at a grace.
+
+**The round's code review, applied** (21 findings; unit tests where pure): an unknown rifle never lethal (host refuses, guest reports
+her equipment's rifle, her dash attacks no order's round); the layer needs posts; her "can't" ends an order at once; Enable* re-sent
+after loads and only counted when taken; a queued get-up dropped when she isn't out; nothing placed unless Snake is ready on foot; her
+treadmill shift no dash; the borrow waits for the host's layer and returns with Elden Ring; her rifle kept by its mesh moving with her;
+console data races; the far-ground rule (floor nearest her, none past lift_max); the seat fallback's character and reach rules; NPC
+phantoms kept at a distance by posts and seats; no pop-in after a hidden rest; graceSeq bumps only with a published seat (header,
+fake_er). Not changed: a rest that turns into a talk inside the press's interaction (plausible, cosmetic, untestable live: no black
+within 2 s = no seat).
+
+**Defaults**: `[Quiet] enabled`, `posts`, `spot`, `indicator`, `order_text`, `[Grace] buddy_rest` on (posts + drawing + the rest passed
+together); `[Quiet] orders` (new, host) off -- the opt-in. Guest: `Borrow = always`, `BorrowListInIdroid = true` (all four save states
+passed a live round trip, the gone one on the real save), everything else as M2 set it.
+
+**Not done**: a 10-minute run outdoors with frame sampling of her feet (the 10 minutes ran at Rampart Tower, mostly indoors); U10 (a
+stairs / scaffold / cave grace); a new Quiet Fire recording (orders don't come live reliably; `recordings/quiet_orders.prrec` from the
+MGSV round stays); 180 deg camera rest; Windows. Recording: `recordings/quiet_rest_090.prrec` (70 s, the recorder as host, the final
+guest: a post, a rest with the settle-then-echo, the walk-away, no post (get-up while unseen), a new post).
 
 ## 0.8.0-alpha, 2026-11-04: D-Dog's polish, integration with both games -- D-Dog on by default
 
@@ -717,6 +769,11 @@ MGSV-only relaunch; Castleward Tunnel and Margit's arena. Logs and screenshots w
 
 ## Known issues
 
+- Quiet (0.9.0): her orders opt-in (`[Quiet] orders`: MGSV offers Fire only from its own snipe points, which she doesn't reach
+  reliably); at a grace she is faded in ~1-2 s after the menu comes up (MGSV settles her ~3 s after her order); after a rest she keeps
+  her relaxed crouch at her posts until she is next unseen; MGSV's green marker over her sits on MGSV's flat ground (under her at a
+  raised post); mostly unseen indoors; "on the move" (cloaked while Snake travels) not re-shot with both games; a rest that turns into a
+  talk inside the press's own interaction is untested (no black within 2 s = no seat).
 - Getting on D-Walker with the test pad: in the 10-minute play, Y right after walking up to it (1.4-1.6 m) never mounted
   it (11 tries); on their own, the same walk and press mounted it (twice, one after the play). Not understood yet.
 - Elden Ring's grass over Snake where it stands behind him: fixed 2026-10-14 (`gbuffer_point = clear`); per-texel checks in tall

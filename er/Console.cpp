@@ -8,6 +8,7 @@
 #include "Combat.h"
 #include "Cqc.h"
 #include "Dog.h"
+#include "GraceRest.h"
 #include "Config.h"
 #include "ConsoleExpr.h"
 #include "DebugDraw.h"
@@ -31,6 +32,7 @@
 #include "Pacing.h"
 #include "PacingProbe.h"
 #include "Puppet.h"
+#include "Quiet.h"
 #include "RenderScene.h"
 #include "QuickItem.h"
 #include "GeomProbe.h"
@@ -649,6 +651,8 @@ namespace phantom::er::Console
 			"stealth [hide on|off | speffect <id>]   Snake in MGSV's cardboard box (er/Stealth.h)\n"
 			"cqc [status | grab | throw | choke | interrogate | release | on | off | set <key> <v>]   CQC holds and throws on Elden Ring enemies (er/Cqc.h)\n"
 			"dog [status | on | off | all on|off | pick | test boss | style <s> | attack [style] [0x..] | release | bark | set <key> <v>]   D-Dog (er/Dog.h)\n"
+			"quiet [status | on | off | all on|off | pick | test boss | post [now|none] | shoot [0x..] [lethal|tranq|heavy] | survey [label] | record on|off | set <key> <v>]   Quiet (er/Quiet.h)\n"
+			"grace [status | fade | on | off | survey [label] | record on|off | set <key> <v>]   the grace rest with the buddy, Elden Ring's fade plate (er/GraceRest.h)\n"
 			"fulton [status | nearest [fail] | 0x<handle> [fail] | forget]   MGSV's Fulton on an Elden Ring enemy, as kGEvFulton (er/Fulton.h)\n"
 			"mark [status | binoculars on|off|auto | nearest | handle <0x..> | clear]   binocular marks over Elden Ring characters (er/Marking.h)\n"
 			"timeskip [status | <minutes> | clear]   MGSV's Phantom Cigar on Elden Ring's clock, as kGEvTimeSkip (er/TimeSkip.h)\n"
@@ -789,6 +793,12 @@ namespace phantom::er::Console
 		}
 		if (cmd == "dog") {
 			return Dog::Console(w, a_f);
+		}
+		if (cmd == "quiet") {
+			return Quiet::Console(w, a_f);
+		}
+		if (cmd == "grace") {
+			return GraceRest::Console(w, a_f);
 		}
 		if (cmd == "fulton") {
 			std::string rest;

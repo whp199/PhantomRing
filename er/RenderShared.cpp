@@ -416,6 +416,9 @@ namespace phantom::er::render
 				if (occluding[owner] && !a_s.riding) {
 					f.owner = std::min(f.owner, std::clamp(rc.occluderFade, 0.0f, 1.0f));
 				}
+				if (a_s.draws[i].owner == proto::kOwnerBuddy) {
+					f.owner *= std::clamp(a_s.buddyAlpha, 0.0f, 1.0f);  // (v18) Quiet's cloak fade (er/Quiet.h)
+				}
 			}
 		}
 		return out;

@@ -1,5 +1,7 @@
 // Unit tests for the MGSV guest's pure arithmetic (mgsv/Logic.cpp): odometer, treadmill, life bridge,
-// shot detection, Fox transform helpers, hurt feedback, bullet kinds. Run under wine (target check_guest).
+// shot detection, Fox transform helpers, hurt feedback, bullet kinds; the iDroid's DISMISS told from a lost
+// buddy (mgsv/BuddyLogic.h). Run under wine (target check_guest).
+#include "BuddyLogic.h"
 #include "CaptureKeys.h"
 #include "Logic.h"
 #include "ProjectileLogic.h"
@@ -10,6 +12,7 @@
 #include <cstdio>
 #include <map>
 #include <numbers>
+#include <string>
 
 using namespace phantom::guest::logic;
 
@@ -991,8 +994,196 @@ static void TestSuppressor()
 	CHECK(!SuppressorOf({ .gunFlags = 0x240, .equip = 36, .slotType = 0x1, .haveRecord = true, .recordLife = 9, .recordFlags = 0x02, .gunTraits = 0x40 }).Working());
 }
 
+// ---- the iDroid's DISMISS vs a buddy MGSV lost (mgsv/BuddyLogic.h, Pump.cpp AdoptBuddy / ReviveBuddy) ---------------------------
+// Times are the logs' clocks in ms: T(15, 10, 47.636) = 15:10:47.636.
+static std::uint64_t T(int a_h, int a_m, double a_s) { return static_cast<std::uint64_t>(((a_h * 60 + a_m) * 60 + a_s) * 1000.0 + 0.5); }
+
+// What Pump.cpp does each 250 ms step for the buddy that is out (one leave picked up, OnActive, NONE's start), then Judge on the NONE.
+struct DismissRun
+{
+	phantom::guest::buddy::plan::DismissWatch w;
+	std::uint64_t                             noneSince{ 0 };
+	void Step(int a_active, bool a_present, std::uint64_t a_ms)
+	{
+		w.OnActive(a_active, a_present, a_ms);
+		if (a_active == 0) {
+			noneSince = noneSince ? noneSince : a_ms;
+		} else if (a_active > 0) {
+			noneSince = 0;
+		}
+	}
+	// a_type out (present) from a_from to a_to, sampled every 250 ms
+	void Out(int a_type, std::uint64_t a_from, std::uint64_t a_to, bool a_present = true)
+	{
+		for (auto t = a_from; t < a_to; t += 250) {
+			Step(a_type, a_present, t);
+		}
+	}
+};
+
+static void TestBuddyDismiss()
+{
+	using namespace phantom::guest::buddy::plan;
+	CHECK(kMsgLeave == 0x6626CE35F43DULL);
+	CHECK(TypeOfKind("walker") == kWalker && TypeOfKind("horse") == kHorse && TypeOfKind("dog") == kDog && TypeOfKind("quiet") == kQuiet &&
+	      TypeOfKind("none") == kNone && TypeOfKind("") == kNone);
+	for (int t = kHorse; t <= kWalker; ++t) {
+		CHECK(TypeOfKind(KindOfType(t)) == t);
+	}
+
+	// A leave is the menu's when a menu was open with it, or seen open at most 2 s before it (or after it: still open).
+	CHECK(LeaveFromMenu(true, 1000, 0));
+	CHECK(!LeaveFromMenu(false, 100000, 0));                  // no menu ever
+	CHECK(LeaveFromMenu(false, T(14, 48, 57.423), T(14, 48, 57.300)));  // the live Quiet dismissal: the menu closed 17 ms after
+	CHECK(LeaveFromMenu(false, T(1, 34, 28.834), T(1, 34, 29.369)));    // sampled after the leave, still open
+	CHECK(!LeaveFromMenu(false, T(15, 0, 10.0), T(15, 0, 7.5)));       // the menu closed 2.5 s before: not its order
+
+	// The player's session 2026-11-04, the first DISMISS QUIET: the iDroid closed 15:10:47.636 (AdoptBuddy last saw it open at most
+	// 15:10:47.484: 0.9.0's 15 s had run out at its decision), her leave order came with it, MGSV's type NONE from the step at
+	// 15:11:00.484, confirmed 2 s later at 15:11:02.484. 0.9.0 called her back; now it is the dismissal.
+	{
+		DismissRun r;
+		const auto menu = T(15, 10, 47.484);
+		r.Out(kQuiet, T(15, 10, 40.234), T(15, 10, 47.484));
+		CHECK(r.w.OnLeave(kQuiet, T(15, 10, 47.42), LeaveFromMenu(true, T(15, 10, 47.42), menu)));
+		CHECK(r.w.Leaving(kQuiet, T(15, 10, 50.0)) && !r.w.Leaving(kDog, T(15, 10, 50.0)) && !r.w.Leaving(kNone, T(15, 10, 50.0)));
+		r.Out(kQuiet, T(15, 10, 47.484), T(15, 11, 0.484));  // she walks off cloaked: still out, her object answers
+		r.Out(kNone, T(15, 11, 0.484), T(15, 11, 2.734), false);
+		CHECK(r.noneSince == T(15, 11, 0.484));
+		CHECK(r.w.Judge(kQuiet, r.noneSince, menu) == Verdict::kDismissedLeave);
+		CHECK(!(r.noneSince + 2000 - menu < 15000));  // 0.9.0's rule at its decision: refused (the log's "calling it back")
+		// ...and the menu window alone (no hook) takes it too: NONE 13.0 s after the menu, inside Quiet's 30 s
+		CHECK(DismissWatch{}.Judge(kQuiet, r.noneSince, menu) == Verdict::kDismissedWindow);
+		// The second one (closed 15:12:12.771, NONE 15:12:24.932): 12.2 s, both ways too.
+		CHECK(DismissWatch{}.Judge(kQuiet, T(15, 12, 24.932), T(15, 12, 12.771)) == Verdict::kDismissedWindow);
+	}
+	// However long she takes (a farther post, a slower exit): up to 2 min after the order; not after.
+	{
+		DismissWatch w;
+		w.OnLeave(kQuiet, 1000000, true);
+		CHECK(w.Judge(kQuiet, 1000000 + 95000, 1000000) == Verdict::kDismissedLeave);
+		CHECK(w.Judge(kQuiet, 1000000 + kLeaveMaxMs, 1000000) == Verdict::kDismissedLeave);
+		CHECK(w.Judge(kQuiet, 1000000 + kLeaveMaxMs + 1, 1000000) == Verdict::kLost);
+		CHECK(w.Judge(kQuiet, 999000, 1000000) == Verdict::kDismissedWindow);  // NONE before the order: not by it (the menu was open)
+		CHECK(w.Judge(kQuiet, 999000, 0) == Verdict::kLost);
+		// kept the slack beyond the bound for a NONE that began in time, then forgotten
+		CHECK(w.OnActive(kNone, false, 1000000 + kLeaveMaxMs + kJudgeSlackMs) == Forgot::kNo);
+		CHECK(w.OnActive(kNone, false, 1000000 + kLeaveMaxMs + kJudgeSlackMs + 1) == Forgot::kExpired);
+		CHECK(w.Type() == -1 && !w.Leaving(kQuiet, 1000000 + 1000));
+	}
+	// A leave order without an MGSV menu (the guest's own `!buddy`, a revival) is nobody's dismissal.
+	{
+		DismissWatch w;
+		CHECK(!w.OnLeave(kQuiet, 5000, LeaveFromMenu(false, 5000, 0)));
+		CHECK(!w.Leaving(kQuiet, 6000));
+		CHECK(w.Judge(kQuiet, 12000, 0) == Verdict::kLost);
+		CHECK(!w.OnLeave(kNone, 5000, true) && !w.OnLeave(-1, 5000, true));
+	}
+	// A buddy MGSV loses by itself is still called back: no leave, no menu -- or the menu long before.
+	{
+		DismissWatch w;
+		CHECK(w.Judge(kQuiet, 600000, 0) == Verdict::kLost);
+		CHECK(w.Judge(kQuiet, 600000, 600000 - 30001) == Verdict::kLost);
+		CHECK(w.Judge(kDog, 600000, 600000 - 30001) == Verdict::kLost);
+		CHECK(w.Judge(kWalker, 600000, 600000 - 20001) == Verdict::kLost);
+		CHECK(w.Judge(kHorse, 600000, 600000 - 20001) == Verdict::kLost);
+		CHECK(w.Judge(kNone, 600000, 600000) == Verdict::kLost);  // no buddy of ours
+		CHECK(w.Judge(kQuiet, 0, 600000) == Verdict::kLost);      // no NONE start
+		// another buddy's leave order says nothing about ours
+		w.OnLeave(kDog, 590000, true);
+		CHECK(w.Judge(kQuiet, 600000, 0) == Verdict::kLost);
+	}
+	// D-Walker (fultoned out: NONE 8.6 s after the iDroid closed, live 2026-10-14) and D-Horse (9.3 s) without a leave seen (D-Horse's
+	// handler isn't hooked; D-Walker's only with auto-follow on): the menu window, 20 s.
+	{
+		DismissWatch w;
+		CHECK(w.Judge(kWalker, T(14, 9, 54.414), T(14, 9, 45.648)) == Verdict::kDismissedWindow);
+		CHECK(w.Judge(kHorse, T(14, 17, 7.623), T(14, 16, 58.312)) == Verdict::kDismissedWindow);
+		CHECK(w.Judge(kWalker, T(14, 9, 45.648) + 20000, T(14, 9, 45.648)) == Verdict::kDismissedWindow);
+		CHECK(w.Judge(kWalker, T(14, 9, 45.648) + 20001, T(14, 9, 45.648)) == Verdict::kLost);
+		CHECK(MenuWindowMs(kWalker) == 20000 && MenuWindowMs(kHorse) == 20000 && MenuWindowMs(kQuiet) == 30000 && MenuWindowMs(kDog) == 30000);
+		// ...and with D-Walker's leave seen (the walker handler's detour): by the order, however long the balloon takes
+		DismissRun r;
+		r.Out(kWalker, 0, 5000);
+		r.w.OnLeave(kWalker, 5000, true);
+		r.Out(kWalker, 5000, 9000, false);  // its object gone before the type (fultoned): still leaving
+		r.Out(kNone, 40000, 42000, false);
+		CHECK(r.w.Type() == kWalker);
+		CHECK(r.w.Judge(kWalker, r.noneSince, 5000) == Verdict::kDismissedLeave);
+	}
+	// D-Dog dismissed (gone 8.8 s after the iDroid, live 2026-10-14) with its leave seen; and from far away, 50 s later: still.
+	{
+		DismissRun r;
+		r.Out(kDog, 0, 2000);
+		r.w.OnLeave(kDog, 2000, true);
+		r.Out(kDog, 2000, 52000);
+		r.Out(kNone, 52000, 54250, false);
+		CHECK(r.w.Judge(kDog, r.noneSince, 2000) == Verdict::kDismissedLeave);
+		CHECK(DismissWatch{}.Judge(kDog, r.noneSince, 2000) == Verdict::kLost);  // without the order: beyond the window
+	}
+	// CHANGE EQUIPMENT (integ8 / integ9 2026-11-04: D-Dog's handler took `leave` with the iDroid open, the dog gone ~9 s, then back with
+	// the new suit): the order is forgotten once it is back, so a later loss is called back again.
+	{
+		DismissRun r;
+		r.Out(kDog, 0, 1000);
+		r.w.OnLeave(kDog, 1000, true);
+		r.Out(kDog, 1000, 10000);              // still out
+		r.Out(kDog, 10000, 25000, false);      // gone (its object doesn't answer)
+		CHECK(r.w.Leaving(kDog, 24000));       // ReviveBuddy leaves it alone meanwhile
+		CHECK(r.w.OnActive(kDog, true, 25000) == Forgot::kBack);
+		CHECK(!r.w.Leaving(kDog, 25250) && r.w.Type() == -1);
+		r.Out(kDog, 25250, 60000);
+		r.Out(kNone, 60000, 62250, false);     // killed / lost 35 s later, no menu since the iDroid at 1 s
+		CHECK(r.w.Judge(kDog, r.noneSince, 1000) == Verdict::kLost);
+	}
+	// A re-equip whose NONE flickers (< the 2 s confirmation) also counts as gone-and-back.
+	{
+		DismissRun r;
+		r.w.OnLeave(kQuiet, 1000, true);
+		r.Out(kNone, 5000, 6500, false);
+		CHECK(r.w.OnActive(kQuiet, true, 6500) == Forgot::kBack);
+	}
+	// A blip shorter than 1 s of her object not answering while she walks off doesn't forget the order.
+	{
+		DismissRun r;
+		r.w.OnLeave(kQuiet, 1000, true);
+		r.Out(kQuiet, 1000, 4000);
+		r.Out(kQuiet, 4000, 4750, false);
+		CHECK(r.w.OnActive(kQuiet, true, 4750) == Forgot::kNo);
+		r.Out(kQuiet, 4750, 13000);
+		r.Out(kNone, 13000, 15250, false);
+		CHECK(r.w.Judge(kQuiet, r.noneSince, 1000) == Verdict::kDismissedLeave);
+	}
+	// Another buddy deployed from the iDroid (D-Dog -> D-Horse, integ8 run 3: the dog's leave, then HORSE): the order is forgotten,
+	// AdoptBuddy's own adoption follows the new one.
+	{
+		DismissWatch w;
+		w.OnLeave(kDog, T(1, 34, 28.834), true);
+		CHECK(w.OnActive(kDog, true, T(1, 34, 30.0)) == Forgot::kNo);
+		CHECK(w.OnActive(kHorse, true, T(1, 34, 38.3)) == Forgot::kAnother);
+		CHECK(w.Type() == -1 && !w.Leaving(kDog, T(1, 34, 40.0)));
+		CHECK(w.OnActive(kHorse, true, T(1, 34, 40.0)) == Forgot::kNo);  // nothing remembered: nothing to forget
+		// an unknown type (no Tick) changes nothing
+		w.OnLeave(kQuiet, 1000, true);
+		CHECK(w.OnActive(-1, false, 3000) == Forgot::kNo && w.Type() == kQuiet);
+	}
+	// A newer order replaces the remembered one (the player re-equips, then dismisses).
+	{
+		DismissWatch w;
+		w.OnLeave(kQuiet, 1000, true);
+		w.OnLeave(kQuiet, 50000, true);
+		CHECK(w.LeaveMs() == 50000);
+		CHECK(w.Judge(kQuiet, 49000, 0) == Verdict::kLost);  // a NONE before the newer order isn't by it
+		CHECK(w.Judge(kQuiet, 62000, 0) == Verdict::kDismissedLeave);
+		w.Reset();
+		CHECK(w.Type() == -1 && w.Judge(kQuiet, 62000, 0) == Verdict::kLost);
+	}
+	CHECK(std::string(VerdictName(Verdict::kDismissedLeave)) == "leave order" && std::string(VerdictName(Verdict::kLost)) == "lost");
+}
+
 int main()
 {
+	TestBuddyDismiss();
 	TestSuppressor();
 	TestCopyStale();
 	TestIDroidRequest();

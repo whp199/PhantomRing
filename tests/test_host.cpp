@@ -419,6 +419,44 @@ static void TestShippedIni(const wchar_t* a_path)
 	// who never touches the ini gets it, a boss is still never a target
 	CHECK(shipped.dog == d.dog && d.dog.enabled && d.dog.spot && d.dog.indicator && d.dog.bark && d.dog.orderText && d.dog.bosses == "off" &&
 	      d.dog.clearRun && d.dog.targetMin == 3.5f && d.dog.woundShare == 1.0f && d.dog.pickLatchMs == 500 && d.dog.stepGuard && d.dog.waitPin);
+	// [Quiet] / [Grace] (protocol v18): spelled out; on since 0.9.0 (the integration with both games: posts, drawing, spotting and the
+	// grace rest) except her orders, which stay opt-in (MGSV offers Fire only from its own snipe points)
+	CHECK(shipped.quiet == d.quiet && d.quiet.enabled && d.quiet.posts && !d.quiet.orders && d.quiet.spot && d.quiet.indicator && d.quiet.orderText &&
+	      !d.quiet.shotNoise && d.quiet.bosses == "off" && d.quiet.coverRings.size() == 4 && d.quiet.coverRings[3] == 55.0f && d.quiet.nearRings.size() == 3 &&
+	      d.quiet.postHeightMin == -3.0f && d.quiet.sightHeight == 0.9f && d.quiet.cloak == "hide");
+	// (round E1) rest_dark = fade: U12 found Elden Ring's InGame fade plate; the rest itself (buddy_rest) on since 0.9.0
+	CHECK(shipped.grace == d.grace && d.grace.buddyRest && !d.grace.tarnished && d.grace.restDark == "fade" && d.grace.seatRings.size() == 4 &&
+	      d.grace.seatRings[0] == 2.0f && d.grace.seatDirs == 16 && d.grace.seatBlackWaitMs == 2000);
+}
+
+// [Quiet] / [Grace] from an ini (protocol v18 scaffolding; docs/research/quiet.md §5): values, lists, the word rules, clamps.
+static void TestQuietConfig()
+{
+	if (FILE* f = std::fopen("test_quiet.ini", "wb")) {
+		std::fputs("[Quiet]\nenabled = true\nposts = true\ncover_rings = 30, 40\nnear_rings = x, y\npost_dirs = 1000\npost_height_min = -5\n"
+		           "post_height_max = -9\nsight_height = -1\ntarget_cone_deg = 500\nbosses = always\ncloak = shimmer\nspot = true\nindicator = false\n"
+		           "orders = true\n"
+		           "[Grace]\nbuddy_rest = true\nseat_rings = 2, 0.1, 50\nrest_dark = luma\nseat_menu_x = 3\nseat_deadline_ms = -4\ntarnished = true\n",
+			f);
+		std::fclose(f);
+	}
+	Config c;
+	c.Load(L"test_quiet.ini");
+	const Config             d;
+	const std::vector<float> rings{ 30.0f, 40.0f }, seats{ 2.0f, 0.5f, 10.0f };
+	CHECK(c.quiet.enabled && c.quiet.posts && c.quiet.coverRings == rings && c.quiet.nearRings == d.quiet.nearRings &&
+	      c.quiet.postDirs == 72 && c.quiet.postHeightMin == -5.0f && c.quiet.postHeightMax == -5.0f && c.quiet.sightHeight == 0.0f &&
+	      c.quiet.targetConeDeg == 90.0f && c.quiet.bosses == "off" && c.quiet.cloak == "shimmer" && c.quiet.spot && !c.quiet.indicator && c.quiet.orders);
+	CHECK(c.grace.buddyRest && c.grace.seatRings == seats && c.grace.restDark == "luma" && c.grace.seatMenuX == 1.0f &&
+	      c.grace.seatDeadlineMs == 0 && c.grace.tarnished && c.grace.seatDirs == d.grace.seatDirs);
+	if (FILE* f = std::fopen("test_quiet.ini", "wb")) {
+		std::fputs("[Quiet]\ncloak = sparkle\n[Grace]\nrest_dark = timer\n", f);
+		std::fclose(f);
+	}
+	Config b;
+	b.Load(L"test_quiet.ini");
+	CHECK(b.quiet == d.quiet && b.grace == d.grace);  // unknown words keep the defaults: no grace rest on a timer by mistake
+	std::remove("test_quiet.ini");
 }
 
 // [Dog] from an ini (protocol v17 scaffolding; docs/research/ddog.md §5): values, the bosses rule, clamps.
@@ -878,6 +916,7 @@ int main(int argc, char** argv)
 	TestNearerOf();
 	TestNoise();
 	TestDogConfig();
+	TestQuietConfig();
 	if (argc >= 2) {
 		TestShippedIni(phantom::Widen(argv[1]).c_str());
 	}

@@ -15,6 +15,7 @@
 #include "Events.h"
 #include "Fulton.h"
 #include "GeomProbe.h"
+#include "GraceRest.h"
 #include "Hud.h"
 #include "InputBridge.h"
 #include "Interaction.h"
@@ -28,6 +29,7 @@
 #include "Pacing.h"
 #include "PacingProbe.h"
 #include "Progression.h"
+#include "Quiet.h"
 #include "Puppet.h"
 #include "QuickItem.h"
 #include "Renderer.h"
@@ -294,6 +296,8 @@ namespace phantom::er::Host
 				g_atGrace = true;
 				g_gracePos = game::Position(a_f.player);
 			}
+			// (v18) The grace rest with the buddy (er/GraceRest.h): armed here, nothing moves before Elden Ring's observed black.
+			GraceRest::OnRest(a_f);
 		}
 
 		// Ladders (er/Ladder.h): Snake's press on a ladder prompt, or a ladder state while he plays, hands the Tarnished to Elden Ring
@@ -645,6 +649,7 @@ namespace phantom::er::Host
 				g_interactionPrompt = g_promptSeen;
 				g_hudUpAtPress = true;
 				Log::Info("ER dialog: its HUD hid as the prompt (ActionButtonParam {}) went, with no press (an NPC talks to the Tarnished)", g_promptSeen);
+				GraceRest::OnDialog();  // (v18) a seat being taken or held is cancelled (docs/research/quiet.md §3.9)
 			}
 			// One of Elden Ring's screens right after another (live: Melina's question answered, her grace menu 133 ms later with
 			// the HUD back in between -- the interaction had ended and Snake had the pad inside the grace menu): the HUD hiding
@@ -967,6 +972,7 @@ namespace phantom::er::Host
 			s.flags = bit(f.inGame, proto::kHostInGame) | bit(f.menuOpen, proto::kHostMenuOpen) | bit(f.loading, proto::kHostLoading) |
 			          bit(Puppet::Active(), proto::kHostPuppeting) | bit(f.dead || Puppet::Dying(), proto::kHostPlayerDead) | bit(f.cutscene, proto::kHostCutscene) |
 			          bit(Cfg().dog.enabled, proto::kHostDogLayer);  // (v17) the guest takes D-Dog's attack orders over only while it is set
+			// kHostQuietLayer / buddyPost* (er/Quiet.h) and kHostAtGrace / grace* (er/GraceRest.h) are filled below.
 			s.frame = f.index;
 			s.qpc = Link::Qpc();
 			s.timeOfDayHours = game::TimeOfDay();
@@ -976,6 +982,9 @@ namespace phantom::er::Host
 			s.erWorldId = f.player ? SafeRead<std::uint32_t>(f.player.chr + 0x6D0).value_or(0) : 0;
 			s.groundY = Puppet::GroundY();
 			s.fallSpeed = Puppet::FallSpeed();
+			// (v18) the grace rest and Quiet's post (MGSV world through Snake's anchor; NaN = none, a zero seq = none since the start)
+			GraceRest::Fill(s, Puppet::CurrentAnchor(), g_atGrace && f.inGame);
+			Quiet::Fill(s, Puppet::CurrentAnchor());
 			Link::Get().WriteHostState(s);
 		}
 	}
@@ -1012,6 +1021,8 @@ namespace phantom::er::Host
 
 	bool Tarnished() { return g_tarnished; }
 
+	bool AtGrace() { return g_atGrace; }
+
 	std::string TarnishedCommand(std::string_view a_arg)
 	{
 		// tarnished [on|off|toggle]: Tarnished mode as the chord sets it (test automation)
@@ -1030,6 +1041,8 @@ namespace phantom::er::Host
 		// up, 8.7 m away" for a climb of +18.9 m.
 		g_ladderFrom += a_delta;
 		g_climbFrom.pe += a_delta;
+		// (v18) Where he rested: a shift during a rest never reads as "left the grace" (2 m from a stale point), never un-seats the buddy.
+		g_gracePos += a_delta;
 		g_climbPace.Shift(a_delta.y);  // its measured speed: one frame of a 32 m step (eased, but enough to change the pace sent)
 	}
 

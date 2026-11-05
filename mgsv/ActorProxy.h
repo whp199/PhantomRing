@@ -59,6 +59,9 @@ namespace phantom::guest::proxy
 			int   refreshFrames{ 30 };        // ... or every this many frames anyway
 			int   tableLagMs{ 33 };           // a new ActorTable was built from the GuestState about this long before it arrived
 			Height height{ Height::kEnemy };  // [Proxies] Height (kGround only with full proxies; the Fulton-only path keeps kEnemy)
+			// The dedicated soldier's height: D-Dog's on the sandbox ground (the dog has to reach him), Quiet's stand-in at the enemy's
+			// ([Quiet] StandInHeight: her binoculars look up at him, docs/research/quiet.md §3.4).
+			Height dedicatedHeight{ Height::kGround };
 		};
 
 		// One hostile Elden Ring character, already corrected into MGSV world as of now.
@@ -294,8 +297,14 @@ namespace phantom::guest::proxy
 	// character's x/z, never parked for the buddy's clearance (the dog has to reach him); MGSV's alert phase is held at 0 while he is
 	// out (the phase lock; if it can't be held, dog::DisableAttack). Release() ends it (the soldier goes back to what the slot is
 	// without it: disabled, or a sleeping / full proxy). Lua thread or console.
-	void Dedicate(std::uint64_t a_handle, bool a_puppet);
+	// (Quiet, docs/research/quiet.md §3.4-3.5) a_buddyType = the buddy the soldier is for (BuddyType: 2 D-Dog, 3 Quiet) and a_height his
+	// height (D-Dog's on the ground; Quiet's stand-in at the enemy's). The phase lock's guard is the buddy's own: a fresh one on each
+	// buddy's first dedicated soldier and on every change of the active buddy type, and a give-up turns off the active buddy's orders
+	// (D-Dog's Attack, Quiet's orders) -- never another's.
+	void Dedicate(std::uint64_t a_handle, bool a_puppet, int a_buddyType = 2, plan::Height a_height = plan::Height::kGround);
 	void Release(const char* a_why);
+	// The buddy (BuddyType) the dedicated soldier is for, 0 when none.
+	int DedicatedBuddy();
 	// D-Dog's attack has its soldier (Dog.cpp, game thread, every frame before OnFrame): from the bite's start to its end MGSV's paired
 	// animation moves him and the dog together, so he is no longer put back onto the character's place -- only moved along with Snake's
 	// treadmill jumps (the dog is moved by the same jump in the same frame).

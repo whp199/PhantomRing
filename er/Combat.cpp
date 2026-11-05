@@ -1199,7 +1199,7 @@ namespace phantom::er::Combat
 						}
 					}
 					HitLog("combat: bullet on {} did not land within {} ms; hp fallback -{}{}", it->name, Cfg().verifyMs, it->damage,
-						it->landOrHp ? " (D-Dog's bite connected: its damage is dealt anyway)" : "");
+						it->landOrHp ? " (the buddy's hit connected in MGSV -- D-Dog's bite, Quiet's round: its damage is dealt anyway)" : "");
 				}
 			}
 			it = g_pending.erase(it);

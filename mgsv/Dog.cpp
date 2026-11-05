@@ -4,6 +4,7 @@
 #include "ActorProxy.h"
 #include "Addresses.h"
 #include "BuddyLocation.h"
+#include "BuddyLogic.h"
 #include "Combat.h"
 #include "Config.h"
 #include "DogLogic.h"
@@ -372,6 +373,8 @@ namespace phantom::guest::dog
 				return "DD";
 			case addr::kDogTransformQuery:
 				return "transform query";
+			case buddy::plan::kMsgLeave:
+				return "leave";
 			default:
 				return nullptr;
 			}
@@ -396,6 +399,10 @@ namespace phantom::guest::dog
 				return r;
 			}
 			g_messages.fetch_add(1, std::memory_order_relaxed);
+			if (id == buddy::plan::kMsgLeave) {
+				// MGSV's buddy system sends the dog away (the iDroid's DISMISS / CHANGE EQUIPMENT / another buddy; BuddyLogic.h)
+				state::NoteBuddyLeave(state::kBuddyTypeDog, ::GetTickCount64());
+			}
 			if (g_sys.exchange(reinterpret_cast<std::uintptr_t>(a_sys)) != reinterpret_cast<std::uintptr_t>(a_sys)) {
 				Log::Info("dog: the dog system is {:#x} (dog index {}, {} dogs)", reinterpret_cast<std::uintptr_t>(a_sys), a_index, *count);
 			}

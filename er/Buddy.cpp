@@ -9,6 +9,7 @@
 #include "Log.h"
 #include "Pacing.h"
 #include "Puppet.h"
+#include "Quiet.h"
 
 #include <windows.h>
 
@@ -32,6 +33,8 @@ namespace phantom::er::Buddy
 		std::uint64_t g_drawGroundApart{ 0 };   // frames the two were measured apart
 		std::uint64_t g_floorShifts{ 0 }, g_floorSnake{ 0 }, g_floorNone{ 0 };  // placements by that rule: moved / Snake's level / none
 		std::uint32_t g_draws{ 0 };
+		bool          g_quietNoFloor{ false };  // (v18) Quiet off her post with no Elden Ring floor under her: hidden, never floating
+		std::uint64_t g_quietFar{ 0 }, g_quietNoFloors{ 0 };
 		std::uint32_t g_flags{ 0 };
 		float         g_heading{ 0 };
 		const char*   g_source{ "none" };
@@ -251,6 +254,48 @@ namespace phantom::er::Buddy
 		}
 		const auto& anchor = Puppet::CurrentAnchor();
 		Vec3        er = anchor.PointToEr(world);
+		// (v18) Quiet (er/Quiet.h): at her post or the grace seat she is placed at that Elden Ring point (her draws are moved there whole,
+		// er/RenderScene.cpp); not placed while hidden (cloaked, on the move, the rest's black); else MGSV's place on Elden Ring's ground by
+		// the far-ground rule -- a ray from far_ground_up m above to far_ground_down m below, the first floor from the top; none: hidden.
+		g_quietNoFloor = false;
+		if (g.buddyType == kQuiet && Cfg().quiet.enabled && !(g.buddyFlags & proto::kBuddyRidden)) {
+			ResetGuards();
+			const auto pl = Quiet::Place();
+			g_groundOffset = g_drawGroundOffset = 0.0f;
+			g_drawShift = g_drawGroundShift = {};
+			g_heading = MgsvHeading(g.buddyYaw, anchor.axes) + anchor.delta;
+			if (pl.kind == Quiet::Placement::Kind::kAt) {
+				g_pos = pl.feet;
+				g_source = "Quiet's post / the grace seat";
+				g_estimate = true;
+				return;
+			}
+			if (pl.kind == Quiet::Placement::Kind::kHidden) {
+				return;
+			}
+			const auto& q = Cfg().quiet;
+			Vec3        h;
+			// The floor nearest her mapped place first: from 1.5 m above it down (review: the first floor from 20 m above was a bridge deck, a
+			// roof or an upper storey over her); only when that finds none, the far ray from far_ground_up (she stands on a slope above it).
+			const bool nearFloor = Puppet::CastWorld(er + Vec3{ 0, 1.5f, 0 }, Vec3{ 0, -(1.5f + q.farGroundDown), 0 }, h, a_f.player.chr, true);
+			const bool found = nearFloor || Puppet::CastWorld(er + Vec3{ 0, q.farGroundUp, 0 }, Vec3{ 0, -(q.farGroundUp + q.farGroundDown), 0 }, h, a_f.player.chr, true);
+			// A floor farther than the drawn lift may take her is no floor for her (review: an offset of -30..-40 m was clamped to -30 m and
+			// drew her up to 10 m in the air).
+			if (!found || std::fabs(h.y - er.y) > std::max(0.0f, q.liftMax)) {
+				g_quietNoFloor = true;
+				if (++g_quietNoFloors <= 5 || g_quietNoFloors % 600 == 0) {
+					Log::Info("buddy: Quiet has no Elden Ring floor within {:.0f} m above / {:.0f} m below where MGSV has her{} -- not drawn ({} times)", q.farGroundUp,
+						q.farGroundDown, found ? std::format(" nearer than [Quiet] lift_max {:.0f} m (the floor is {:+.1f} m away)", q.liftMax, h.y - er.y) : std::string(),
+						g_quietNoFloors);
+				}
+				return;
+			}
+			++g_quietFar;
+			g_groundOffset = g_drawGroundOffset = h.y - er.y;
+			g_pos = Vec3{ er.x, h.y, er.z };
+			g_estimate = true;
+			return;
+		}
 		Vec3        hit;
 		const bool  dog = g.buddyType == kDog && !(g.buddyFlags & proto::kBuddyRidden) && !Puppet::Riding();
 		const auto  slip = Slip(a_f, anchor);
@@ -387,6 +432,7 @@ namespace phantom::er::Buddy
 	float DrawGroundOffset() { return g_drawGroundOffset; }
 	Vec3  DrawGroundShift() { return g_drawGroundShift; }
 	Vec3  WaitShift() { return g_pinShift; }
+	bool  QuietNoFloor() { return g_quietNoFloor; }
 
 	void OnWorldShift(const Vec3& a_delta)
 	{

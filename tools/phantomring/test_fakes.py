@@ -54,7 +54,7 @@ def main() -> int:
 	try:
 		print(f"mapping {path}, logs in {work}")
 		# Guest first: it must wait for a host session without publishing anything.
-		guest = spawn("fake_mgsv", path, 17.0, work / "mgsv.json", work / "mgsv.log")
+		guest = spawn("fake_mgsv", path, 27.0, work / "mgsv.json", work / "mgsv.log")
 		procs.append(guest)
 		time.sleep(0.7)
 		link = proto.Link(path)
@@ -118,7 +118,7 @@ def main() -> int:
 		check(r.returncode == 3 and "not running" in r.stderr, "`pr er` with no host says so", r.stderr.strip())
 		nonce1 = link.header.sessionNonce
 
-		host2 = spawn("fake_er", path, 10.0, work / "er2.json", work / "er2.log")
+		host2 = spawn("fake_er", path, 19.0, work / "er2.json", work / "er2.log")
 		procs.append(host2)
 		time.sleep(1.0)
 		check(link.header.sessionNonce != nonce1 and link.header.guestNonce == link.header.sessionNonce,
@@ -168,6 +168,83 @@ def main() -> int:
 		r = pr(path, "lua", "!dog attack target knockout")
 		check(r.returncode == 0 and "Ordered/KnockOut" in r.stdout, "`!dog attack target knockout` (a full run)", (r.stdout + r.stderr).strip())
 		time.sleep(1.6)
+		# v18 Quiet and the grace rest: nothing published until the host has it (seqs 0, NaN), her object id, weapon, orders, picks
+		hs = link.host_state()
+		check(hs is not None and not hs.flags & (proto.HostFlags.QuietLayer | proto.HostFlags.AtGrace) and hs.graceSeq == 0 and hs.buddyPostSeq == 0
+			and all(v != v for v in list(hs.buddyPost) + list(hs.graceSeat) + list(hs.graceCentre)),
+			"v18 HostState: no QuietLayer / AtGrace, grace and post NaN with seq 0 until asked", proto.flag_names(hs.flags, proto.HostFlags) if hs else "-")
+		r = pr(path, "lua", "!quiet shot")
+		check(r.returncode == 1 and "!buddy quiet" in r.stdout + r.stderr, "`!quiet shot` needs Quiet out", (r.stdout + r.stderr).strip())
+		pr(path, "lua", "!buddy quiet")
+		pr(path, "lua", "!quiet weapon heavy")
+		r1 = pr(path, "lua", "!order 1")
+		r2 = pr(path, "lua", "!order 5")
+		check("pad0=3" in r1.stdout and "pad0=0" in r2.stdout, "Quiet's `!order 1` carries her weapon + 1 in pad[0], `!order 5` none",
+			(r1.stdout + r2.stdout).strip())
+		gs = link.guest_state()
+		check(gs is not None and gs.buddyObjectId == 0x2400 and gs.buddyType == proto.BuddyType.QUIET and
+			proto.buddy_quiet_weapon(gs.buddyFlags) == proto.QuietWeapon.Heavy, "Quiet: object 0x2400, buddyFlags bits 17-19 = Heavy",
+			f"{gs.buddyObjectId:#x} {gs.buddyFlags:#x}" if gs else "-")
+		r = pr(path, "er", "actor 0 quiettarget")
+		check(r.returncode == 0 and "QuietTarget" in r.stdout, "`pr er actor 0 quiettarget` sets ActorFlags.QuietTarget", (r.stdout + r.stderr).strip())
+		pr(path, "lua", "!quiet hit 0.3")
+		r = pr(path, "lua", "!quiet shot")
+		check(r.returncode == 0 and "Ordered/Heavy" in r.stdout and "0xffffffff00001000" in r.stdout, "`!quiet shot`: Ordered on the host's pick",
+			(r.stdout + r.stderr).strip())
+		time.sleep(0.15)
+		gs = link.guest_state()
+		check(gs is not None and gs.buddyFlags & proto.GuestBuddyFlags.Engaged, "GuestBuddyFlags.Engaged from Ordered (Quiet aims)",
+			proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags) if gs else "-")
+		time.sleep(0.8)
+		r = pr(path, "lua", "!quiet shot none")
+		check(r.returncode == 0 and "Refused/Heavy" in r.stdout, "`!quiet shot none`: Refused, handle 0", (r.stdout + r.stderr).strip())
+		r = pr(path, "lua", "!quiet shot pick lost target tranq")
+		check(r.returncode == 0 and "Ordered/Tranq" in r.stdout, "`!quiet shot pick lost target tranq`", (r.stdout + r.stderr).strip())
+		time.sleep(0.8)
+		# her post: only with HostFlags.QuietLayer; echoed in GuestState.buddyPostSeq with AtPost; no post = cloaked (on the move)
+		pr(path, "lua", "!quiet post on")
+		r = pr(path, "er", "post 20 5 90")
+		time.sleep(0.25)
+		gs = link.guest_state()
+		check(r.returncode == 0 and gs is not None and not gs.buddyFlags & proto.GuestBuddyFlags.AtPost and gs.buddyPostSeq == 0,
+			"a post without HostFlags.QuietLayer is not held", (r.stdout + r.stderr).strip())
+		pr(path, "er", "quietlayer 1")
+		time.sleep(0.25)
+		gs, hs = link.guest_state(), link.host_state()
+		check(gs is not None and hs is not None and hs.flags & proto.HostFlags.QuietLayer and gs.buddyFlags & proto.GuestBuddyFlags.AtPost and
+			gs.buddyPostSeq == hs.buddyPostSeq == 1 and abs(gs.buddyPos[0] - hs.buddyPost[0]) < 0.5 and abs(gs.buddyPos[2] - hs.buddyPost[2]) < 0.5,
+			"`pr er quietlayer 1` + `post 20 5 90`: Quiet held at the post, seq 1 echoed", f"{list(gs.buddyPos)} vs {list(hs.buddyPost)}" if gs and hs else "-")
+		pr(path, "er", "post none")
+		time.sleep(0.25)
+		gs = link.guest_state()
+		check(gs is not None and gs.buddyFlags & proto.GuestBuddyFlags.Cloaked and gs.buddyPostSeq == 0, "`pr er post none`: on the move, cloaked",
+			proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags) if gs else "-")
+		# the grace rest: kBuddyCanRest, then the seat echoed in graceSeqSeated with Seated; a rest without a seat isn't sat at
+		pr(path, "lua", "!quiet seat on")
+		r = pr(path, "er", "grace 1")
+		time.sleep(0.3)
+		gs, hs = link.guest_state(), link.host_state()
+		check(r.returncode == 0 and gs is not None and hs is not None and hs.flags & proto.HostFlags.AtGrace and
+			gs.buddyFlags & (proto.GuestBuddyFlags.CanRest | proto.GuestBuddyFlags.Seated) == (proto.GuestBuddyFlags.CanRest | proto.GuestBuddyFlags.Seated) and
+			gs.graceSeqSeated == hs.graceSeq == 1 and abs(gs.buddyPos[0] - hs.graceSeat[0]) < 0.5,
+			"`pr er grace 1`: Quiet seated at the grace seat, rest 1 echoed", (r.stdout + r.stderr).strip())
+		r = pr(path, "status")
+		check(r.returncode == 0 and "grace #1" in r.stdout and "seated for rest #1" in r.stdout, "`pr status` shows the grace and the echo",
+			r.stdout.strip()[-300:])
+		pr(path, "er", "grace 1 none")
+		time.sleep(0.25)
+		gs = link.guest_state()
+		check(gs is not None and not gs.buddyFlags & proto.GuestBuddyFlags.Seated and gs.graceSeqSeated == 0,
+			"`pr er grace 1 none` (a rest without a seat: graceSeq stays): not seated", proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags) if gs else "-")
+		pr(path, "er", "grace 0")
+		pr(path, "lua", "!quiet cover on")
+		pr(path, "lua", "!quiet marked on")
+		time.sleep(0.25)
+		gs, hs = link.guest_state(), link.host_state()
+		check(gs is not None and hs is not None and not hs.flags & proto.HostFlags.AtGrace and
+			gs.buddyFlags & (proto.GuestBuddyFlags.QuietCover | proto.GuestBuddyFlags.QuietMarked) == (proto.GuestBuddyFlags.QuietCover | proto.GuestBuddyFlags.QuietMarked),
+			"`grace 0` ends AtGrace; `!quiet cover|marked on` set QuietCover / QuietMarked", proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags) if gs else "-")
+		pr(path, "er", "quietlayer 0")
 		pr(path, "lua", "!buddy walker")
 		host2.wait(timeout=15)
 		guest.wait(timeout=15)
@@ -220,6 +297,16 @@ def main() -> int:
 			e2["dogEngagedFrames"])
 		check(g["dogTargetsSeen"] == ["0xffffffff00001001"] and g["dogTargetFrames"] > 10, "guest saw ActorFlags.DogTarget on actor 1 only",
 			g["dogTargetsSeen"])
+		# v18 Quiet, as host#2 saw it
+		want = ["Ordered/Heavy", "Hit/Heavy", "Released/Heavy", "Refused/Heavy", "Ordered/Tranq", "Lost/Tranq"]
+		check(e2["quietShots"] == want, "host#2: kGEvQuietShot phases and weapons in order", e2["quietShots"])
+		check([1, int(proto.BuddyType.QUIET), int(proto.QuietWeapon.Heavy) + 1] in e2["buddyOrders"] and [5, int(proto.BuddyType.QUIET), 0] in e2["buddyOrders"],
+			"host#2: Quiet's BuddyOrder 1 with her weapon, 5 without", e2["buddyOrders"])
+		check(e2["postSeqEchoed"] == 1 and e2["postEchoFrames"] > 5 and e2["graceSeqEchoed"] == 1 and e2["seatEchoFrames"] > 5 and
+			"Heavy" in e2["quietWeaponsSeen"], "host#2: the post and the seat echoed (seq 1 each), her weapon seen",
+			f"post {e2['postSeqEchoed']}/{e2['postEchoFrames']} seat {e2['graceSeqEchoed']}/{e2['seatEchoFrames']} {e2['quietWeaponsSeen']}")
+		check(g["quietTargetsSeen"] == ["0xffffffff00001000"] and g["quietTargetFrames"] > 10 and g["hostEvents"].get("Rested", 0) >= 2,
+			"guest saw ActorFlags.QuietTarget on actor 0 only, and a kHEvRested per `grace 1`", f"{g['quietTargetsSeen']} {g['hostEvents']}")
 		check(e2["guestFlagsSeen"] & proto.GuestFlags.OnVehicle and 0x402 in e2["vehicleIdsSeen"], "riding D-Walker: OnVehicle + vehicleId",
 			e2["vehicleIdsSeen"])
 	except Exception as ex:  # report, then clean up

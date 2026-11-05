@@ -173,6 +173,14 @@ if(PHANTOM_GUEST_SOURCES)
 	target_include_directories(test_guest_horse PRIVATE mgsv)
 	target_link_options(test_guest_horse PRIVATE ${PHANTOM_STATIC_LINK})
 
+	add_executable(test_guest_quiet tests/test_guest_quiet.cpp mgsv/QuietLogic.cpp mgsv/Logic.cpp)
+	target_include_directories(test_guest_quiet PRIVATE mgsv protocol)
+	target_link_options(test_guest_quiet PRIVATE ${PHANTOM_STATIC_LINK})
+
+	add_executable(test_guest_follow tests/test_guest_follow.cpp)
+	target_include_directories(test_guest_follow PRIVATE mgsv)
+	target_link_options(test_guest_follow PRIVATE ${PHANTOM_STATIC_LINK})
+
 	add_executable(test_guest_link tests/test_guest_link.cpp mgsv/Link.cpp mgsv/Config.cpp)
 	target_include_directories(test_guest_link PRIVATE mgsv)
 	target_link_libraries(test_guest_link PRIVATE phantom_common)
@@ -233,10 +241,12 @@ if(PHANTOM_GUEST_SOURCES)
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_cqc>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_horse>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_climb>
+		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_follow>
+		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all wine $<TARGET_FILE:test_guest_quiet>
 		COMMAND ${CMAKE_COMMAND} -E env ${PHANTOM_WINE_ENV} WINEDEBUG=-all "WINEDLLOVERRIDES=dinput8=n,b"
 			wine $<TARGET_FILE:test_guest_proxy> $<TARGET_FILE:PhantomRingGuest>
 		WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-		DEPENDS test_guest_logic test_guest_dive test_guest_c4 test_guest_actorproxy test_guest_dog test_guest_cqc test_guest_horse test_guest_climb test_guest_link test_guest_watch test_guest_proxy PhantomRingGuest ${PHANTOM_GUEST_PUMP_DEP}
+		DEPENDS test_guest_logic test_guest_dive test_guest_c4 test_guest_actorproxy test_guest_dog test_guest_cqc test_guest_horse test_guest_climb test_guest_follow test_guest_quiet test_guest_link test_guest_watch test_guest_proxy PhantomRingGuest ${PHANTOM_GUEST_PUMP_DEP}
 		USES_TERMINAL)
 endif()
 

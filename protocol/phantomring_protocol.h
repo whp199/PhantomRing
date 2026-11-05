@@ -28,7 +28,7 @@
 namespace phantom::proto
 {
 	inline constexpr std::uint32_t kMagic = 0x47524850;  // "PHRG"
-	inline constexpr std::uint32_t kVersion = 17;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
+	inline constexpr std::uint32_t kVersion = 18;  // v2: GuestState buddy fields (0x90..0xA8); v3: kHEvHeal; v4: kAmmoSmoke;
 	                                              // v5: kGEvThrow, kGEvPlaced, kGEvPlacedGone, kHEvDetonate;
 	                                              // v6: GuestState aimThrow* (0xA8..0xC4) + kGuestThrowAim; v7: kGEvBuddyOrder;
 	                                              // v8: kGuestInBox, kGuestBoxPoster, kGEvFire pad[1] = MGSV damage share;
@@ -43,7 +43,14 @@ namespace phantom::proto
 	                                              // v16: kGuestSuppressorOn, kFireSuppressed (kGEvFire b);
 	                                              // v17: kActorDogTarget, kBuddyEngaged, kGEvDogAttack + DogPhase / DogStyle,
 	                                              //      kGEvBuddyOrder pad[0] = D-Dog's style, kHostDogLayer, buddyFlags'
-	                                              //      kBuddyDogStyleMask (docs/research/ddog.md §4)
+	                                              //      kBuddyDogStyleMask (docs/research/ddog.md §4);
+	                                              // v18: Quiet and the grace rest (docs/research/quiet.md §4) -- kHostQuietLayer,
+	                                              //      kHostAtGrace + HostState grace and post fields (0x30..0x64), GuestState
+	                                              //      echoes buddyPostSeq / graceSeqSeated (0xC4..0xCC), buddyFlags kBuddyCloaked /
+	                                              //      kBuddySeated / kBuddyAtPost / Quiet's weapon (bits 17-19) / kBuddyQuietCover /
+	                                              //      kBuddyCanRest / kBuddyQuietMarked, kActorQuietTarget / kActorQuietThreat,
+	                                              //      kGEvQuietShot + QuietPhase / QuietWeapon / QuietLostReason, kGEvBuddyOrder
+	                                              //      pad[0] = QuietWeapon + 1 for Quiet's commands 1-3
 	inline constexpr wchar_t       kDefaultMapping[] = L"file:Z:\\dev\\shm\\phantomring_v1";
 
 	// ---- region offsets ---------------------------------------------------------------------
@@ -125,6 +132,13 @@ namespace phantom::proto
 		kHostDogLayer = 1u << 6,    // (v17) the host's D-Dog layer is on ([Dog] enabled): it picks D-Dog's target (kActorDogTarget) and
 		                            // applies its bites. Only while this is set does the guest take the player's attack orders (11-15)
 		                            // over for an Elden Ring enemy; otherwise they keep MGSV's own meaning (0.7.0's D-Dog)
+		kHostQuietLayer = 1u << 7,  // (v18) the host's [Quiet] layer is on: it picks Quiet's posts (buddyPost*) and her target
+		                            // (kActorQuietTarget) and applies her hits. Only while this is set does the guest hold her at posts
+		                            // and take the player's orders 1-3 over; otherwise Quiet is MGSV's own (0.8.0's Quiet) -- and no
+		                            // grace seats either (docs/research/quiet.md §3.9)
+		kHostAtGrace = 1u << 8,     // (v18) the player rests at a Site of Grace: from the rest until he is 2 m from where he rested, a
+		                            // load or a death (er/Host.cpp g_atGrace). graceCentre / graceSeat are valid only with this set and
+		                            // when finite
 	};
 
 	struct HostState
@@ -139,8 +153,26 @@ namespace phantom::proto
 		std::uint32_t erWorldId;           // ER map/block id the player is in
 		float         groundY;             // ER ground height under the player (host space), NaN if unknown
 		float         fallSpeed;           // m/s downward while the puppet falls (guest may play a fall)
-		std::uint8_t  reserved[0x100 - 0x30];
+		// (v18) The grace rest and Quiet's post (docs/research/quiet.md §3.2, §3.9). Positions are MGSV world as of the GuestState the
+		// host consumed (through the anchor, as ActorRecord.pos); the guest corrects them for its treadmill warps since then as it does
+		// the actor table. Written every host frame: NaN / 0 when there is none. A zero seq means none whatever the floats hold (a host
+		// or a recording older than v18 leaves them all zero).
+		float         graceCentre[3];      // @0x30 the grace (its asset / param); NaN = unknown or no rest
+		float         graceSeat[3];        // @0x3C where the buddy sits (feet); NaN = no seat this rest (yet, or none found). Published
+		                                   // only while the host observes the rest's black (its fade state / frame luminance, never a
+		                                   // timer) and before the placement's deadline; kept until kHostAtGrace falls or the seat is
+		                                   // cancelled (an Elden Ring dialog)
+		float         graceSeatYaw;        // @0x48 MGSV yaw (rad) from the seat toward the grace (v1b's watch, the guest's SitPose = watch,
+		                                   // faces the other way: from graceCentre through graceSeat, which the guest turns her to)
+		std::uint32_t graceSeq;            // @0x4C bumps with every PUBLISHED seat (a rest whose seat the host found inside the black; a
+		                                   //       rest without one leaves it); 0 = none since the host started
+		float         buddyPost[3];        // @0x50 Quiet's post (feet); NaN = no post: she is on the move (cloaked, not drawn)
+		float         buddyPostYaw;        // @0x5C MGSV yaw she faces there (toward the hostiles she covers, or along Snake's view)
+		std::uint32_t buddyPostSeq;        // @0x60 bumps with every new post; 0 = none
+		std::uint8_t  reserved[0x100 - 0x64];
 	};
+	static_assert(offsetof(HostState, graceCentre) == 0x30 && offsetof(HostState, graceSeq) == 0x4C && offsetof(HostState, buddyPost) == 0x50 &&
+	              offsetof(HostState, buddyPostSeq) == 0x60 && offsetof(HostState, reserved) == 0x64);
 	static_assert(sizeof(HostState) == 0x100);
 
 	// ---- guest -> host state @0x200 (seqlock) ---------------------------------------------------
@@ -226,11 +258,16 @@ namespace phantom::proto
 		float         aimThrowPos[3];
 		float         aimThrowVel[3];
 		std::uint32_t aimThrowKind;   // AmmoKind
-		std::uint8_t  reserved[0x200 - 0xC4];
+		// (v18) What the guest holds of the host's grace seat and post (docs/research/quiet.md §4): the host shows the buddy at a seat
+		// or a post only once it is echoed here.
+		std::uint32_t buddyPostSeq;   // @0xC4 the HostState buddyPostSeq the buddy is held at (with kBuddyAtPost); 0 = none
+		std::uint32_t graceSeqSeated; // @0xC8 the HostState graceSeq whose seat the buddy holds (with kBuddySeated); 0 = none
+		std::uint8_t  reserved[0x200 - 0xCC];
 	};
 	static_assert(offsetof(GuestState, buddyFlags) == 0x90);
 	static_assert(offsetof(GuestState, aimThrowPos) == 0xA8);
-	static_assert(offsetof(GuestState, reserved) == 0xC4);
+	static_assert(offsetof(GuestState, buddyPostSeq) == 0xC4 && offsetof(GuestState, graceSeqSeated) == 0xC8);
+	static_assert(offsetof(GuestState, reserved) == 0xCC);
 	static_assert(sizeof(GuestState) == 0x200);
 
 	enum GuestBuddyFlags : std::uint32_t
@@ -241,7 +278,17 @@ namespace phantom::proto
 		kBuddyLoading = 1u << 3,   // MGSV is loading/calling it
 		kBuddyMissing = 1u << 4,   // configured but not available in this save (not developed / dead)
 		kBuddyEngaged = 1u << 5,   // (v17) the buddy carries out an attack/fetch order on an Elden Ring target: set from kGEvDogAttack
-		                           // kDogConnected until its kDogReleased (D-Dog only so far)
+		                           // kDogConnected until its kDogReleased; (v18) Quiet: from kGEvQuietShot kQuietOrdered until kQuietReleased
+		kBuddyCloaked = 1u << 6,   // (v18) MGSV draws the buddy cloaked -- not at all (Quiet's stealth camo while she dashes): hide it
+		kBuddySeated = 1u << 7,    // (v18) the buddy rests at the grace seat of graceSeqSeated; buddyPos is where it sits
+		// bits 8-15: D-Dog's style (kBuddyDogStyleMask)
+		kBuddyAtPost = 1u << 16,   // (v18) Quiet is held at the host's post buddyPostSeq: the host draws her at that post's Elden Ring place
+		// bits 17-19: Quiet's weapon (kBuddyQuietWeaponMask)
+		kBuddyQuietCover = 1u << 20,   // (v18) MGSV's "Cover me" is on (her order record's cover bit)
+		kBuddyCanRest = 1u << 21,      // (v18) the guest seats this buddy at a grace seat (its [Quiet] RestAtGrace): only then does the host
+		                               // look for one (and only with kHostQuietLayer and posts on, docs/research/quiet.md §3.9)
+		kBuddyQuietMarked = 1u << 22,  // (v18) MGSV holds a mark on Quiet's current stand-in, so its call menu's Fire / Take aim are live:
+		                               // the host's LB hint and the reticle's colour follow it
 	};
 	// (v17) buddyFlags bits 8-15 while D-Dog is out: its DogStyle + 1 (what its equipment makes of the attack orders 11-15), 0 =
 	// unknown or another buddy. Published every frame, so the host picks for the right style before any order ("Get it" takes
@@ -336,7 +383,8 @@ namespace phantom::proto
 		                       // 8-16 D-Dog: 8 whistle, 9 wait, 10 bark, 11-15 its attack/fetch, 16 DD; others: other buddies;
 		                       // docs/GUEST.md 18.3, docs/research/ddog.md §2.1), b = MGSV buddy type (BuddyType: 4 = D-Walker,
 		                       // 2 = D-Dog); (v17) pad[0] = DogStyle + 1 for D-Dog's orders (b == 2: the style its equipment gives
-		                       // commands 11-15), 0 = unknown or another buddy
+		                       // commands 11-15), 0 = unknown or another buddy; (v18) b == 3 (Quiet, commands 1-7): pad[0] =
+		                       // QuietWeapon + 1 for commands 1-3, 0 otherwise or unknown
 		kGEvFulton = 12,       // (v12) Snake fultoned the MGSV proxy soldier that stood in for an Elden Ring character (ActorProxy):
 		                       // pad[0] | pad[1] << 32 = that character's ActorRecord handle, v0 = the proxy's position (MGSV world),
 		                       // a = 1 the balloon went up (MGSV's own fulton succeeded), 0 = it failed/was cancelled; the host
@@ -352,6 +400,11 @@ namespace phantom::proto
 		                       // pad[1]; 0 = unknown: the host uses its per-style values); v0 = the dog's feet (MGSV world); v1 = unit
 		                       // direction dog -> target (MGSV world; 0,0,0 = unknown); pad[0] | pad[1] << 32 = the target's
 		                       // ActorRecord handle (0 = none: kDogRefused without a target)
+		kGEvQuietShot = 16,    // (v18) Quiet and an Elden Ring target (docs/research/quiet.md §3.5): a = QuietPhase | QuietWeapon << 8 |
+		                       // MGSV attack id << 16 (290 / 291 / 292; 0 = unknown); b = MGSV's share of that attack in 1/10000 of a
+		                       // standard soldier's life, lethal or non-lethal by the weapon (0 = unknown), or the QuietLostReason for
+		                       // kQuietLost; v0 = her place (feet, MGSV world); v1 = unit direction her -> the stand-in (MGSV world; 0,0,0 =
+		                       // unknown); pad[0] | pad[1] << 32 = the target's ActorRecord handle (0 = none: kQuietRefused without a pick)
 	};
 
 	enum DogPhase : std::uint32_t  // (v17) kGEvDogAttack a & 0xFF
@@ -398,6 +451,61 @@ namespace phantom::proto
 	}
 	static_assert(BuddyDogStyle(BuddyDogStyleBits(kDogWound) | kBuddyEngaged) == kDogWound && BuddyDogStyle(kBuddyPresent) == kDogStyleUnknown &&
 	              BuddyDogStyleBits(kDogStyleUnknown) == 0);
+
+	enum QuietPhase : std::uint32_t  // (v18) kGEvQuietShot a & 0xFF
+	{
+		kQuietOrdered = 0,   // MGSV took the order on the target's stand-in soldier: she aims
+		kQuietHit = 1,       // her round hit his stand-in in MGSV (her damage message, 0x140D04D50): the host fires from her Elden Ring
+		                     // post, and Elden Ring's line of sight decides
+		kQuietReleased = 2,  // the order is over (the stand-in released, or kept for the mark)
+		kQuietRefused = 3,   // nothing happened: no pick (handle 0), no stand-in in time, or she can't take orders now
+		kQuietLost = 4,      // ordered, then no hit: b = QuietLostReason
+	};
+
+	// (v18) kGEvQuietShot (a >> 8) & 0xFF; kGEvBuddyOrder pad[0] - 1 (Quiet's commands 1-3); buddyFlags' kBuddyQuietWeaponMask - 1.
+	// Semantic (what the host applies), from her live weapon (docs/research/quiet.md Q11), confirmed by each hit's attack id.
+	enum QuietWeapon : std::uint32_t
+	{
+		kQuietLethal = 0,            // Wicked Butterfly (EQP_WP_Quiet_sr_010, ATK 290)
+		kQuietTranq = 1,             // Guilty Butterfly (sr_020, ATK 291): sleep
+		kQuietHeavy = 2,             // Sinful Butterfly (sr_030, ATK 292): lethal, anti-materiel
+		kQuietWeaponUnknown = 0xFF,  // the guest couldn't read it
+	};
+
+	enum QuietLostReason : std::uint32_t  // (v18) kGEvQuietShot b when its phase is kQuietLost
+	{
+		kQuietLostMgsv = 1,       // MGSV never fired: no hit in time, or her "can't" path ran (MGSV's own line or refusal): "no shot (MGSV)"
+		kQuietLostTarget = 2,     // the target died or left the actor table first
+		kQuietLostCancelled = 3,  // a release trigger: a rest, a load, Tarnished mode, the layer off, a dismissal or a buddy change
+	};
+
+	// (v18) buddyFlags bits 17-19 while Quiet is out: her QuietWeapon + 1, 0 = unknown or another buddy. Published every frame.
+	inline constexpr std::uint32_t kBuddyQuietWeaponShift = 17;
+	inline constexpr std::uint32_t kBuddyQuietWeaponMask = 0x7u << kBuddyQuietWeaponShift;
+	static_assert((kBuddyQuietWeaponMask & (kBuddyAtPost | kBuddyQuietCover | kBuddyDogStyleMask)) == 0);
+
+	// (v18) kGEvQuietShot a, packed and unpacked.
+	[[nodiscard]] constexpr std::uint32_t QuietShotA(QuietPhase a_phase, QuietWeapon a_weapon, std::uint32_t a_attackId = 0)
+	{
+		return (static_cast<std::uint32_t>(a_phase) & 0xFFu) | (static_cast<std::uint32_t>(a_weapon) & 0xFFu) << 8 | (a_attackId & 0xFFFFu) << 16;
+	}
+	[[nodiscard]] constexpr QuietPhase    QuietShotPhase(std::uint32_t a_a) { return static_cast<QuietPhase>(a_a & 0xFFu); }
+	[[nodiscard]] constexpr QuietWeapon   QuietShotWeapon(std::uint32_t a_a) { return static_cast<QuietWeapon>((a_a >> 8) & 0xFFu); }
+	[[nodiscard]] constexpr std::uint32_t QuietShotAttackId(std::uint32_t a_a) { return a_a >> 16; }
+	static_assert(QuietShotA(kQuietHit, kQuietHeavy, 292) == 0x01240201u && QuietShotWeapon(0x01240201u) == kQuietHeavy &&
+	              QuietShotPhase(0x01240201u) == kQuietHit && QuietShotAttackId(0x01240201u) == 292);
+	// (v18) buddyFlags' Quiet weapon: kQuietWeaponUnknown when none is published.
+	[[nodiscard]] constexpr std::uint32_t BuddyQuietWeaponBits(QuietWeapon a_weapon)
+	{
+		return a_weapon <= kQuietHeavy ? (static_cast<std::uint32_t>(a_weapon) + 1u) << kBuddyQuietWeaponShift : 0u;
+	}
+	[[nodiscard]] constexpr QuietWeapon BuddyQuietWeapon(std::uint32_t a_buddyFlags)
+	{
+		const std::uint32_t v = (a_buddyFlags & kBuddyQuietWeaponMask) >> kBuddyQuietWeaponShift;
+		return v >= 1 && v - 1 <= kQuietHeavy ? static_cast<QuietWeapon>(v - 1) : kQuietWeaponUnknown;
+	}
+	static_assert(BuddyQuietWeapon(BuddyQuietWeaponBits(kQuietTranq) | kBuddyAtPost | kBuddyQuietCover) == kQuietTranq &&
+	              BuddyQuietWeapon(kBuddyPresent | BuddyDogStyleBits(kDogWound)) == kQuietWeaponUnknown && BuddyQuietWeaponBits(kQuietWeaponUnknown) == 0);
 
 	enum CqcAction : std::uint32_t  // (v13) kGEvCqc a
 	{
@@ -507,6 +615,10 @@ namespace phantom::proto
 		kActorAsleep = 1u << 4,
 		kActorDogTarget = 1u << 5,  // (v17) the host's pick for D-Dog's next attack/fetch order: hostile, alive, in range, near the view
 		                            // centre, a clear run from the dog, never a boss while [Dog] bosses = off. At most one record.
+		kActorQuietTarget = 1u << 6,  // (v18) the host's pick for Quiet's next Fire / Take aim: hostile, alive, never a boss, seen from her
+		                              // post's sight point and from the camera, nearest the binoculars' / view centre. At most one record.
+		kActorQuietThreat = 1u << 7,  // (v18) Cover me's threat pick (the same hard rules, scored by the threat to Snake). At most one record;
+		                              // it may be the kActorQuietTarget record. The one stand-in goes to the target first.
 	};
 
 	struct ActorRecord

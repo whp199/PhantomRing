@@ -16,6 +16,15 @@ namespace phantom::er
 		// View held this long opens the iDroid while still down; shorter (from viewHoldMs) at its release.
 		const std::uint64_t     openMs = static_cast<std::uint64_t>(std::max(a_p.viewHoldMs, a_p.idroidOpenMs));
 
+		// A View hold goes to MGSV: its Start for idroid_start_ms. A cut hold's close watch (cancelAt_, below) ends here -- the menu
+		// this hold opens is the one the player asked for, not the cut one's (idroid_open_ms <= chord_window_ms only: a late Start
+		// cut a hold MGSV was too busy to open, both let go, View held again within kCloseWatchMs).
+		auto newHold = [&]() {
+			guestStartUntil_ = now + static_cast<std::uint64_t>(a_p.idroidStartMs > 0 ? a_p.idroidStartMs : 0);
+			cancelAt_ = 0;
+			closeTaps_ = 0;
+		};
+
 		// Presses and releases.
 		bool startPressed = false;
 		auto edge = [&](Button& b, bool a_down) {
@@ -39,7 +48,7 @@ namespace phantom::er
 					now - b.downAt >= static_cast<std::uint64_t>(a_p.viewHoldMs)) {
 					// View held past view_hold_ms and let go before idroid_open_ms (no item press, no chord): MGSV's iDroid now.
 					b.toGuest = true;
-					guestStartUntil_ = now + static_cast<std::uint64_t>(a_p.idroidStartMs > 0 ? a_p.idroidStartMs : 0);
+					newHold();
 					o.viewToGuest = true;
 				} else if (armed && b.tracked && !b.passed && !b.consumed && !b.toGuest) {
 					b.tapUntil = now + kTapMs;  // released before the wait: Elden Ring gets the tap now
@@ -59,6 +68,13 @@ namespace phantom::er
 					b->consumed = true;
 				}
 			}
+		}
+		// A cut chord let go before it fired, MGSV's menu not open: its close watch ends (an MGSV menu after this is not the cut
+		// hold's). Kept while the menu is open -- its close taps still go -- and after a fired chord (Tarnished mode: MGSV's menu,
+		// still open, shows as kGuestMenu only once Snake is back).
+		if (cancelAt_ != 0 && !start_.down && !view_.down && !fired_ && a_in.mode != Mode::kGuestMenu) {
+			cancelAt_ = 0;
+			closeTaps_ = 0;
 		}
 
 		// The chord: both down, neither passed on yet. Or (player report 2026-10-14: "the chord failed when View went down a bit
@@ -107,7 +123,7 @@ namespace phantom::er
 			if (a_idroid) {
 				if (now - b.downAt >= openMs) {
 					b.toGuest = true;
-					guestStartUntil_ = now + static_cast<std::uint64_t>(a_p.idroidStartMs > 0 ? a_p.idroidStartMs : 0);
+					newHold();
 					o.viewToGuest = true;
 				}
 			} else if (now - b.downAt >= wait) {
@@ -159,6 +175,15 @@ namespace phantom::er
 		}
 		helpDown_ = a_in.help;
 		o.guestMaskHelp = helpHeld_;
+
+		// MGSV's menu opened on the iDroid hold's Start (at once, live 30 ms): the rest of that hold is dropped. Kept on, a menu
+		// closed within guest_idroid_start_ms left kGuestMenu with the hold still running, and MGSV, back in kSnake, got its Start
+		// again and reopened the iDroid (player 2026-11-04: B 1 s after it opened closed it, the Start 3 ms later reopened it 30 ms
+		// after that). A hold whose menu never opens (MGSV busy) runs its full length as before; View stays the hold's (toGuest),
+		// so a late Start still makes the chord and closes the menu (cancelAt_ above).
+		if (a_in.mode == Mode::kGuestMenu && now < guestStartUntil_) {
+			guestStartUntil_ = 0;
+		}
 
 		auto seen = [&](const Button& b) { return (b.down && (b.raw || b.passed)) || now < b.tapUntil; };
 		if (a_in.mode != Mode::kGuestMenu) {

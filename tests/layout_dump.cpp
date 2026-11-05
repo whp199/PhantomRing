@@ -59,6 +59,13 @@ int main()
 	OFF(HostState, erWorldId);
 	OFF(HostState, groundY);
 	OFF(HostState, fallSpeed);
+	OFF(HostState, graceCentre);  // v18
+	OFF(HostState, graceSeat);
+	OFF(HostState, graceSeatYaw);
+	OFF(HostState, graceSeq);
+	OFF(HostState, buddyPost);
+	OFF(HostState, buddyPostYaw);
+	OFF(HostState, buddyPostSeq);
 	SIZE(GuestState);
 	OFF(GuestState, flags);
 	OFF(GuestState, frame);
@@ -92,6 +99,8 @@ int main()
 	OFF(GuestState, aimThrowPos);  // v6
 	OFF(GuestState, aimThrowVel);
 	OFF(GuestState, aimThrowKind);
+	OFF(GuestState, buddyPostSeq);  // v18
+	OFF(GuestState, graceSeqSeated);
 	SIZE(PadState);
 	OFF(PadState, flags);
 	OFF(PadState, packet);

@@ -7,7 +7,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <sstream>
+#include <type_traits>
+#include <utility>
 
 namespace phantom::guest
 {
@@ -377,6 +380,76 @@ namespace phantom::guest
 		dog.maxShownSpeed = std::clamp(static_cast<float>(ini.GetFloat("Dog", "MaxShownSpeed", dog.maxShownSpeed)), 0.0f, 100.0f);
 		dog.stageAlong = ini.GetBool("Dog", "StageAlong", dog.stageAlong);
 		dog.waitKeepsPlace = ini.GetBool("Dog", "WaitKeepsPlace", dog.waitKeepsPlace);
+
+		// [Quiet] (protocol v18, docs/research/quiet.md §5; Quiet.cpp). Negative numbers -> 0, unknown words
+		// keep the default with a warning (as [Dog]).
+		{
+			auto&      q = quiet;
+			const auto word = [&](const char* a_key, auto& a_value, std::initializer_list<std::pair<const char*, std::remove_reference_t<decltype(a_value)>>> a_names) {
+				const auto text = Lower(ini.Get("Quiet", a_key, ""));
+				if (text.empty()) {
+					return;
+				}
+				for (const auto& [name, value] : a_names) {
+					if (text == name) {
+						a_value = value;
+						return;
+					}
+				}
+				Log::Warn("ini: [Quiet] {} '{}' is not one of its words -- keeping the default", a_key, text);
+			};
+			const auto pos = [&](const char* a_key, float& a_value, float a_max) {
+				a_value = std::clamp(static_cast<float>(ini.GetFloat("Quiet", a_key, a_value)), 0.0f, a_max);
+			};
+			const auto ms = [&](const char* a_key, std::uint32_t& a_value) {
+				a_value = static_cast<std::uint32_t>(std::clamp<std::int64_t>(ini.GetInt("Quiet", a_key, a_value), 0, 600000));
+			};
+			q.enabled = ini.GetBool("Quiet", "Enabled", q.enabled);
+			word("Borrow", q.borrow, { { "off", QuietBorrow::kOff }, { "false", QuietBorrow::kOff }, { "memory", QuietBorrow::kMemory }, { "always", QuietBorrow::kAlways } });
+			q.borrowListInIdroid = ini.GetBool("Quiet", "BorrowListInIdroid", q.borrowListInIdroid);
+			q.mirror = ini.GetBool("Quiet", "Mirror", q.mirror);
+			if (const auto text = ini.Get("Quiet", "MirrorRegion", ""); !text.empty()) {
+				std::string list = text;
+				std::ranges::replace(list, ',', ' ');
+				std::stringstream  ss(list);
+				std::vector<float> r;
+				float              v = 0.0f;
+				while (ss >> v) {
+					r.push_back(std::clamp(v, 1.0f, 200.0f));
+				}
+				if (ss.eof() && (r.size() == 1 || r.size() >= 8)) {
+					q.mirrorRegion = std::move(r);
+				} else {
+					Log::Warn("ini: [Quiet] MirrorRegion '{}' is not one radius or 8+ by bearing -- keeping the default", text);
+				}
+			}
+			word("MirrorHeight", q.mirrorHeight, { { "ground", QuietHeight::kGround }, { "mapped", QuietHeight::kMapped } });
+			pos("PostTolerance", q.postTolerance, 50.0f);
+			q.treadmill = ini.GetBool("Quiet", "Treadmill", q.treadmill);
+			q.orders = ini.GetBool("Quiet", "Orders", q.orders);
+			q.markProxy = ini.GetBool("Quiet", "MarkProxy", q.markProxy);
+			word("StandInHeight", q.standInHeight, { { "enemy", QuietHeight::kEnemy }, { "ground", QuietHeight::kGround } });
+			q.keepMarks = ini.GetBool("Quiet", "KeepMarks", q.keepMarks);
+			q.standInOnBearing = ini.GetBool("Quiet", "StandInOnBearing", q.standInOnBearing);
+			ms("KeepMarkMs", q.keepMarkMs);
+			q.fireOnlyOnOrders = ini.GetBool("Quiet", "FireOnlyOnOrders", q.fireOnlyOnOrders);
+			ms("RealizeTimeoutMs", q.realizeTimeoutMs);
+			ms("PickWaitMs", q.pickWaitMs);
+			ms("HitTimeoutMs", q.hitTimeoutMs);
+			ms("AimHoldMs", q.aimHoldMs);
+			q.releaseAfterHit = ini.GetBool("Quiet", "ReleaseAfterHit", q.releaseAfterHit);
+			q.cover = ini.GetBool("Quiet", "Cover", q.cover);
+			q.takeOverTalk = ini.GetBool("Quiet", "TakeOverTalk", q.takeOverTalk);
+			ms("CoverEveryMs", q.coverEveryMs);
+			q.restAtGrace = ini.GetBool("Quiet", "RestAtGrace", q.restAtGrace);
+			word("SitPose", q.sitPose, { { "kneel", QuietSitPose::kKneel }, { "watch", QuietSitPose::kWatch }, { "seat", QuietSitPose::kSeat } });
+			word("SitPlacement", q.sitPlacement,
+				{ { "object", QuietSitPlacement::kObject }, { "warp", QuietSitPlacement::kWarp }, { "reload", QuietSitPlacement::kReload } });
+			pos("RigidRadius", q.rigidRadius, 10.0f);
+			q.hideMgsvMarkers = ini.GetBool("Quiet", "HideMgsvMarkers", q.hideMgsvMarkers);
+			q.strikeMgsvPosts = ini.GetBool("Quiet", "StrikeMgsvPosts", q.strikeMgsvPosts);
+			q.noDying = ini.GetBool("Quiet", "NoDying", q.noDying);
+		}
 
 		luaOverride = Widen(ini.Get("Lua", "OverrideFile", Narrow(luaOverride)));
 		dumpDefaultLua = ini.GetBool("Lua", "DumpDefault", dumpDefaultLua);

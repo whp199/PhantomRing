@@ -233,6 +233,93 @@ namespace phantom::er
 		bool operator==(const DogConfig&) const = default;
 	};
 
+	// [Quiet] Quiet as a sniper buddy in Elden Ring (docs/research/quiet.md §3, §5; protocol v18 kHostQuietLayer, buddyPost*,
+	// kActorQuietTarget / kActorQuietThreat, kGEvQuietShot; er/Quiet.h, er/QuietLogic.h). Built in round E1; every switch that changes
+	// what the player sees stays off until the both-games pass turns it on by its exit criteria (§7). `quiet all on` for a session.
+	struct QuietConfig
+	{
+		bool               enabled{ true };               // the layer (kHostQuietLayer, with posts); off: 0.8.0's Quiet, kGEvQuietShot only logged
+		bool               posts{ true };                 // the host picks her posts (the layer needs them); off: 0.8.0's Quiet
+		bool               orders{ false };               // her pick (kActorQuietTarget), the reticle and the LB hint: Fire / Take aim on Elden
+		                                                  // Ring enemies (opt-in in 0.9.0: MGSV offers Fire only from its own snipe points)
+		std::vector<float> coverRings{ 25, 35, 45, 55 };  // m from Snake: post rings while enemies are near
+		std::vector<float> nearRings{ 8, 12, 16 };        // m from Snake: post rings while it is calm
+		int                postDirs{ 24 };                // bearings per ring
+		float              postHeightMin{ -3.0f };        // m over Snake (cover posts)
+		float              postHeightMax{ 25.0f };
+		float              nearHeightMin{ -2.0f };        // m over Snake (near posts)
+		float              nearHeightMax{ 8.0f };
+		bool               postDrawable{ true };          // the frustum rule for MGSV's ground-level body (§3.2)
+		float              postHeightScore{ 0.1f };       // score per m of height, up to the drawable bound
+		float              sightHeight{ 0.9f };           // m over her feet: the one point the post, the pick and the shot test from
+		float              postMax3d{ 60.0f };            // m from Snake, 3D
+		float              postEnemyClear{ 15.0f };       // m: no hostile nearer to a post
+		float              postCharClear{ 3.0f };         // m: no character at all nearer to a post
+		int                postRaysPerFrame{ 30 };        // the post search's ray budget
+		float              postResearchSnake{ 25.0f };    // m Snake moves from the search centre before a new cover-post search
+		float              nearResearchSnake{ 20.0f };    // the same for near posts
+		float              moveHideSpeed{ 3.0f };         // m/s for 2 s: she is on the move (cloaked, not drawn)
+		int                fadeMs{ 300 };                 // her cloak fade for a post change in view
+		float              farGroundUp{ 20.0f };          // m: her ground ray when not at a post (from this far above ...
+		float              farGroundDown{ 40.0f };        // ... to this far below)
+		float              liftMax{ 30.0f };              // m: the largest drawn lift onto Elden Ring's ground
+		float              targetRange{ 100.0f };         // m from her post
+		float              targetConeDeg{ 10.0f };        // degrees off the view centre
+		float              targetConeBinocularsDeg{ 6.0f };  // ... through the binoculars
+		bool               targetMarkedFirst{ true };     // marked enemies win the pick
+		std::string        bosses{ "off" };               // off only (v1): a boss is never her target
+		int                pickLatchMs{ 500 };            // ms the shown pick stays the pick after the rules stop choosing him
+		bool               spot{ true };                  // provisional marks on hostiles she sees from her post (§3.7)
+		float              spotRange{ 60.0f };            // m from her post
+		int                spotEveryMs{ 500 };            // ms between two spotting passes
+		float              spotLinger{ 10.0f };           // s a provisional mark stays
+		float              spotTextEvery{ 8.0f };         // s between two "Quiet: Enemy spotted" lines
+		float              lethalShareMult{ 1.0f };       // x MGSV's damage share of her shot (kGEvQuietShot b)
+		float              lethalFallback{ 1.0f };        // lives of his reference HP when MGSV's share is unknown (b = 0)
+		bool               heavyPoise{ true };            // Sinful Butterfly's knockdown
+		float              tranqSleep{ 1.1f };            // share of his sleep resistance Guilty Butterfly builds up
+		bool               shotNoise{ false };            // her shot heard by Elden Ring's enemies
+		float              coverThreatRange{ 20.0f };     // m from Snake: Cover me's threat candidates
+		bool               indicator{ true };             // the reticle over her pick while LB is held or the binoculars are up ([Quiet] orders)
+		bool               orderText{ true };             // corner texts for her orders 1-7 and her spotting
+		std::string        cloak{ "hide" };               // hide | shimmer: how a cloaked Quiet is drawn
+
+		bool operator==(const QuietConfig&) const = default;
+	};
+
+	// [Grace] Resting at a Site of Grace with the buddy (docs/research/quiet.md §3.9, §5; protocol v18 kHostAtGrace, grace*, the
+	// guest's kBuddyCanRest / kBuddySeated; er/GraceRest.h, er/GraceLogic.h). Buddy-generic, Quiet first. Built in round E1; buddy_rest
+	// stays off until the both-games pass (`grace on` for a session). rest_dark = fade: U12 found Elden Ring's InGame fade plate.
+	struct GraceConfig
+	{
+		bool               buddyRest{ true };               // seats for a buddy that sets kBuddyCanRest (needs [Quiet] enabled and posts)
+		std::vector<float> seatRings{ 2.0f, 2.5f, 1.5f, 3.0f };  // m from the grace, in search order
+		int                seatDirs{ 16 };                  // bearings per ring
+		float              seatScreenX{ 0.62f };            // the screen x (0..1) a seat is scored toward (just right of Snake)
+		float              seatMenuX{ 0.33f };              // screen x left of this is under the grace menu: refused
+		float              seatStep{ 0.3f };                // m: the seat's floor within this of the floor under the grace
+		float              seatSlopeNy{ 0.9f };             // the floor's normal y at least this
+		float              seatSpread{ 0.15f };             // m: the footprint rays' spread at most this
+		float              seatHeadroom{ 1.3f };            // m clear above the seat
+		float              seatSnakeClear{ 1.0f };          // m from Snake at least
+		float              seatCharClear{ 2.0f };           // m from any other character at least
+		std::string        restDark{ "fade" };              // fade (the InGame fade plate, U12 2026-11-04) | none (no grace rest) | luma (not
+		                                                    // built: no grace rest)
+		int                seatBlackWaitMs{ 2000 };         // no observed black within this of the press = no seat this rest (a talk). U12 live:
+		                                                    // the black starts +0.91-0.94 s after the press when the Tarnished faces the
+		                                                    // grace, +1.53-1.57 s when he turns to it first (1300 refused those)
+		int                seatDeadlineMs{ 750 };           // ms after the black starts: the seat is published by then or not at all. U12's
+		                                                    // shortest black 1443 ms - the guest's placement (her object + MoveToPosition, the
+		                                                    // rifle down ~0.4-0.5 s later: quiet.md M1) - 0.2 s
+		int                seatLateEchoMs{ 6000 };          // ms after the publish: the guest's echo (she has settled at the seat) may come
+		                                                    // this late; after the black she is faded in (0.9.0: the real Quiet settles ~3 s
+		                                                    // after her order). None by then: hidden through the rest
+		int                seatReloadReadyMs{ 100 };        // the reload placement only if the seat is ready this soon after the black
+		bool               tarnished{ false };              // seats in Tarnished mode too
+
+		bool operator==(const GraceConfig&) const = default;
+	};
+
 	struct Config
 	{
 		// [Link]
@@ -646,6 +733,8 @@ namespace phantom::er
 		MarkingConfig marking;  // [Marking]
 		NoiseConfig   noise;    // [Noise]
 		DogConfig     dog;      // [Dog] (protocol v17; scaffolding, off)
+		QuietConfig   quiet;    // [Quiet] (protocol v18; scaffolding, off)
+		GraceConfig   grace;    // [Grace] (protocol v18; scaffolding, off)
 
 		bool Load(const std::wstring& a_path);
 	};

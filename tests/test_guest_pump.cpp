@@ -2,9 +2,11 @@
 // against a stock Lua 5.1.5 VM with a mock of the MGSV globals: script loading and registry refs,
 // the per-update Tick feeding the frame state, the whole boot sequence (title -> Continue -> another
 // mission -> load the sandbox -> setup -> D-Walker -> centre -> ready), the dev console over a real
-// mapping, and the phantomring.lua override. Built only when PHANTOM_LUA51_SRC points at Lua 5.1.5's
+// mapping, the phantomring.lua override, and the buddy dismissed from the iDroid against one MGSV lost
+// (AdoptBuddy / ReviveBuddy, docs/GUEST.md 8.3). Built only when PHANTOM_LUA51_SRC points at Lua 5.1.5's
 // src/ (target check_guest).
 #include "ActorProxy.h"
+#include "Quiet.h"
 #include "FultonAnchor.h"
 #include "Menu.h"
 #include "Config.h"
@@ -63,15 +65,17 @@ TppUiCommand = { IsEndLoadingTips = function() return true end }
 BuddyType = { NONE = 0, HORSE = 1, DOG = 2, QUIET = 3, WALKER_GEAR = 4 }
 TppBuddyService = { DidObtainBuddyType = function() return true end, CanSortieBuddyType = function() return true end,
 	IsDeadBuddyType = function() return false end }
+-- MOCK.blockLoaded: the buddy block MGSV has (BuddyType, 0 = NONE); MOCK.buddy: its object (nil = none, or gone).
+local BUDDY_CLASS = { [1] = 'TppHorse2', [2] = 'TppBuddyDog2', [3] = 'TppBuddyQuiet2', [4] = 'TppCommonWalkerGear2' }
 TppBuddy2BlockController = {
 	GetActiveBuddyType = function() return MOCK.blockLoaded end,
 	IsLoading = function() return MOCK.loading end,
-	SetVarsBuddyType = function(t) rec('setvars ' .. t) end,
-	Load = function() rec('load'); MOCK.blockLoaded = 4 end,
+	SetVarsBuddyType = function(t) rec('setvars ' .. t); MOCK.varsType = t end,
+	Load = function() rec('load'); MOCK.blockLoaded = MOCK.varsType; MOCK.buddy = nil end,
 	CallBuddy = function(t, p, yaw) rec('call ' .. t); MOCK.buddy = 0x2001 end }
 GameObject = {
 	GetGameObjectIdByIndex = function(cls, i)
-		if cls == 'TppCommonWalkerGear2' and i == 0 and MOCK.buddy then return MOCK.buddy end
+		if i == 0 and MOCK.buddy and cls == BUDDY_CLASS[MOCK.blockLoaded] then return MOCK.buddy end
 		return 65535 end,
 	SendCommand = function(target, cmd)
 		if type(target) == 'table' then rec(cmd.id) return end
@@ -117,6 +121,20 @@ namespace phantom::guest::menu
 {
 	bool Open() { return false; }
 }
+// The suppressor (mgsv/Suppressor.cpp, not linked here): its setters unverified, so the boot leaves [Loadout] Suppressors alone.
+namespace phantom::guest::suppressor
+{
+	bool        SettersAvailable() { return false; }
+	std::string ApplyLoadout(const std::string&, unsigned) { return "not in this test"; }
+}
+// Quiet (mgsv/Quiet.cpp, not linked here; [Quiet] is off in this test).
+namespace phantom::guest::quiet
+{
+	void        LuaStep(std::uint64_t, bool, bool, const LuaCall&) {}
+	std::string BeforeDeploy(bool, const LuaCall&) { return {}; }
+	void        AtReady(bool, const LuaCall&) {}
+	bool        KeepMarkers() { return false; }
+}
 
 static bool MockLog(const char* a_entry)
 {
@@ -141,17 +159,51 @@ static void SetMock(const char* a_assignment)
 	}
 }
 
-// Pumps "the game" for a_ms: one camera frame + one outermost pcall return every 10 ms.
+static void MockDo(const char* a_code)
+{
+	if (luaL_dostring(g_L, a_code) != 0) {
+		std::printf("mock: %s\n", lua_tostring(g_L, -1));
+		lua_pop(g_L, 1);
+		++g_failures;
+	}
+}
+
+// Lines of the pump's log (test_guest_pump.log, flushed line by line) that hold a_text.
+static int LogCount(const char* a_text)
+{
+	FILE* f = std::fopen("test_guest_pump.log", "rb");
+	if (!f) {
+		return -1;
+	}
+	int  n = 0;
+	char line[2048];
+	while (std::fgets(line, sizeof(line), f)) {
+		n += std::strstr(line, a_text) != nullptr;
+	}
+	std::fclose(f);
+	return n;
+}
+
+// Pumps "the game" for a_ms: one camera frame + one outermost pcall return every 10 ms. The frames carry the pump's clock
+// (pump::NowForTests: real time plus every Skip).
 static void Run(int a_ms)
 {
 	static std::uint64_t frame = 0;
 	for (int t = 0; t < a_ms; t += 10) {
-		state::SetFrame({ true, ++frame, ::GetTickCount64(), { 10.0f, 0.5f, -4.0f }, 0.25f, {} });
+		state::SetFrame({ true, ++frame, pump::NowForTests(), { 10.0f, 0.5f, -4.0f }, 0.25f, {} });
 		const int top = lua_gettop(g_L);
 		pump::Run(g_L);
 		CHECK(lua_gettop(g_L) == top);  // the pump leaves the engine's stack exactly as it found it
 		::Sleep(10);
 	}
+}
+
+// The pump's clock jumps a_ms ahead, then one boot step runs at the new time (the boot steps every 250 ms of it). The Lua side
+// still counts real frames: Run for what it re-reads (a buddy's object id every 60 ticks).
+static void Skip(std::uint64_t a_ms)
+{
+	pump::SkipClockForTests(a_ms);
+	Run(50);
 }
 
 template <class F>
@@ -164,6 +216,166 @@ static bool Until(F&& a_cond, int a_ms)
 		Run(50);
 	}
 	return a_cond();
+}
+
+// ---- the buddy dismissed from the iDroid, or lost (docs/GUEST.md 8.3; Pump.cpp AdoptBuddy / ReviveBuddy, BuddyLogic.h) ----
+
+// An MGSV menu (the iDroid) open for a few boot steps, then closed: AdoptBuddy's "menu last seen".
+static void MenuSeen()
+{
+	state::SetMenuOpen(true);
+	Run(300);
+	state::SetMenuOpen(false);
+}
+
+// MGSV has a_type's buddy out (the iDroid's "Request deployment", or a call answered); AdoptBuddy takes it once it has been out 2 s.
+static void BuddyOut(int a_type)
+{
+	char code[80];
+	std::snprintf(code, sizeof(code), "MOCK.blockLoaded = %d MOCK.buddy = 0x2001", a_type);
+	MockDo(code);
+	Run(300);
+	Skip(2500);
+}
+
+// MGSV's active buddy type goes NONE (the object with it); AdoptBuddy judges it once that has lasted 2 s.
+static void GoesNone()
+{
+	MockDo("MOCK.blockLoaded = 0 MOCK.buddy = nil");
+	Skip(250);   // NONE's start, as AdoptBuddy sees it
+	Skip(2500);  // judged
+}
+
+// The pump's wiring of 0.9.0's dismissal (f4edaa8): MGSV's leave order with its menu open (state::NoteBuddyLeave, noted by the buddies'
+// handler detours) makes a NONE the player's dismissal however long the buddy takes to go, and keeps ReviveBuddy off it meanwhile;
+// without one, a NONE that began within the buddy's window after the menu (D-Walker / D-Horse 20 s, Quiet / D-Dog 30 s) is; any
+// other NONE is a buddy MGSV lost, and is called back. BuddyLogic's own cases: test_guest_logic's TestBuddyDismiss.
+static void TestBuddyDismissal()
+{
+	auto& c = MutableCfg();
+	CHECK(c.buddy == "walker" && c.buddyDismiss && c.buddyRevive);
+	// Every call of PhantomRing.Buddy outside a deployment step is ReviveBuddy's: recorded as "Buddy <kind>".
+	MockDo("MOCK.realBuddy = PhantomRing.Buddy "
+	       "PhantomRing.Buddy = function(kind, ...) MOCK.log[#MOCK.log + 1] = 'Buddy ' .. kind return MOCK.realBuddy(kind, ...) end");
+	Skip(2500);
+	Skip(2500);  // the deployed walker is the guest's own by now (AdoptBuddy)
+	CHECK(state::Lua().buddyActive == state::kBuddyTypeWalker && state::Lua().buddyId == 0x2001);
+
+	// MGSV loses the walker by itself: no leave order, no MGSV menu seen since the boot. AdoptBuddy keeps it ("calling it back"),
+	// ReviveBuddy calls it back once it has been gone 10 s.
+	{
+		const char* said = "(D-Walker expected, no iDroid DISMISS seen) -- calling it back";
+		const int   before = LogCount(said);
+		SetMock("log = {}");
+		GoesNone();
+		CHECK(c.buddy == "walker");
+		CHECK(LogCount(said) == before + 1);
+		CHECK(!MockLog("Buddy walker"));  // gone 2.5 s
+		Skip(9000);
+		CHECK(MockLog("Buddy walker"));   // gone 11.5 s: PhantomRing.Buddy('walker', ..., true)
+		// ... and the script brings it back: its block (once its last load is 600 ticks old), then the call.
+		CHECK(Until([] { return MockLog("call 4"); }, 15000));
+		CHECK(Until([] { return state::Lua().buddyActive == state::kBuddyTypeWalker && state::Lua().buddyId == 0x2001; }, 3000));
+	}
+
+	// The iDroid's DISMISS D-WALKER: MGSV orders it to leave while its menu is open, and it takes longer to go than its menu window
+	// (20 s) allows. ReviveBuddy leaves it alone; its NONE, 25 s after the menu, is the player's dismissal by the order.
+	{
+		const char* ordered = "with its menu open (the iDroid";
+		const char* held = "s -- not called back: MGSV ordered it to leave from the iDroid";
+		const char* dismissed = "the player dismissed D-Walker from the iDroid (MGSV's leave order, NONE";
+		const int   ordered0 = LogCount(ordered), held0 = LogCount(held), dismissed0 = LogCount(dismissed);
+		SetMock("log = {}");
+		state::SetMenuOpen(true);
+		Run(300);
+		state::NoteBuddyLeave(state::kBuddyTypeWalker, pump::NowForTests());
+		Run(300);
+		state::SetMenuOpen(false);
+		CHECK(LogCount(ordered) == ordered0 + 1);
+		MockDo("MOCK.buddy = nil");  // fultoned out: its object goes, MGSV keeps WALKER_GEAR active meanwhile
+		Run(1000);                   // the script re-reads the buddy's id every 60 ticks
+		CHECK(state::Lua().buddyActive == state::kBuddyTypeWalker && state::Lua().buddyId == 0xFFFF);
+		Skip(12000);
+		Skip(12000);
+		CHECK(!MockLog("Buddy walker"));  // gone 25 s: without the order it was called back at 10 s
+		CHECK(LogCount(held) == held0 + 1);
+		MockDo("MOCK.blockLoaded = 0");
+		Skip(250);
+		Skip(2500);
+		CHECK(c.buddy == "none");
+		CHECK(LogCount(dismissed) == dismissed0 + 1);
+		CHECK(link::CurrentStatusText() == "MGSV: ready (Mother Base)");
+		Skip(15000);
+		CHECK(!MockLog("Buddy walker") && !MockLog("load") && !MockLog("call 4"));  // never called back
+	}
+
+	// No leave order seen (D-Horse's handler isn't hooked, a hook missing): the menu window, counted from NONE's start. D-Walker NONE
+	// 18.75-19.3 s after its menu, inside its 20 s, is the player's dismissal, though judged 2.5 s later (0.9.0 counted to the
+	// decision).
+	{
+		BuddyOut(state::kBuddyTypeWalker);  // the player deploys D-Walker again from the iDroid
+		CHECK(c.buddy == "walker");
+		const char* dismissed = "the player dismissed D-Walker from the iDroid (NONE";
+		const int   before = LogCount(dismissed);
+		SetMock("log = {}");
+		MenuSeen();
+		Skip(18500);
+		GoesNone();
+		CHECK(c.buddy == "none");
+		CHECK(LogCount(dismissed) == before + 1);  // "(NONE 18.9 s after its menu, no leave order seen)"
+		CHECK(!MockLog("Buddy walker"));
+	}
+
+	// ... past its window: D-Walker NONE 21 s after the menu, no leave order -- lost, called back.
+	{
+		BuddyOut(state::kBuddyTypeWalker);
+		CHECK(c.buddy == "walker");
+		const char* said = "(D-Walker expected, no iDroid DISMISS seen: no leave order, its menu last open";
+		const int   before = LogCount(said);
+		SetMock("log = {}");
+		MenuSeen();
+		Skip(21000);
+		GoesNone();
+		CHECK(c.buddy == "walker");
+		CHECK(LogCount(said) == before + 1);
+		Skip(9000);
+		CHECK(MockLog("Buddy walker"));
+		BuddyOut(state::kBuddyTypeWalker);  // back
+		CHECK(c.buddy == "walker");
+	}
+
+	// Quiet's window is 30 s (her far post; D-Dog's too): NONE 25 s after the menu, past D-Walker's 20 s, no leave order -- dismissed.
+	{
+		BuddyOut(state::kBuddyTypeQuiet);  // the player swaps D-Walker for Quiet from the iDroid
+		CHECK(c.buddy == "quiet");
+		const char* dismissed = "the player dismissed Quiet from the iDroid (NONE";
+		const int   before = LogCount(dismissed);
+		SetMock("log = {}");
+		MenuSeen();
+		Skip(25000);
+		GoesNone();
+		CHECK(c.buddy == "none");
+		CHECK(LogCount(dismissed) == before + 1);
+		CHECK(!MockLog("Buddy quiet"));
+	}
+
+	// ... and D-Dog NONE 31 s after the menu, no leave order: past its 30 s -- lost, called back.
+	{
+		BuddyOut(state::kBuddyTypeDog);
+		CHECK(c.buddy == "dog");
+		const char* said = "(D-Dog expected, no iDroid DISMISS seen: no leave order, its menu last open";
+		const int   before = LogCount(said);
+		SetMock("log = {}");
+		MenuSeen();
+		Skip(31000);
+		GoesNone();
+		CHECK(c.buddy == "dog");
+		CHECK(LogCount(said) == before + 1);
+		Skip(9000);
+		CHECK(MockLog("Buddy dog"));
+		BuddyOut(state::kBuddyTypeDog);  // back
+	}
+	MockDo("PhantomRing.Buddy = MOCK.realBuddy");
 }
 
 int main()
@@ -262,6 +474,8 @@ int main()
 	CHECK(Until([&] { return console->respSeq == console->reqSeq; }, 2000));
 	CHECK(console->status == 1);
 
+	TestBuddyDismissal();
+
 	// Live iteration: phantomring.lua next to the DLL replaces the script (picked up within ~1 s).
 	{
 		FILE* f = _wfopen((ModuleDir() + L"test_guest_pump_override.lua").c_str(), L"wb");
@@ -273,7 +487,7 @@ int main()
 	lua_getfield(g_L, -1, "overridden");
 	CHECK(lua_tonumber(g_L, -1) == 42);
 	lua_pop(g_L, 2);
-	CHECK(state::Lua().valid && ::GetTickCount64() - state::Lua().tickMs < 500);  // Tick (kept by ref) still runs
+	CHECK(state::Lua().valid && pump::NowForTests() - state::Lua().tickMs < 500);  // Tick (kept by ref) still runs
 
 	// Leaving the sandbox (e.g. MGSV continued from a checkpoint elsewhere) sends it back.
 	SetMock("log = {}");

@@ -47,7 +47,8 @@ Combat by hand (docs/COMBAT.md), through the guest console (`tools/pr lua '!<cmd
     !fpv on|off                              kGuestFirstPerson
     !cam <phase_rad> [dist] [height] [look_y]   a fixed camera (no orbit) looking along -(cos phase, sin phase)
     !order <cmd>                             (v7) kGEvBuddyOrder: the player's call-menu command for the buddy out (b = its
-                                             BuddyType); (v17) with D-Dog pad[0] = its style + 1 (!dog style)
+                                             BuddyType); (v17) with D-Dog pad[0] = its style + 1 (!dog style); (v18) with Quiet
+                                             (b = 3) pad[0] = her weapon + 1 for commands 1-3 (!quiet weapon)
 
 D-Dog's attacks (protocol v17, docs/research/ddog.md; needs `!buddy dog`):
     !dog [status]                            the dog's style, kBuddyEngaged, the job under way, the host's pick (kActorDogTarget)
@@ -67,6 +68,29 @@ D-Dog's attacks (protocol v17, docs/research/ddog.md; needs `!buddy dog`):
     !callmenu on|off [full|ordered|connect]  MGSV's call menu from the pad: hold LB, push the right stick, let it go, click R3 ->
                                              the dog's attack command; the host's pick taken at once or within 350 ms, else Refused
     !order 9 / !order 8                      with D-Dog: Wait keeps it where it is in Snake's odometer frame; the whistle ends it
+
+Quiet and the grace rest (protocol v18, docs/research/quiet.md; needs `!buddy quiet`, object id 0x2400 as MGSV's):
+    !quiet [status]                          her weapon, the bits she publishes, the post / seat she holds, the host's picks
+    !quiet weapon <lethal|tranq|heavy|unknown>   her rifle (buddyFlags bits 17-19 = weapon + 1 every frame; unknown = 0)
+    !quiet post on|off                       follow the host's post as the real guest's mirror does: while HostFlags.QuietLayer is
+                                             set and buddyPostSeq != 0 she stands at buddyPost (facing buddyPostYaw) with
+                                             GuestBuddyFlags.AtPost and echoes the seq in GuestState.buddyPostSeq; with no post
+                                             (NaN: on the move) she is Cloaked
+    !quiet seat on|off                       follow the host's grace seat: GuestBuddyFlags.CanRest while on; while HostFlags.AtGrace
+                                             is set, graceSeq != 0 and graceSeat finite she sits there (graceSeatYaw) with
+                                             GuestBuddyFlags.Seated and echoes graceSeq in GuestState.graceSeqSeated (before a post)
+    !quiet cloak on|off                      GuestBuddyFlags.Cloaked (her stealth camo: MGSV doesn't draw her)
+    !quiet cover on|off                      GuestBuddyFlags.QuietCover (MGSV's Cover me is on)
+    !quiet marked on|off                     GuestBuddyFlags.QuietMarked (MGSV holds a mark on her stand-in: Fire / Take aim live)
+    !quiet hit <seconds>                     Ordered -> Hit time of a full shot (default 1; live 3.1-4.3 s)
+    !quiet shot [pick|threat|nearest|none|0xHANDLE] [full|ordered|hit|released|lost|refused] [mgsv|target|cancelled] [weapon]
+                                             kGEvQuietShot on an Elden Ring character of the ActorTable: pick = the host's pick
+                                             (ActorFlags.QuietTarget, the default), threat = ActorFlags.QuietThreat, nearest = the
+                                             nearest hostile living non-boss one, none = no target (Refused, handle 0). full: Ordered
+                                             (GuestBuddyFlags.Engaged on), Hit after the hit time, Released 0.3 s later (Engaged off);
+                                             ordered / hit / released / refused: that one phase now; lost: Ordered, Lost 0.5 s later,
+                                             b = the reason (mgsv, the default; target; cancelled). The attack id by weapon (290 /
+                                             291 / 292), b = the !share value or MGSV's share of that rifle (0.9615 / 0.4615 / 1.4615)
 
 Thrown and placed explosives (protocol v5/v6, er/Throw.h, er/Mines.h), simulated MGSV-style over the fake's flat
 ground (y = 0, gravity 9.8 m/s^2, no bounce):
@@ -136,7 +160,7 @@ BUDDIES = {
 	# Not rideable: riding (--ride / !ride) is ignored with them. "none" = dismissed: GuestState says no buddy, while the fake
 	# keeps drawing its cube (as MGSV may draw a buddy leaving): the host must leave those draws out.
 	"dog": (proto.BuddyType.DOG, 0x0404, 1.0, 5.0, "D-Dog deployed"),
-	"quiet": (proto.BuddyType.QUIET, 0x0405, 1.0, 5.0, "Quiet deployed"),
+	"quiet": (proto.BuddyType.QUIET, 0x2400, 1.0, 5.0, "Quiet deployed"),  # v18: MGSV's own GameObjectId of TppBuddyQuiet2 (quiet.md §2.1)
 	"none": (proto.BuddyType.NONE, 0xFFFF, 1.0, 5.0, "no buddy"),
 }
 # v17 D-Dog: !dog style words -> DogStyle, and the MGSV attack id each one's kGEvDogAttack carries (TppDamage ATK_DDogBite 144,
@@ -148,6 +172,13 @@ DOG_STYLES = {"busy": proto.DogStyle.Busy, "fetch": proto.DogStyle.Fetch, "kill"
 # the bite 1.1538, the knife 25.2058, the two non-lethal ones 0. `!share` overrides the share for every event.
 DOG_ATTACK_IDS = {proto.DogStyle.Busy: 144, proto.DogStyle.Kill: 145, proto.DogStyle.KnockOut: 146, proto.DogStyle.Wound: 147}
 DOG_SHARES = {proto.DogStyle.Busy: 1.1538, proto.DogStyle.Kill: 25.2058, proto.DogStyle.KnockOut: 0.0, proto.DogStyle.Wound: 0.0}
+# v18 Quiet: !quiet weapon words -> QuietWeapon, the MGSV attack id of her hit (ATK_Quiet_sr_010/020/030) and MGSV's share of it
+# in soldier lives (kDamageParams: 2500 lethal, 1200 non-lethal, 3800 lethal of a 2600-life soldier; docs/research/quiet.md §2.6).
+QUIET_WEAPONS = {"lethal": proto.QuietWeapon.Lethal, "tranq": proto.QuietWeapon.Tranq, "heavy": proto.QuietWeapon.Heavy,
+	"unknown": proto.QuietWeapon.WeaponUnknown}
+QUIET_ATTACK_IDS = {proto.QuietWeapon.Lethal: 290, proto.QuietWeapon.Tranq: 291, proto.QuietWeapon.Heavy: 292}
+QUIET_SHARES = {proto.QuietWeapon.Lethal: 0.9615, proto.QuietWeapon.Tranq: 0.4615, proto.QuietWeapon.Heavy: 1.4615}
+QUIET_LOST = {"mgsv": proto.QuietLostReason.LostMgsv, "target": proto.QuietLostReason.LostTarget, "cancelled": proto.QuietLostReason.LostCancelled}
 RIDEABLE = ("walker", "horse")
 MESH_SNAKE, MESH_DWALKER = 0x5A4B000000000001, 0x5A4B000000000002
 TEX_SNAKE, TEX_DWALKER = 0x7E57000000000001, 0x7E57000000000002
@@ -266,6 +297,8 @@ class FakeGuest:
 			"hudFramesPublished": 0, "renderMessages": 0, "renderDropped": 0, "consoleServed": 0, "warps": 0,
 			"rideFrames": 0, "lifeMin": LIFE_MAX, "healed": 0, "backPresses": 0, "startPresses": 0, "menuButtons": 0, "pressCounts": {},
 			"buddyOrdersSent": 0, "dogAttacksSent": [], "dogTargetFrames": 0, "dogTargetsSeen": [], "dogEngagedFrames": 0,
+			"quietShotsSent": [], "quietTargetFrames": 0, "quietTargetsSeen": [], "quietThreatsSeen": [], "quietEngagedFrames": 0,
+			"quietPostFrames": 0, "quietSeatFrames": 0, "quietCloakFrames": 0, "quietPostSeqs": [], "quietGraceSeqs": [],
 		}
 		self.last_packet = None
 		self.grenades = []        # thrown, flying over the fake's flat ground (v5)
@@ -311,6 +344,20 @@ class FakeGuest:
 		self.dog_wait = None      # (x, z) in the odometer frame while D-Dog waits
 		self.dog_blip = None      # {"dx", "dy", "dz", "frames"}
 		self.buddy_rel = (1.5, 0.0, -0.5)  # the buddy relative to Snake's root this frame (MGSV world axes)
+		# v18 Quiet (!quiet): her weapon, the host's post / grace seat followed and echoed, her bits, the shot job, the host's picks
+		self.quiet_weapon = proto.QuietWeapon.Lethal
+		self.quiet_post = False   # !quiet post on: held at the host's post (AtPost + buddyPostSeq echo)
+		self.quiet_seat = False   # !quiet seat on: CanRest; seated at the host's grace seat (Seated + graceSeqSeated echo)
+		self.quiet_cloak = False
+		self.quiet_cover = False
+		self.quiet_marked = False
+		self.quiet_hit_s = 1.0
+		self.quiet_job = None     # {"handle", "weapon", "pos", "steps": [(t, QuietPhase, b), ...]}
+		self.quiet_engaged = None  # handle while GuestBuddyFlags.Engaged (Ordered .. Released)
+		self.quiet_target = 0     # ActorFlags.QuietTarget handle in the last ActorTable (0 = none)
+		self.quiet_threat = 0     # ActorFlags.QuietThreat handle
+		self.quiet_echo = (0, 0)  # (buddyPostSeq, graceSeqSeated) last published, logged as it changes
+		self.host_last = None
 
 	def elapsed(self) -> float:
 		return time.monotonic() - self.t0
@@ -376,6 +423,7 @@ class FakeGuest:
 		host = link.host_state()
 		host_flags = 0
 		if host:
+			self.host_last = host
 			st["hostStates"] += 1
 			host_flags = host.flags
 			st["hostFlagsSeen"] |= host.flags
@@ -489,8 +537,25 @@ class FakeGuest:
 			if pick != self.dog_target:
 				self.log(f"dog: the host's pick (ActorFlags.DogTarget) {pick:#x}" if pick else "dog: the host has no pick (no ActorFlags.DogTarget)")
 				self.dog_target = pick
+			# v18: the host's picks for Quiet (her target; Cover me's threat), logged as they change
+			recs = [actors.actors[i] for i in range(min(actors.count, proto.MAX_ACTORS))]
+			qpick = next((r.handle for r in recs if r.flags & proto.ActorFlags.QuietTarget), 0)
+			qthreat = next((r.handle for r in recs if r.flags & proto.ActorFlags.QuietThreat), 0)
+			if qpick:
+				st["quietTargetFrames"] += 1
+				if hex(qpick) not in st["quietTargetsSeen"]:
+					st["quietTargetsSeen"].append(hex(qpick))
+			if qthreat and hex(qthreat) not in st["quietThreatsSeen"]:
+				st["quietThreatsSeen"].append(hex(qthreat))
+			if qpick != self.quiet_target:
+				self.log(f"quiet: the host's pick (ActorFlags.QuietTarget) {qpick:#x}" if qpick else "quiet: the host has no pick (no ActorFlags.QuietTarget)")
+				self.quiet_target = qpick
+			if qthreat != self.quiet_threat:
+				self.log(f"quiet: Cover me's threat pick (ActorFlags.QuietThreat) {qthreat:#x}" if qthreat else "quiet: no threat pick")
+				self.quiet_threat = qthreat
 		self.tick_call_menu(t)
 		self.tick_dog(t)
+		self.tick_quiet(t)
 
 		# Motion: a slow circle plus the left stick (MGSV would turn the stick into locomotion itself).
 		riding = ((6.0 <= (t % 12.0) < 10.0) if self.ride == "auto" else self.ride == "on") and self.buddy in RIDEABLE
@@ -627,13 +692,21 @@ class FakeGuest:
 				dy = self.dog_blip["dy"]
 				self.dog_blip["frames"] -= 1
 				st["dogBlipFrames"] = st.get("dogBlipFrames", 0) + 1
+		buddy_yaw = self.yaw
+		if self.buddy == "quiet" and not riding:
+			# v18: her bits every frame, and the host's grace seat / post held and echoed as the real guest's sit job / mirror would
+			qbits, place, buddy_yaw, post_seq, grace_seq = self.quiet_frame(buddy_yaw)
+			bflags |= qbits
+			if place is not None:
+				off, dy = (place[0] - self.root[0], place[2] - self.root[2]), place[1]
+			gs.buddyPostSeq, gs.graceSeqSeated = post_seq, grace_seq
 		self.buddy_rel = (off[0], dy, off[1])
 		gs.buddyFlags = int(bflags)
 		gs.buddyObjectId = bobject
 		gs.buddyAmmo = self.buddy_ammo
 		gs.buddyPos[:] = [self.root[0] + off[0], dy, self.root[2] + off[1]]
 		self.buddy_pos = list(gs.buddyPos)
-		gs.buddyYaw = self.yaw
+		gs.buddyYaw = buddy_yaw
 		link.seq_write(proto.OFF_GUEST_STATE, gs)
 		self.vars.update(playerPosX=self.root[0], playerPosY=self.root[1], playerPosZ=self.root[2],
 			playerRotY=int(math.degrees(self.yaw)), playerLife=self.life, playerLifeMax=LIFE_MAX,
@@ -707,7 +780,8 @@ class FakeGuest:
 			"!ride on|off|auto !buddy walker|horse|dog|quiet|none !fulton [awake|any|0xHANDLE] [fail] !idroid on|off !stick world|camera [m/s] !box on|off|poster !flame [s] !fpv on|off !cqc <kind> !grab <action> !blast [r] [kind] !die "
 			"!throw <frag|sleep|stun|smoke> [speed] [pitch] [yaw] !aimthrow on|off [speed] [pitch] [kind] !place <kind> [trigger_m] !detonate <id> "
 			"!life <n> [regen] !menu on|off !aim on|off !hud mgsv|bar|none !boot N [text] !fail [text] !ready !nvg on|off !binoculars on|off "
-			"!climbplay on|off !climbhome <ms> !mantleplay on|off !order <cmd> !dog [status|style <s>|attack [target|nearest|none|0xH] [style] [full|ordered|connect|lost|refused]|release|busy <s>]")
+			"!climbplay on|off !climbhome <ms> !mantleplay on|off !order <cmd> !dog [status|style <s>|attack [target|nearest|none|0xH] [style] [full|ordered|connect|lost|refused]|release|busy <s>] "
+			"!quiet [status|weapon <w>|post on|off|seat on|off|cloak on|off|cover on|off|marked on|off|hit <s>|shot [pick|threat|nearest|none|0xH] [phase] [reason] [weapon]]")
 		if not w:
 			return 0, usage
 		if w[0] == "projmesh" and len(w) > 1 and w[1] in ("on", "off"):
@@ -726,6 +800,8 @@ class FakeGuest:
 			return self.buddy_order(int(w[1], 0))
 		if w[0] == "dog":
 			return self.dog_command(w[1:])
+		if w[0] == "quiet":
+			return self.quiet_command(w[1:])
 		if w[0] == "callmenu" and len(w) > 1:
 			self.callmenu = w[1] == "on"
 			self.callmenu_mode = w[2] if len(w) > 2 and w[2] in ("full", "ordered", "connect") else "full"
@@ -947,9 +1023,13 @@ class FakeGuest:
 		# pad[0] only for the attack orders 11-15, as the real guest's OrderStylePad (the style reaches the host every frame in
 		# buddyFlags anyway).
 		style = self.dog_style + 1 if btype == proto.BuddyType.DOG and 11 <= cmd <= 15 and self.dog_style != proto.DogStyle.StyleUnknown else 0
+		# v18: Quiet's commands 1-3 carry her weapon + 1 (0 = unknown), as the real guest's CommandDetour once it reads her weapon
+		if btype == proto.BuddyType.QUIET and 1 <= cmd <= 3 and self.quiet_weapon != proto.QuietWeapon.WeaponUnknown:
+			style = self.quiet_weapon + 1
 		self.push_event(GuestEventType.BuddyOrder, a=cmd, b=int(btype), pad0=style)
 		self.stats["buddyOrdersSent"] += 1
-		return 0, f"kGEvBuddyOrder a={cmd} b={int(btype)} ({btype.name}) pad0={style}" + (f" (D-Dog style {self.dog_style.name})" if style else "")
+		what = (f" (D-Dog style {self.dog_style.name})" if btype == proto.BuddyType.DOG else f" (Quiet weapon {self.quiet_weapon.name})") if style else ""
+		return 0, f"kGEvBuddyOrder a={cmd} b={int(btype)} ({btype.name}) pad0={style}" + what
 
 	def dog_records(self) -> list:
 		actors = self.link.actors()
@@ -1116,6 +1196,168 @@ class FakeGuest:
 		name = bytes(pick.name).split(b"\0", 1)[0].decode("utf-8", "replace")
 		return 0, "; ".join(out) + f" ({name}, {mode})"
 
+	# ---- v18 Quiet ------------------------------------------------------------------------------------------
+	def quiet_frame(self, yaw: float):
+		"""This frame's Quiet bits, her place (MGSV world; None = beside Snake as before), yaw and the two echoes."""
+		st, host = self.stats, self.host_last
+		bits = proto.buddy_quiet_weapon_bits(self.quiet_weapon)
+		if self.quiet_cover:
+			bits |= proto.GuestBuddyFlags.QuietCover
+		if self.quiet_marked:
+			bits |= proto.GuestBuddyFlags.QuietMarked
+		if self.quiet_seat:
+			bits |= proto.GuestBuddyFlags.CanRest
+		if self.quiet_engaged is not None:
+			bits |= proto.GuestBuddyFlags.Engaged  # Ordered .. Released
+			st["quietEngagedFrames"] += 1
+		place, post_seq, grace_seq = None, 0, 0
+		hflags = host.flags if host is not None else 0
+		if (self.quiet_seat and host is not None and hflags & proto.HostFlags.AtGrace and host.graceSeq and
+				all(math.isfinite(v) for v in host.graceSeat)):
+			place, yaw, grace_seq = list(host.graceSeat), host.graceSeatYaw, host.graceSeq
+			bits |= proto.GuestBuddyFlags.Seated
+			st["quietSeatFrames"] += 1
+			if grace_seq not in st["quietGraceSeqs"]:
+				st["quietGraceSeqs"].append(grace_seq)
+		elif self.quiet_post and host is not None and hflags & proto.HostFlags.QuietLayer and host.buddyPostSeq:
+			if all(math.isfinite(v) for v in host.buddyPost):
+				place, yaw, post_seq = list(host.buddyPost), host.buddyPostYaw, host.buddyPostSeq
+				bits |= proto.GuestBuddyFlags.AtPost
+				st["quietPostFrames"] += 1
+				if post_seq not in st["quietPostSeqs"]:
+					st["quietPostSeqs"].append(post_seq)
+			else:
+				bits |= proto.GuestBuddyFlags.Cloaked  # no post: on the move, cloaked
+		if self.quiet_cloak:
+			bits |= proto.GuestBuddyFlags.Cloaked
+		if bits & proto.GuestBuddyFlags.Cloaked:
+			st["quietCloakFrames"] += 1
+		if (post_seq, grace_seq) != self.quiet_echo:
+			self.quiet_echo = (post_seq, grace_seq)
+			where = f" at ({place[0]:.2f},{place[1]:.2f},{place[2]:.2f}) yaw {math.degrees(yaw):.1f} deg" if place else ""
+			self.log(f"quiet: {'seated for rest %d' % grace_seq if grace_seq else 'at post %d' % post_seq if post_seq else 'beside Snake'}{where} "
+				f"(GuestState buddyPostSeq {post_seq}, graceSeqSeated {grace_seq})")
+		return bits, place, yaw, post_seq, grace_seq
+
+	def quiet_send(self, phase, weapon, handle: int, pos, b: int | None = None) -> str:
+		me = self.buddy_pos or list(self.root)
+		d = (0.0, 0.0, 0.0)
+		if pos is not None:
+			dx, dy, dz = pos[0] - me[0], pos[1] - me[1], pos[2] - me[2]
+			n = math.sqrt(dx * dx + dy * dy + dz * dz)
+			d = (dx / n, dy / n, dz / n) if n > 1e-3 else d
+		attack = QUIET_ATTACK_IDS.get(weapon, 0)
+		share = self.share if self.share > 0 else QUIET_SHARES.get(weapon, 0.0)
+		if b is None:
+			b = int(round(share * 10000))
+		self.push_event(GuestEventType.QuietShot, a=proto.quiet_shot_a(phase, weapon, attack), b=b, v0=tuple(me), v1=d,
+			pad0=handle & 0xFFFFFFFF, pad1=handle >> 32)
+		if phase == proto.QuietPhase.Ordered:
+			self.quiet_engaged = handle
+		elif phase in (proto.QuietPhase.Released, proto.QuietPhase.Lost, proto.QuietPhase.Refused) and self.quiet_engaged == handle:
+			self.quiet_engaged = None
+		name = f"{proto.QuietPhase(phase).name}/{proto.enum_name(weapon, proto.QuietWeapon)}"
+		self.stats["quietShotsSent"].append(name)
+		what = f"reason {proto.enum_name(b, proto.QuietLostReason)}" if phase == proto.QuietPhase.Lost else f"share {b / 10000:.3f}"
+		text = f"kGEvQuietShot {name} (MGSV attack {attack}, {what}) on ER {handle:#x}"
+		self.log(f"quiet: {text}{' -- GuestBuddyFlags.Engaged' if self.quiet_engaged is not None else ''}")
+		return text
+
+	def tick_quiet(self, t: float):
+		job = self.quiet_job
+		if job is None:
+			return
+		while job["steps"] and t >= job["steps"][0][0]:
+			_, phase, b = job["steps"].pop(0)
+			self.quiet_send(phase, job["weapon"], job["handle"], job["pos"], b)
+		if not job["steps"]:
+			self.quiet_job = None
+
+	def quiet_command(self, w: list[str]) -> tuple[int, str]:
+		onoff = {"post": "quiet_post", "seat": "quiet_seat", "cloak": "quiet_cloak", "cover": "quiet_cover", "marked": "quiet_marked"}
+		if not w or w[0] == "status":
+			job, host = self.quiet_job, self.host_last
+			hf = proto.flag_names(host.flags & int(proto.HostFlags.QuietLayer | proto.HostFlags.AtGrace), proto.HostFlags) if host is not None else "-"
+			return 0, (f"Quiet: buddy {self.buddy}, weapon {self.quiet_weapon.name}, post {'on' if self.quiet_post else 'off'}, seat "
+				f"{'on' if self.quiet_seat else 'off'}, cloak {'on' if self.quiet_cloak else 'off'}, cover {'on' if self.quiet_cover else 'off'}, "
+				f"marked {'on' if self.quiet_marked else 'off'}, engaged {'%#x' % self.quiet_engaged if self.quiet_engaged is not None else 'no'}, "
+				f"job {('%#x, %d steps left' % (job['handle'], len(job['steps']))) if job else 'none'}, echoes post {self.quiet_echo[0]} rest "
+				f"{self.quiet_echo[1]}, the host's {hf} pick {self.quiet_target:#x} threat {self.quiet_threat:#x}, hit {self.quiet_hit_s:.1f} s")
+		if w[0] == "weapon" and len(w) > 1 and w[1] in QUIET_WEAPONS:
+			self.quiet_weapon = QUIET_WEAPONS[w[1]]
+			bits = proto.buddy_quiet_weapon_bits(self.quiet_weapon)
+			return 0, f"Quiet's weapon {self.quiet_weapon.name} (buddyFlags {bits:#x}; BuddyOrder 1-3 pad[0] {bits >> proto.BUDDY_QUIET_WEAPON_SHIFT})"
+		if w[0] in onoff and len(w) > 1 and w[1] in ("on", "off"):
+			setattr(self, onoff[w[0]], w[1] == "on")
+			return 0, f"Quiet {w[0]} {w[1]}"
+		if w[0] == "hit" and len(w) > 1:
+			self.quiet_hit_s = max(0.0, float(w[1]))
+			return 0, f"a full shot hits {self.quiet_hit_s:.1f} s after Ordered"
+		if self.buddy != "quiet":
+			return 1, f"!quiet: the buddy is {self.buddy} (`!buddy quiet` first)"
+		if w[0] != "shot":
+			return 1, ("usage: !quiet [status] | weapon <lethal|tranq|heavy|unknown> | post|seat|cloak|cover|marked on|off | hit <s> | "
+				"shot [pick|threat|nearest|none|0xHANDLE] [full|ordered|hit|released|lost|refused] [mgsv|target|cancelled] [weapon]")
+		which, mode, reason, weapon = "pick", "full", proto.QuietLostReason.LostMgsv, self.quiet_weapon
+		for x in w[1:]:
+			if x in QUIET_WEAPONS:
+				weapon = QUIET_WEAPONS[x]
+			elif x in ("full", "ordered", "hit", "released", "lost", "refused"):
+				mode = x
+			elif x in QUIET_LOST:
+				reason = QUIET_LOST[x]
+			elif x in ("pick", "threat", "nearest", "none") or x.startswith("0x"):
+				which = x
+			else:
+				return 1, f"!quiet shot: what is {x!r}?"
+		recs = self.dog_records()
+		pick = None
+		if which == "pick":
+			pick = next((r for r in recs if r.flags & proto.ActorFlags.QuietTarget), None)
+		elif which == "threat":
+			pick = next((r for r in recs if r.flags & proto.ActorFlags.QuietThreat), None)
+		elif which == "nearest":
+			for r in recs:
+				if r.flags & (proto.ActorFlags.Dead | proto.ActorFlags.Boss) or not r.flags & proto.ActorFlags.Hostile:
+					continue  # the real host's pick: hostile and alive only, never a boss
+				d = math.hypot(r.pos[0] - self.root[0], r.pos[2] - self.root[2])
+				if pick is None or d < math.hypot(pick.pos[0] - self.root[0], pick.pos[2] - self.root[2]):
+					pick = r
+		elif which.startswith("0x"):
+			want = int(which, 16)
+			pick = next((r for r in recs if r.handle == want), None)
+		handle = pick.handle if pick is not None else 0
+		pos = list(pick.pos) if pick is not None else None
+		if mode in ("hit", "released"):
+			# one phase now, on the engaged target when no other is named
+			if pick is None and which == "pick" and self.quiet_engaged is not None:
+				handle = self.quiet_engaged
+				pos = next((list(r.pos) for r in recs if r.handle == handle), None)
+			if mode == "released":
+				self.quiet_job = None
+			return 0, self.quiet_send(proto.QuietPhase.Hit if mode == "hit" else proto.QuietPhase.Released, weapon, handle, pos)
+		out = []
+		# A new order ends the one under way, as MGSV's would: an aim that never fired is lost (cancelled), a shot done is released.
+		if self.quiet_job is not None:
+			out.append(self.quiet_send(proto.QuietPhase.Lost, self.quiet_job["weapon"], self.quiet_job["handle"], self.quiet_job["pos"],
+				int(proto.QuietLostReason.LostCancelled)))
+		elif self.quiet_engaged is not None:
+			out.append(self.quiet_send(proto.QuietPhase.Released, weapon, self.quiet_engaged, None))
+		self.quiet_job = None
+		if pick is None or mode == "refused":
+			out.append(self.quiet_send(proto.QuietPhase.Refused, weapon, handle, pos))
+			return 0, "; ".join(out) + ("" if pick is not None else f" -- no {which} in the ActorTable ({len(recs)} records)")
+		out.append(self.quiet_send(proto.QuietPhase.Ordered, weapon, handle, pos))
+		t = self.elapsed()
+		if mode == "lost":
+			self.quiet_job = {"handle": handle, "weapon": weapon, "pos": pos, "steps": [(t + 0.5, proto.QuietPhase.Lost, int(reason))]}
+		elif mode == "full":
+			hit = t + self.quiet_hit_s
+			self.quiet_job = {"handle": handle, "weapon": weapon, "pos": pos,
+				"steps": [(hit, proto.QuietPhase.Hit, None), (hit + 0.3, proto.QuietPhase.Released, None)]}
+		name = bytes(pick.name).split(b"\0", 1)[0].decode("utf-8", "replace")
+		return 0, "; ".join(out) + f" ({name}, {mode})"
+
 	def release(self, speed: float, pitch: float, yaw_off: float = 0.0):
 		"""Snake's hand and a throw's initial velocity (MGSV world) for a speed, pitch and yaw off his facing."""
 		yaw = self.yaw + yaw_off
@@ -1226,8 +1468,8 @@ class FakeGuest:
 	def publish_draw_list(self, riding: bool):
 		if self.humanoid:
 			walker = (0.0, -1.0, 0.0) if riding else (1.6 * math.cos(self.yaw) - 0.4 * math.sin(self.yaw), 0.0, -1.6 * math.sin(self.yaw) - 0.4 * math.cos(self.yaw))
-			if self.buddy == "dog" and not riding:
-				walker = self.buddy_rel  # its draws where its buddyPos is (Wait, !dog blip)
+			if self.buddy in ("dog", "quiet") and not riding:
+				walker = self.buddy_rel  # its draws where its buddyPos is (Wait, !dog blip; v18 Quiet's post / seat)
 			# v13: MGSV's own draws of a grenade in flight, tagged kOwnerProjectile as the real guest's [Capture] ProjectileMeshes does (the
 			# host learns the mesh from them and draws it on its flown copy; `!projmesh off`: none).
 			projectiles = [((g["pos"][0] - self.root[0], g["pos"][1] - self.root[1], g["pos"][2] - self.root[2]), 9.0 * g["t"])
@@ -1247,8 +1489,8 @@ class FakeGuest:
 		rec_walker.textures[0] = TEX_DWALKER
 		# Anchor-relative matrices: Snake at the anchor; D-Walker under him while ridden, else beside him.
 		walker = (0.0, -0.8, 0.0) if riding else (1.5, 0.0, -0.5)
-		if self.buddy == "dog" and not riding:
-			walker = self.buddy_rel  # its draws where its buddyPos is (Wait, !dog blip)
+		if self.buddy in ("dog", "quiet") and not riding:
+			walker = self.buddy_rel  # its draws where its buddyPos is (Wait, !dog blip; v18 Quiet's post / seat)
 		upper = (0, 0.9, 0)
 		if self.climbing and self.climb:
 			upper = (0.15 * math.sin(self.climb["phase"]), 1.3, 0)  # the climb pose: arms up, swinging with its pace

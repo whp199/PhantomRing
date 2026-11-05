@@ -13,6 +13,16 @@ D-Dog (protocol v17, docs/research/ddog.md): `pr er actor <i> dogtarget` makes t
 order (ActorFlags.DogTarget, at most one record; `nodogtarget` clears it); kGEvDogAttack, kGEvBuddyOrder (with D-Dog's style)
 and GuestBuddyFlags.Engaged are printed as they come. HostState carries HostFlags.DogLayer (the host's [Dog] on: the guest takes
 D-Dog's attack orders over only then); `pr er doglayer 0` clears it, as a host with `[Dog] enabled = false`.
+Quiet and the grace rest (protocol v18, docs/research/quiet.md): HostState carries HostFlags.QuietLayer only after `pr er
+quietlayer 1` (the real host's [Quiet] is off until its live pass); `pr er actor <i> quiettarget|noquiettarget|quietthreat|
+noquietthreat` sets her pick / Cover me's threat pick (at most one record each); `pr er post <dx> <dz> [yaw_deg]|none` publishes her
+post dx, dz m from Snake (buddyPost*, seq bumped; none = on the move: NaN); `pr er grace 1 [dx dz [yaw_deg]]|1 none|0` a rest
+(HostFlags.AtGrace, graceCentre 1.2 m ahead of Snake, the seat dx, dz m from him -- default 1.5, 1.5 -- facing the grace; `none` =
+no seat, a talk; also sends kHEvRested 0, as the real host does on a rest) and its end. Posts and seats stay where they are in
+Elden Ring: they are kept in Snake's odometer frame and mapped to MGSV's world every frame, as the real host maps them.
+`pr er hoststate` prints what is published; kGEvQuietShot, Quiet's orders (her weapon in pad[0]) and the guest's echoes
+(buddyPostSeq / graceSeqSeated, GuestBuddyFlags.AtPost / Seated / Cloaked / CanRest / QuietMarked / QuietCover, her weapon) are
+printed as they come.
 `pr er block 1|0`: an Elden Ring wall -- the puppet stays while MGSV's Snake runs on; --actors near characters move by that slip in
 MGSV's world, as the real host maps them (the guest's waiting D-Dog reads it there; --trace's last two columns are the slip).
 """
@@ -137,6 +147,15 @@ class FakeHost:
 		self.dead = False  # `pr er die`: HostState kHostPlayerDead until `pr er respawn` (guest death tests)
 		self.tarnished = False  # `pr er tarnished 1`: Tarnished mode, no kHostPuppeting (the pad stays as given: the guest parks itself)
 		self.dog_layer = True  # v17 HostFlags.DogLayer: the host's D-Dog layer is on (`pr er doglayer 0|1`)
+		# v18 Quiet and the grace rest (`pr er quietlayer 0|1`, `pr er post ...`, `pr er grace ...`): points kept in Snake's odometer
+		# frame (where they stay in Elden Ring) and mapped to MGSV's world every frame through the latest guest state
+		self.quiet_layer = False
+		self.post = None          # (x, y, z) odometer frame, or None = on the move (NaN)
+		self.post_yaw = 0.0
+		self.post_seq = 0
+		self.grace = None         # {"centre": (x, y, z), "seat": (x, y, z) | None, "yaw": float} odometer frame, or None
+		self.grace_seq = 0
+		self.echo_last = (0, 0, 0)  # the guest's (buddyPostSeq, graceSeqSeated, Quiet's buddy bits) last logged
 		self.climbing = False  # `pr er climb 1`: an Elden Ring ladder climb under way (v15 kHEvClimb)
 		# `pr er block 1`: Snake pushes into an Elden Ring wall -- the puppet doesn't move while MGSV's Snake runs on (the odometer's
 		# horizontal steps go into the slip instead); the --actors near characters, standing still in Elden Ring, then move in MGSV's
@@ -163,6 +182,7 @@ class FakeHost:
 			"meshIndexOk": True, "hudFrames": 0, "hudLastSize": [0, 0], "poseBones": 0, "consoleServed": 0,
 			"hurtSent": 0, "buddyTypes": [], "vehicleIdsSeen": [], "lifeLast": 0, "buddyFlagsSeen": 0, "buddyPosValid": 0,
 			"buddyAmmoLast": 0, "dogAttacks": [], "buddyOrders": [], "dogEngagedFrames": 0,
+			"quietShots": [], "postEchoFrames": 0, "seatEchoFrames": 0, "postSeqEchoed": 0, "graceSeqEchoed": 0, "quietWeaponsSeen": [],
 		}
 
 	def elapsed(self) -> float:
@@ -193,9 +213,14 @@ class FakeHost:
 		flags = HostFlags.InGame | (HostFlags.PlayerDead if self.dead else (0 if self.tarnished else HostFlags.Puppeting))
 		if self.dog_layer:
 			flags |= HostFlags.DogLayer
+		if self.quiet_layer:
+			flags |= HostFlags.QuietLayer
+		if self.grace is not None:
+			flags |= HostFlags.AtGrace
 		hs = proto.HostState(flags=int(flags), frame=self.frame, qpc=proto.qpc_now(),
 			timeOfDayHours=(12.0 + t / 60.0) % 24.0, cameraMaxDistance=8.0, erHpFrac=1.0, erWorldId=0x3C2A2400,
 			groundY=0.0, fallSpeed=0.0)
+		self.fill_quiet_state(hs)
 		link.seq_write(proto.OFF_HOST_STATE, hs)
 
 		live = self.pad_override if self.pad_override is not None else (self.pad_file.poll() if self.pad_file else None)
@@ -268,6 +293,7 @@ class FakeHost:
 			if self.guest_last is None or engaged != bool(self.guest_last.buddyFlags & proto.GuestBuddyFlags.Engaged):
 				self.log(f"guest: buddy {'ENGAGED' if engaged else 'not engaged'} (GuestBuddyFlags.Engaged; buddy type {gs.buddyType}, "
 					f"flags {proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags)})")
+			self.log_quiet_echo(gs)
 			self.guest_last = gs
 			self.on_guest_frame(gs)
 			if self.trace:
@@ -336,7 +362,7 @@ class FakeHost:
 				self.log(f"fulton: Elden Ring character {handle:#x} {'fultoned' if ev.a == 1 else 'NOT fultoned'} at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f})")
 			elif ev.type == GuestEventType.DogAttack:
 				# v17: a = DogPhase | DogStyle << 8 | MGSV attack id << 16, b = MGSV's share (1/10000), v0 the dog, v1 dog -> target,
-				# pad = the target's handle. The real host applies the style's effect on Connected (er/Dog.cpp, not built yet).
+				# pad = the target's handle. The real host applies the style's effect on Connected (er/Dog.cpp).
 				phase, style, attack = proto.dog_attack_fields(ev.a)
 				handle = ev.pad[0] | (ev.pad[1] << 32)
 				name = f"{proto.enum_name(phase, proto.DogPhase)}/{proto.enum_name(style, proto.DogStyle)}"
@@ -345,10 +371,23 @@ class FakeHost:
 				self.log(f"dog: {name} MGSV attack {attack} share {ev.b / 10000:.3f} on ER {handle:#x}"
 					f"{f' (actor {who})' if who is not None else ' (not one of ours)' if handle else ' (no target)'} "
 					f"the dog at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f}) dir ({ev.v1[0]:.2f},{ev.v1[1]:.2f},{ev.v1[2]:.2f})")
+			elif ev.type == GuestEventType.QuietShot:
+				# v18: a = QuietPhase | QuietWeapon << 8 | MGSV attack id << 16, b = MGSV's share (1/10000) or the QuietLostReason (Lost),
+				# v0 her feet, v1 her -> the stand-in, pad = the target's handle. The real host fires from her post on Hit (er/Quiet.cpp).
+				phase, weapon, attack = proto.quiet_shot_fields(ev.a)
+				handle = ev.pad[0] | (ev.pad[1] << 32)
+				name = f"{proto.enum_name(phase, proto.QuietPhase)}/{proto.enum_name(weapon, proto.QuietWeapon)}"
+				st["quietShots"].append(name)
+				who = next((i for i in range(2) if self.actor_handles[i] == handle), None)
+				what = (f"reason {proto.enum_name(ev.b, proto.QuietLostReason)}" if phase == proto.QuietPhase.Lost else f"share {ev.b / 10000:.3f}")
+				self.log(f"quiet: {name} MGSV attack {attack} {what} on ER {handle:#x}"
+					f"{f' (actor {who})' if who is not None else ' (not one of ours)' if handle else ' (no target)'} "
+					f"Quiet at ({ev.v0[0]:.2f},{ev.v0[1]:.2f},{ev.v0[2]:.2f}) dir ({ev.v1[0]:.2f},{ev.v1[1]:.2f},{ev.v1[2]:.2f})")
 			elif ev.type == GuestEventType.BuddyOrder:
-				# v7 (v17: pad[0] = D-Dog's style + 1)
+				# v7 (v17: pad[0] = D-Dog's style + 1; v18: Quiet's weapon + 1 for her commands 1-3)
 				st["buddyOrders"].append([ev.a, ev.b, ev.pad[0]])
-				style = f" D-Dog style {proto.enum_name(ev.pad[0] - 1, proto.DogStyle)}" if ev.b == proto.BuddyType.DOG and ev.pad[0] else ""
+				style = (f" D-Dog style {proto.enum_name(ev.pad[0] - 1, proto.DogStyle)}" if ev.b == proto.BuddyType.DOG and ev.pad[0] else
+					f" Quiet weapon {proto.enum_name(ev.pad[0] - 1, proto.QuietWeapon)}" if ev.b == proto.BuddyType.QUIET and ev.pad[0] else "")
 				self.log(f"buddy order {ev.a} for {proto.enum_name(ev.b, proto.BuddyType)}{style}")
 			elif ev.type == GuestEventType.TimeSkip:
 				# v13: MGSV's Phantom Cigar; the real host moves Elden Ring's clock by as much (er/TimeSkip.h)
@@ -462,6 +501,108 @@ class FakeHost:
 
 	NEAR_ACTORS = [("Godrick Soldier", 15.0, 0.0), ("Wandering Noble", -10.0, 25.0)]
 
+	# ---- v18 Quiet and the grace rest -------------------------------------------------------------------
+	def to_mgsv(self, p) -> list[float]:
+		"""A point kept in Snake's odometer frame (fixed in Elden Ring) -> MGSV world now, as the real host maps it."""
+		gs = self.guest_last
+		return [gs.rootPos[i] + p[i] - gs.odo[i] + self.slip[i] for i in range(3)]
+
+	def to_odo(self, dx: float, dz: float) -> tuple[float, float, float]:
+		"""dx, dz m from Snake now -> the odometer frame (Elden Ring's Snake is at odo - slip)."""
+		gs = self.guest_last
+		return (gs.odo[0] - self.slip[0] + dx, gs.odo[1], gs.odo[2] - self.slip[2] + dz)
+
+	def fill_quiet_state(self, hs):
+		nan = float("nan")
+		hs.graceCentre[:] = hs.graceSeat[:] = hs.buddyPost[:] = [nan, nan, nan]
+		hs.graceSeq, hs.buddyPostSeq = self.grace_seq, self.post_seq
+		if self.guest_last is None:
+			return
+		if self.grace is not None:
+			hs.graceCentre[:] = self.to_mgsv(self.grace["centre"])
+			if self.grace["seat"] is not None:
+				hs.graceSeat[:] = self.to_mgsv(self.grace["seat"])
+				hs.graceSeatYaw = self.grace["yaw"]
+		if self.post is not None:
+			hs.buddyPost[:] = self.to_mgsv(self.post)
+			hs.buddyPostYaw = self.post_yaw
+
+	def log_quiet_echo(self, gs):
+		"""The guest's echoes of the post and the seat and Quiet's buddy bits, logged as they change."""
+		st = self.stats
+		bits = gs.buddyFlags & int(proto.GuestBuddyFlags.AtPost | proto.GuestBuddyFlags.Seated | proto.GuestBuddyFlags.Cloaked |
+			proto.GuestBuddyFlags.CanRest | proto.GuestBuddyFlags.QuietMarked | proto.GuestBuddyFlags.QuietCover | proto.BUDDY_QUIET_WEAPON_MASK)
+		if gs.buddyFlags & proto.GuestBuddyFlags.AtPost and gs.buddyPostSeq:
+			st["postEchoFrames"] += 1
+			st["postSeqEchoed"] = gs.buddyPostSeq
+		if gs.buddyFlags & proto.GuestBuddyFlags.Seated and gs.graceSeqSeated:
+			st["seatEchoFrames"] += 1
+			st["graceSeqEchoed"] = gs.graceSeqSeated
+		weapon = proto.buddy_quiet_weapon(gs.buddyFlags)
+		if weapon != 0xFF and proto.enum_name(weapon, proto.QuietWeapon) not in st["quietWeaponsSeen"]:
+			st["quietWeaponsSeen"].append(proto.enum_name(weapon, proto.QuietWeapon))
+		now = (gs.buddyPostSeq, gs.graceSeqSeated, bits)
+		if now != self.echo_last:
+			self.echo_last = now
+			self.log(f"guest: Quiet {proto.flag_names(bits & ~proto.BUDDY_QUIET_WEAPON_MASK, proto.GuestBuddyFlags)} weapon "
+				f"{proto.enum_name(weapon, proto.QuietWeapon)}, post seq {gs.buddyPostSeq} (ours {self.post_seq}), seated for rest "
+				f"{gs.graceSeqSeated} (ours {self.grace_seq}), buddy at ({gs.buddyPos[0]:.2f},{gs.buddyPos[1]:.2f},{gs.buddyPos[2]:.2f}) "
+				f"yaw {math.degrees(gs.buddyYaw):.1f} deg")
+
+	def quiet_state_text(self) -> str:
+		hs = proto.HostState()
+		self.fill_quiet_state(hs)
+		v = lambda a: "none" if not math.isfinite(a[0]) else f"({a[0]:.2f},{a[1]:.2f},{a[2]:.2f})"
+		flags = (["QuietLayer"] if self.quiet_layer else []) + (["AtGrace"] if self.grace is not None else []) + (["DogLayer"] if self.dog_layer else [])
+		return (f"flags {'|'.join(flags) or '0'}; grace seq {hs.graceSeq} centre {v(hs.graceCentre)} seat {v(hs.graceSeat)} yaw "
+			f"{math.degrees(hs.graceSeatYaw):.1f} deg; post seq {hs.buddyPostSeq} at {v(hs.buddyPost)} yaw {math.degrees(hs.buddyPostYaw):.1f} deg")
+
+	def post_command(self, args: list[str]) -> tuple[int, str]:
+		if args == ["none"]:
+			self.post = None
+			return 0, f"no post (on the move: buddyPost NaN, seq stays {self.post_seq}); {self.quiet_state_text()}"
+		if self.guest_last is None:
+			return 1, "post: needs a guest state"
+		try:
+			dx, dz = float(args[0]), float(args[1])
+			yaw = math.radians(float(args[2])) if len(args) > 2 else self.guest_last.rootYaw
+		except (ValueError, IndexError):
+			return 1, "usage: post <dx> <dz> [yaw_deg] | none   (MGSV x/z metres from Snake now)"
+		self.post, self.post_yaw = self.to_odo(dx, dz), yaw
+		self.post_seq += 1
+		return 0, f"post #{self.post_seq} {dx:g}, {dz:g} m from Snake; {self.quiet_state_text()}"
+
+	def grace_command(self, args: list[str]) -> tuple[int, str]:
+		usage = "usage: grace 1 [<dx> <dz> [yaw_deg]] | grace 1 none | grace 0   (the seat dx, dz m from Snake; none: a rest without a seat)"
+		if args == ["0"]:
+			was = self.grace is not None
+			self.grace = None
+			return 0, f"{'left the grace' if was else 'not at a grace'} (AtGrace off, the grace fields NaN); {self.quiet_state_text()}"
+		if not args or args[0] != "1":
+			return 1, usage
+		gs = self.guest_last
+		if gs is None:
+			return 1, "grace: needs a guest state"
+		seatless = args[1:] == ["none"]
+		try:
+			dx, dz = (float(args[1]), float(args[2])) if len(args) > 2 else (1.5, 1.5)
+		except ValueError:
+			return 1, usage
+		fwd = (math.sin(gs.rootYaw), math.cos(gs.rootYaw))
+		centre = self.to_odo(1.2 * fwd[0], 1.2 * fwd[1])
+		seat = None if seatless else self.to_odo(dx, dz)
+		if seat is not None and len(args) > 3:
+			yaw = math.radians(float(args[3]))
+		elif seat is not None:
+			yaw = math.atan2(centre[0] - seat[0], centre[2] - seat[2])  # facing the grace
+		else:
+			yaw = 0.0
+		self.grace = {"centre": centre, "seat": seat, "yaw": yaw}
+		if seat is not None:
+			self.grace_seq += 1  # as the real host: graceSeq bumps with every PUBLISHED seat (er/GraceRest.cpp), not at a seatless rest
+		self.host_event(HostEventType.Rested, 0, 0)  # the real host's refill edge on every rest
+		return 0, f"rest{' without a seat (graceSeq stays ' + str(self.grace_seq) + ')' if seatless else ' #' + str(self.grace_seq)} (+ kHEvRested 0); {self.quiet_state_text()}"
+
 	def actor_positions(self) -> list[list[float]] | None:
 		"""--actors near: the actors' MGSV-world feet now (None before the first guest state)."""
 		gs = self.guest_last
@@ -490,7 +631,8 @@ class FakeHost:
 
 	def actor_command(self, args: list[str]) -> tuple[int, str]:
 		if len(args) < 2 or args[0] not in ("0", "1"):
-			return 1, "usage: actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|at <dx> <dz>|back   (at: MGSV x/z metres from Snake now; --actors near)"
+			return 1, ("usage: actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|quiettarget|noquiettarget|quietthreat|noquietthreat|"
+				"at <dx> <dz>|back   (at: MGSV x/z metres from Snake now; --actors near)")
 		i = int(args[0])
 		flag = {"asleep": int(proto.ActorFlags.Asleep), "dead": int(proto.ActorFlags.Dead)}
 		match args[1:]:
@@ -503,6 +645,16 @@ class FakeHost:
 				self.actor_flags[i] |= int(proto.ActorFlags.DogTarget)
 			case ["nodogtarget"]:
 				self.actor_flags[i] &= ~int(proto.ActorFlags.DogTarget)
+			case ["quiettarget" | "quietthreat" as what]:
+				# v18: the host's pick for Quiet's Fire / Take aim, or Cover me's threat pick -- at most one record carries each
+				bit = int(proto.ActorFlags.QuietTarget if what == "quiettarget" else proto.ActorFlags.QuietThreat)
+				for j in range(len(self.actor_flags)):
+					self.actor_flags[j] &= ~bit
+				self.actor_flags[i] |= bit
+			case ["noquiettarget"]:
+				self.actor_flags[i] &= ~int(proto.ActorFlags.QuietTarget)
+			case ["noquietthreat"]:
+				self.actor_flags[i] &= ~int(proto.ActorFlags.QuietThreat)
 			case ["awake"]:
 				self.actor_flags[i] &= ~flag["asleep"]
 			case ["alive"]:
@@ -512,14 +664,16 @@ class FakeHost:
 			case ["renew"]:
 				self.actor_handles[i] = 0xFFFFFFFF00000000 | (max(h & 0xFFFFFFFF for h in self.actor_handles) + 0x10)
 				self.actor_flags[i] = 0
-			case ["at", dx, dz]:
+			case ["at", dx, dz, *dy]:
+				# (Quiet, Q4's elevated case) an optional dy: the character that many metres above Snake's feet (Elden Ring's enemies
+				# on walls and ledges: 34-36 m up at Gatefront, docs/research/quiet.md §2.9)
 				gs = self.guest_last
 				if self.actors_mode != "near" or gs is None:
 					return 1, "actor at: needs --actors near and a guest state"
 				self.actor_positions()
-				self.actor_points[i] = [gs.odo[0] - self.slip[0] + float(dx), gs.odo[1], gs.odo[2] - self.slip[2] + float(dz)]
+				self.actor_points[i] = [gs.odo[0] - self.slip[0] + float(dx), gs.odo[1] + (float(dy[0]) if dy else 0.0), gs.odo[2] - self.slip[2] + float(dz)]
 			case _:
-				return 1, "usage: actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|at <dx> <dz>|back|renew"
+				return 1, "usage: actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|quiettarget|noquiettarget|quietthreat|noquietthreat|at <dx> <dz> [dy]|back|renew"
 		self.publish_actors()
 		pos = self.actor_positions()
 		where = f" at {pos[i][0]:.2f},{pos[i][1]:.2f},{pos[i][2]:.2f}" if pos else ""
@@ -543,7 +697,21 @@ class FakeHost:
 			case ["help"]:
 				return 0, ("fake_er canned commands: help, ping, status, peek player.pos, peek <addr>, hurt <er dmg>, heal <amount>, die, respawn, "
 					"rested 0|1, tarnished 0|1, placed, detonate <id>|all, actors, actor 0|1 asleep|awake|dead|alive|dogtarget|nodogtarget|at <dx> <dz>|back|renew, "
-					"climb 1|0 [down] [speed m/s], mantle <cm> [vault] [secs], doglayer 0|1, block 1|0")
+					"climb 1|0 [down] [speed m/s], mantle <cm> [vault] [secs], doglayer 0|1, block 1|0, "
+					"quietlayer 0|1, post <dx> <dz> [yaw_deg]|none, grace 1 [<dx> <dz> [yaw_deg]]|1 none|0, hoststate; "
+					"actor 0|1 quiettarget|noquiettarget|quietthreat|noquietthreat")
+			case ["quietlayer", which]:
+				# v18: HostFlags.QuietLayer -- the real host sets it while [Quiet] enabled; without it the guest leaves Quiet to MGSV (0.8.0)
+				if which not in ("0", "1"):
+					return 1, "usage: quietlayer 0|1"
+				self.quiet_layer = which == "1"
+				return 0, f"HostFlags.QuietLayer {'on' if self.quiet_layer else 'off'}"
+			case ["post", *rest] if rest:
+				return self.post_command(rest)
+			case ["grace", *rest]:
+				return self.grace_command(rest)
+			case ["hoststate"]:
+				return 0, self.quiet_state_text()
 			case ["block", which]:
 				# Snake against an Elden Ring wall: the puppet stays while MGSV's Snake runs on (the slip; the actors move by it in MGSV)
 				if which not in ("0", "1"):

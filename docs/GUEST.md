@@ -417,8 +417,9 @@ soldiers (20.5) -- by its own location object -- because it answers no Lua place
 ### 8.3 Dismissing and changing the buddy from MGSV's own menu (`[Menu] BuddyDismiss`; live 2026-10-14, MGSV + fake_er)
 
 Player report (session 6): "buddy CHANGING and DISMISSING supported (MGSV's own buddy menu)".
-- iDroid > MISSIONS > BUDDY SUPPORT lists what the save has developed and isn't out: here D-HORSE, D-DOG, D-WALKER (no Quiet
-  in this save), plus DISMISS <the buddy that is out> and CHANGE EQUIPMENT (struck out with no buddy). `BlockMissions` used to
+- iDroid > MISSIONS > BUDDY SUPPORT lists what the save has developed and isn't out: here D-HORSE, D-DOG, D-WALKER, and since 0.9.0
+  QUIET (SCOUT) / QUIET (ATTACK) (the player's save has no Quiet of its own: she is borrowed in memory, 8.5; ATTACK deploys her by her
+  HALO drop onto the sniping point picked on MGSV's map, live 0.9.0 integration), plus DISMISS <the buddy that is out> and CHANGE EQUIPMENT (struck out with no buddy). `BlockMissions` used to
   strike out every DISMISS; `[Menu] BuddyDismiss = true` (default) leaves them (`boot: menus: ... missions=10 blocked, 5 buddy
   dismiss allowed, 0 missing`). The menu remembers its cursor between visits.
 - **Dismiss** (live): DISMISS D-WALKER -> the walker is fultoned out (screenshot: it flies off), MGSV's active buddy type
@@ -429,6 +430,26 @@ Player report (session 6): "buddy CHANGING and DISMISSING supported (MGSV's own 
   `buddyFlags` 0, status `MGSV: ready (Africa)`. A NONE with no menu open (or `BuddyDismiss = false`) is still a lost buddy:
   `MGSV has no buddy out any more (... no iDroid DISMISS seen) -- calling it back`. No buddy is stable: 18 s of running and
   turning with the treadmill (`no_buddy.prrec`, 1049 states, only Snake's draws).
+- **Told by MGSV's own `leave` order** (since the player's 0.9.0 session, `mgsv/BuddyLogic.h` `DismissWatch`, `TestBuddyDismiss`;
+  Pump.cpp's wiring of it: `test_guest_pump`, 12).
+  The 15 s window ran out on Quiet: DISMISS QUIET at 15:10:47, her type NONE 12.8 s later from her far sniping point, and the guest
+  called her back. MGSV's buddy system sends the buddy that is out the message `leave` (0x6626CE35F43D) the moment the iDroid sends
+  it away (DISMISS, CHANGE EQUIPMENT, another buddy); the guest's detours on Quiet's, D-Dog's and (with auto-follow) D-Walker's
+  message handlers note it with whether an MGSV menu was open. A NONE within 120 s of an order given with the menu open (or seen open
+  up to 2 s before it) is the player's dismissal, however long the buddy takes to go; the same buddy back after >= 1 s gone (a
+  re-equip) or another buddy out forgets it, and `ReviveBuddy` never calls back a buddy leaving by that order. Without an order
+  (D-Horse's handler isn't hooked) the old window stays as the fallback, from the last time the menu was seen open: 20 s for
+  D-Walker / D-Horse, 30 s for Quiet / D-Dog. Logs: `boot: MGSV ordered <buddy> to leave N ms ago with its menu open ...`, `boot: the
+  player dismissed <buddy> from the iDroid (MGSV's leave order, NONE N s after it)` or `(NONE N s after its menu, no leave order
+  seen)`, `boot: MGSV's leave order to <buddy> forgotten (<why>)`.
+  **Live 2026-11-04** (both games, Gatefront, the virtual pad driving Buddy Support): DISMISS QUIET three times from her posts 35 m
+  out (once with three soldiers on Snake) -> `quiet: her handler got message 0x6626ce35f43d (leave)` with the iDroid open, `MGSV
+  ordered Quiet to leave 30-217 ms ago with its menu open`, `the player dismissed Quiet from the iDroid (MGSV's leave order, NONE
+  12.3 / 12.3 / 12.1 s after it)`, no call-back in the 25-40 s watched after; DISMISS D-WALKER -> the order seen live for D-Walker
+  too, NONE 8.6 s after it; D-Dog deployed and DISMISS D-DOG -> NONE 9.3 s after it; Quiet (Attack) deployed over D-Walker ->
+  `MGSV's leave order to D-Walker forgotten (Quiet out instead)`, then `the player deployed Quiet from the iDroid (was D-Walker)`.
+  Not reproduced live: a far post like the player's (MGSV's own sniping point 70 m up, reached through an order; the host's
+  post rule gave 25-35 m at Gatefront), so the exits ran 12.1-12.3 s; the leave rule doesn't depend on that time.
 - **Deploy another** (live): with no buddy, BUDDY SUPPORT > D-DOG > drop point > OK -> "Support Unit: Dispatch request received
   [D-Dog]", D-Dog lands beside Snake in its pod ~10 s later: `boot: the player deployed D-Dog from the iDroid (was no buddy)`.
   Then D-DOG -> D-WALKER directly (the dog leaves, the walker is dropped from ~85 m up and lands beside Snake ~20 s later, the
@@ -445,7 +466,9 @@ Player report (session 6): "buddy CHANGING and DISMISSING supported (MGSV's own 
 - **D-Horse** the same way (live): walker -> D-HORSE from the iDroid: `the player deployed D-Horse ... following that choice`,
   whistled over (`D-Horse whistled #1 (deployed from the iDroid)`), its 69-bone skin learned beside Snake 20 s later, buddyFlags
   0x3, the mount prompt on screen; DISMISS D-HORSE -> `the player dismissed D-Horse from the iDroid`, buddy NONE (0), flags 0.
-- **Quiet**: not in this save's BUDDY SUPPORT, so UNVERIFIED; she takes the D-Dog path (no GetPosition assumed, skin learned).
+- **Quiet** (`TppBuddyQuiet2`, id 0x2400): she answers GetPosition (live 2026-11-04), her 136-bone skin gives her heading (hinted at
+  her GetPosition since 0.9: Pump.cpp); on the player's save she is gone after "A Quiet Exit" and is borrowed in memory ([Quiet]
+  Borrow, 8.5), after which BUDDY SUPPORT lists QUIET (SCOUT) / QUIET (ATTACK) and deploys her by her HALO drop.
 - `!buddy hint` (dev): look for the buddy's skin within 12 m of Snake for 20 s; `!buddy` also names the bone count of the last
   skin in a hint's window that wasn't taken (`kMinBuddyBones` 53).
 - **With the real Elden Ring** (combined run 2026-10-14, the injected pad driving MGSV's iDroid; screenshots of each step):
@@ -634,6 +657,62 @@ against a wall: the published place at most 0.32 m a frame (was 93.9 m), the dra
 - Offline: `tests/test_guest_dog.cpp` (style and attack ids, the job's stages and timeouts, the treadmill's choice, the leash),
   `tests/test_guest_actorproxy.cpp` `TestDedicated` (first, on the ground, never parked for the buddy, still for Snake).
 
+### 8.5 Quiet in Elden Ring (`[Quiet]`, `Quiet.cpp`, `QuietLogic.*`; protocol v18; live 2026-11-04, MGSV + fake_er on `/dev/shm/phantomring_g`)
+
+The design is docs/research/quiet.md; what the live rounds settled is its §2.10 (M1, M2/M3). In short:
+- **The borrow** (`Borrow = always`, `BorrowListInIdroid = true`, the player's choice): at the sandbox's start, while MGSV's saves are
+  guarded, her bits are read (`quiet: save state gone (...)`), snapshotted with the whole buddy vars block and SetDisableBuddyType's
+  static byte, and her state's plan applied in memory (gone: obtained + sortie + LOST cleared; never recruited / killed: obtained +
+  sortie; recruited-not-deployable: sortie). Each of the four states passed its live round trip (her block loads; put back CLEAN).
+  The put-back (`!quiet borrow off`, a guard lost, Elden Ring gone for 3 s) uses the setters, writes her counters and her bits (the
+  `*MissionStart` copies included) back raw and diffs the block: `-- CLEAN (no byte of Quiet's differs)`. Never a gvar, the bond or
+  MGSV's reunion; a Quiet in sickbay / dying / dead isn't borrowed.
+- **Her place**: her location object (the BuddyLocation finder: confirmed in 0.5 s), held at the host's post mapped into MGSV
+  (`MirrorRegion`, on MGSV's ground), moved with the treadmill in the frame Snake's placement shows (0 of 2829 draw-list steps over
+  0.5 m through 10 jumps). She stays where she is put while no MGSV enemy is about.
+- **The grace**: on a new `graceSeq` with a seat: her own `MoveToPosition` with her aim off, then her object at the seat in the same
+  tick -> `kBuddySeated`; she crouches with her rifle upright ~0.4 s later (`SitPose = kneel`). Up on `kHostAtGrace` falling: her
+  order with aim to her post.
+- **Orders**: MGSV's call menu offers Fire / Take aim only while she snipes from one of MGSV's snipe points with the stand-in as her
+  target; the job carries any order MGSV offers onto the host's pick (6 of 6 hit, 3.1 s), but getting her into that state is not
+  reliable yet (quiet.md §2.10 M3; the 0.9.0 integration's one try with both games: the "sniping position" request brought her to
+  Snake, Fire stayed greyed): the host's `[Quiet] orders` (0.9.0) ships off, so the host publishes no pick and nothing here runs.
+
+**0.9.0 integration with both games (2026-11-04; review fixes and what the real Elden Ring showed):**
+- **The borrow waits for the host's layer** (the review: with the host's `[Quiet]` off every save would have listed 0.8.0's Quiet,
+  without FireOnlyOnOrders, NoDying or the mirror): at the sandbox's start, at `!buddy quiet` / `[Buddy] Type = quiet`, or from
+  LuaStep once `kHostQuietLayer` is seen (every 5 s at most; `quiet: borrowed ... (Elden Ring's Quiet layer is on)`). The put-back for
+  "Elden Ring is gone" (3 s without a heartbeat) is followed by a new borrow when a host with the layer comes back (live: put back
+  CLEAN when Elden Ring stopped, borrowed again 15 s later by the recorder's host, put back CLEAN again when it stopped).
+- **Quiet (Scout) / (Attack) are greyed only while she is out** (`StrikeMgsvPosts`): greyed from the boot, they couldn't be chosen,
+  so no player could deploy her (live). Now `QUIET SCOUT / ATTACK active (they deploy her)` while she isn't out, and ATTACK deployed
+  her (`boot: the player deployed Quiet from the iDroid (was D-Walker)`), held at the host's post 103.8 m from the hangar roof she
+  dropped onto, once settled.
+- **The sit settles before its echo**: from her order MGSV's Quiet takes ~3 s to settle into her rest at the seat (a turn, a hop of up
+  to 0.7 m -- she was seen 2 m in the air -- then the crouch with her rifle upright), longer than the rest's black (~1.5 s): live she
+  hopped beside the grace 1.5 s into the menu. Her order now goes out from 2.2-3.5 m off the seat (she is placed 2.5 m off first: an
+  order from her post 47 m away played a longer arrival) and `kBuddySeated` is echoed once she has settled (`kSitSettleMs` 3200 after
+  the order and still for 300 ms, at the latest 4500): `seated at the grace seat (rest N, settled 3219-4158 ms after her order)`; the
+  host fades her in (er/GraceRest's late echo).
+- **Getting up without a dash**: her get-up order (MoveToPosition with aim) makes her relocate as MGSV's Quiet does -- a turn, then a
+  cloaked dash during which her AI owns her location object (live: she vanished in view 0.5-1 s after Snake left the grace; sent with
+  her next post she ran back to where the order found her and 40 placements in a burst didn't hold). She now keeps her rest pose and
+  is placed at her posts by her object (which keeps the pose); the order goes out only while the host has no post for her (unseen),
+  where her own relocation is what Elden Ring would show anyway (`quiet: getting up while unseen (no post)`).
+- **The treadmill and the host's post**: the post comes back corrected by k 33 ms ago, so for a frame or two after a treadmill jump it
+  was off by the jump (placed 5.9 m one way and 6.0 m back the next frame). The holder now waits 250 ms after k moves.
+- **Review fixes** (unit-tested where pure): EnableFire / EnableDying re-sent after every sandbox load (`AtReady`) and every 5 s, a
+  send counted only when MGSV answered `true`; her "can't" (`kQuietNoTarget`) ends the order at once (Lost, MGSV); a queued get-up is
+  dropped when she is no longer out; nothing is placed while Snake isn't ready on foot (climbing at MGSV's staging site -- live, a
+  mantle during a hold: no placement --, parked, in a vehicle, on the Fulton anchor); her treadmill shift and our placements are no
+  dash for the cloak test; her hit counts for the order only with her rifle (`OrderRound`: not her dash attacks 141 / 142) and is
+  reported with the attack id's rifle or her equipment's (`ShotWeapon`); a rigid draw within RigidRadius is hers once its mesh moved
+  with her (two places >= 5 m apart) or while she is within 15 m of Snake; the console reads a snapshot and `!quiet set region` hands
+  the game thread a new region (no data race).
+- Console: `!quiet` (state), `!quiet where|r|hits|bits|diff|last`, `!quiet borrow [off|test-unguarded]`, `!quiet hold <x> <z>|rel
+  <dx> <dz>|off`, `!quiet shift <dx> <dz>`, `!quiet standin <0xhandle>|off`, `!quiet cmd <1-7> [arg]`, `!quiet trace on|off`
+  (PhantomRingQuietTrace.csv), `!quiet layer|orders|keepmarks|menufire ...`, `!quiet set <key> <value>`, `!quiet lua <chunk>`.
+
 ## 9. Saves
 
 - **Steam Cloud** (`ISteamRemoteStorage` v012, verified from steam_api64's version string and the exe's
@@ -744,7 +823,7 @@ item); the native life write sticks (§7); the D-Walker class (`TppCommonWalkerG
 | Test | Covers |
 |---|---|
 | `tests/test_guest_script.lua` (lua5.1) | the embedded script against a mock engine: Tick result order, command parser (Warp vs WarpAndWaitBlock, SetPosition), D-Walker steps, mission loading (direct/reserve/ACC), setup, console packing, the NVG flag, `refill`, `AutoAim`, an empty engine and an engine that throws |
-| `test_guest_pump` (real Lua 5.1.5) | Pump.cpp end to end: VM probe, script load and refs, Tick → frame state, the full boot sequence title → Continue → 10040 → load the sandbox mission → setup → D-Walker → centre → Ready (status texts), frame → Lua commands, the dev console over a real mapping (results, errors, syntax errors), live `phantomring.lua` override, leaving the sandbox; the engine's Lua stack is unchanged after every pump |
+| `test_guest_pump` (real Lua 5.1.5) | Pump.cpp end to end: VM probe, script load and refs, Tick → frame state, the full boot sequence title → Continue → 10040 → load the sandbox mission → setup → D-Walker → centre → Ready (status texts), frame → Lua commands, the dev console over a real mapping (results, errors, syntax errors), the buddy dismissed from the iDroid or lost (8.3: MGSV's leave order with its menu open, ReviveBuddy holding off while the buddy goes, the menu window from NONE's start per buddy, a lost buddy called back; the pump's clock skipped ahead), live `phantomring.lua` override, leaving the sandbox; the engine's Lua stack is unchanged after every pump |
 | `test_guest_logic` | odometer (teleports, rebase, drift over 100k frames), treadmill (radius, direction, cooldown, height, with the odometer over 100 m), life clamp/death, ammo-counter shots, the refill's magazine sizes (§18.11), matrix→yaw/quat, quaternion rotation, focal→FOV |
 | `test_guest_horse` | the D-Horse treadmill's pure half (§8.1a): its location object picked near the skin (Snake's, origin and excluded ones never), confirmed/lost, the setter's arguments for a jump (ridden: feet on the centre's ground), the ridden jump limit and landing watch, the treadmill's choice per case, a ridden minute at 15 m/s up a slope with the frame glue copied in -- a simulation that *assumes* the saddle carries Snake (odometer exact, tracker confirmed, horse on the ground under him) -- and the run where it doesn't (one jump, put back, no more) |
 | `test_guest_link` | attach handshake on a real file mapping, version refusal, kRenClearAll, GuestState/PoseBlock/events/pad flow, `!` console, host restart (re-attach, drain, console reset), host death; the shipped ini equals the built-in defaults; ini parsing |
@@ -1510,7 +1589,8 @@ MGSV's Wwise is driven through its own Lua (`GuestScript.cpp PR.Audio / AudioKee
   ignores.
 - Console: `!menu` (also the iDroid requests below).
 - **The iDroid while Snake is busy** (`[Menu] IDroidRetryMs = 3000`, `logic::IDroidRequest` in Pad.cpp, tested; live 2026-10-14).
-  The host opens the iDroid by holding MGSV's Start (View held -> `MGSV Start held 1200 ms`). In MGSV a Start it takes opens the
+  The host opens the iDroid by holding MGSV's Start (View held -> `MGSV Start held 1200 ms`, ended early once MGSV's menu is up
+  since 0.9.0, so an iDroid closed within the hold isn't reopened by its rest; HOST.md, Control hand-over). In MGSV a Start it takes opens the
   iDroid 40-70 ms after the press (measured in idle, running, crouched, prone, mid-reload: `kGuestInMenu` within 70 ms, the
   iDroid on screen), but it **refuses** Start while Snake **aims (LT held)**, looks through the **binoculars (RB held)** or is
   **in a dive (X while running)**; then nothing opens and the press is lost (before: the 1200 ms hold just ended). Now the guest

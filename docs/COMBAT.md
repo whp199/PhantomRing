@@ -691,6 +691,38 @@ Get it (Fulton vest) on a darted sleeper x2 -> `fulton: +114 runes` (a third los
 (held 6 s, flinches). Every hit of the session on a team-6 soldier; the team-30 `81100014` / `1000000` lying among them listed `not
 hostile (never a candidate)` in every `dog pick`.
 
+## 7c. Quiet's rifle on Elden Ring enemies (`er/Quiet.cpp`, `er/QuietLogic.*` `ShotEffect`, `[Quiet]`; protocol v18 `kGEvQuietShot`; round E2 2026-11-04)
+
+**0.9.0**: her orders are opt-in (`[Quiet] orders`, off: MGSV offers Fire only from its own snipe points, docs/research/quiet.md §2.10).
+Review fix: **an unknown rifle is never lethal** -- the rifle comes from the hit's attack id (290 / 291 / 292), else the event's weapon,
+else the guest's buddyFlags (her equipment); still unknown = `ShotAct::kUnknownRifle` (refused, no damage, a warning) instead of the
+lethal block; the guest reports her rifle from her equipment when the id is outside 290-292 and never counts her dash attacks (141 /
+142, the same damage message) as an order's round (unit-tested: `TestQuietShot`, `test_guest_quiet`).
+
+MGSV's Quiet aims and fires at a stand-in soldier its binoculars marked (the guest, docs/research/quiet.md §3.4-3.5); her round is a
+damage message, never a ShotSolver bullet (quiet.md §2.6), so no `kGEvBuddyFire` comes. On `kGEvQuietShot` **Hit** the host fires
+from **her post's sight point** in Elden Ring (her feet + `[Quiet] sight_height` 0.9 m: the one point her post, her pick and her shot
+test from), never from MGSV's muzzle: the handle must still be StrictHostile (both team reads), alive and not a boss (`Cqc::IsBoss`;
+`[Quiet] bosses` = off only), and one `CastRay` (the ray filter, `marking::RayClear`'s body slack) from her sight point to his chest
+(0.7 of his capsule) clear -- the pick's own ray, so the pick never takes one the shot refuses from the same post. Blocked: a miss, no
+damage, "Quiet: no clear shot". No post (on the move) or seated at a grace: dropped, "Quiet: no clear shot from her post". The effect by
+the hit's attack id (the event's weapon when the id is unknown), through `Combat::HitCharacter` from 0.8 m on her side of him:
+
+| rifle (MGSV's equipment) | attack id | what Elden Ring gets |
+|---|---|---|
+| Wicked Butterfly (lethal) | 290 | MGSV's share of his life (`b` / 10000, x `lethal_share_mult`; `lethal_fallback` 1.0 lives when 0) x his reference HP; poise 40, lv 2; lethal; `landOrHp` (a bullet that misses is dealt through the HP route) |
+| Sinful Butterfly (anti-materiel) | 292 | the same with its share (1.46 lives) + CQC's knockdown (`heavy_poise`: throw poise 120, lv 4) |
+| Guilty Butterfly (tranquilizer) | 291 | the sleep darts' route: `tranq_sleep` 1.1 x his sleep resistance in sleep-ladder rungs (the choke's 200 when unreadable), a token 1 HP; never lethal |
+| any, on a boss / a non-hostile / the dead | -- | nothing (warned for a boss or a non-hostile) |
+
+Her shots make no Elden Ring sound (`[Quiet] shot_noise` = false: the hit bullet's AtkParam has no AI sound, `HitEffect::quiet`). One
+effect per Hit (a second Hit on him within 1 s is logged and ignored).
+
+Live (Gatefront, fake MGSV, the host's pick, `combat set hurt_mult 0`): Sinful on a team-48 soldier (219 HP): `heavy: damage 320, poise
+120 lv 4` -> the bullet landed (219 -> 175), the top-up -> dead. Guilty on another: `sleep +249 (resist 226, 2 rungs)` -> 218 HP, asleep
+(the next pick refused him: "asleep (the Guilty Butterfly)"). Wicked on that sleeper: `lethal: damage 211` -> no bullet landed in 300 ms,
+the HP route dealt it -> 7 HP left (0.96 of a life, as in MGSV). `quiet test boss` + a Hit: `refused: a boss ... nothing done`.
+
 ## 8. Verified live, both games (2026-10-12, Gatefront / Agheel Lake, Limgrave)
 
 | What | Result |

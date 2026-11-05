@@ -55,6 +55,7 @@ namespace phantom::guest::capture::hud
 		std::atomic<bool>          g_nightVision{ false };
 		std::atomic<bool>          g_frozen{ false };  // a staged climb (Climb.h): nothing new is published
 		std::atomic<bool>          g_hideDogMarkers{ false };  // D-Dog's order: MGSV's green / red markers left out (SetHideDogMarkers)
+		std::atomic<bool>          g_hideQuietMarkers{ false };  // Quiet's stand-in or order (SetHideQuietMarkers): the same, its own flag
 		std::atomic<std::uint64_t> g_dogMarkersLeftOut{ 0 };
 		std::atomic<std::uint64_t> g_frozenSkipped{ 0 };
 		std::atomic<std::uint64_t> g_nvgLeftOut{ 0 };
@@ -398,7 +399,7 @@ namespace phantom::guest::capture::hud
 			g_lensLeftOut.fetch_add(1, std::memory_order_relaxed);
 			return;
 		}
-		if (g_hideDogMarkers.load(std::memory_order_relaxed) && a_s.vsInfo) {
+		if ((g_hideDogMarkers.load(std::memory_order_relaxed) || g_hideQuietMarkers.load(std::memory_order_relaxed)) && a_s.vsInfo) {
 			// MGSV's markers of the dog and its target soldier while the dog carries out an order: their colour (cVSLight[1].rgb).
 			if (const auto* cb = a_s.vsInfo->CBufferNamed("cVSLight"); cb && cb->slot < d3d::kVsCbSlots) {
 				float c[8]{};
@@ -515,6 +516,7 @@ namespace phantom::guest::capture::hud
 	void SetNightVision(bool a_on) { g_nightVision.store(a_on, std::memory_order_relaxed); }
 	void SetFrozen(bool a_frozen) { g_frozen.store(a_frozen, std::memory_order_relaxed); }
 	void SetHideDogMarkers(bool a_hide) { g_hideDogMarkers.store(a_hide, std::memory_order_relaxed); }
+	void SetHideQuietMarkers(bool a_hide) { g_hideQuietMarkers.store(a_hide, std::memory_order_relaxed); }
 
 	std::string Command(std::string_view a_args)
 	{
@@ -545,7 +547,7 @@ namespace phantom::guest::capture::hud
 			g_hooked.load(), g_enabled.load(), g_failed.load(), g_every.load(), g_jobs.load(), g_uiDraws.load(), g_mirrored.load(), g_skippedTarget.load(), main >> 32,
 			main & 0xFFFFFFFF, t ? std::format("{}x{} {}", t->width, t->height, d3d::FormatName(t->rtvFormat)) : std::string("none"), g_published.load(),
 			g_skippedEmpty.load(), g_notReady.load(), g_nightVision.load() ? "on" : "off", g_nvgLeftOut.load(), g_lensLeftOut.load(),
-			g_hideDogMarkers.load() ? "LEFT OUT now" : "shown", g_dogMarkersLeftOut.load(), g_skipPs.load(), g_skippedPs.load());
+			g_hideDogMarkers.load() || g_hideQuietMarkers.load() ? "LEFT OUT now" : "shown", g_dogMarkersLeftOut.load(), g_skipPs.load(), g_skippedPs.load());
 	}
 
 	std::string ProbeLine(const d3d::ContextState& a_s, const d3d::DrawArgs& a_a)

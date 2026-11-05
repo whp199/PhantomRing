@@ -8,6 +8,7 @@
 #include "Climb.h"
 #include "Config.h"
 #include "Dog.h"
+#include "Quiet.h"
 #include "FultonAnchor.h"
 #include "D3D11Hooks.h"
 #include "Hud.h"
@@ -236,6 +237,14 @@ namespace phantom::guest::capture
 			const bool described = !nearAnchor && (!nearProxy || owner == proto::kOwnerBuddy) && DescribeMesh(a_s, a_a, c.src);
 			if (described) {
 				c.srcHash = c.src.Hash();
+			}
+			// Quiet (quiet.md §3.8): her skinned draws on her root and her rifle (rigid, within [Quiet] RigidRadius, its mesh seen moving with
+			// her) are hers; any other draw within 4 m of her (a roof's props: 225 in one minute live) is not. Only with her layer on; else
+			// the old 4 m rule. After DescribeMesh: the rigid rule goes by the mesh key (review).
+			if (owner == proto::kOwnerBuddy) {
+				if (const auto hers = quiet::KeepBuddyDraw(object[32] > 0.0f, described ? c.srcHash : 0, origin); hers && !*hers) {
+					return;
+				}
 			}
 			const bool dogMesh = described && owner == proto::kOwnerBuddy && dog::KeepBuddyDraw(c.srcHash, nearProxy || proxy::NearAnyProxy(origin, 4.0f), origin);
 			if (nearAnchor || (nearProxy && !dogMesh)) {

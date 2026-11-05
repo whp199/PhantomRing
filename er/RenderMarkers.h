@@ -54,6 +54,7 @@ namespace phantom::er
 			kMarking, // binocular marks over Elden Ring characters (er/Marking.h)
 			kDecoys,  // Snake's decoys (er/Decoys.h)
 			kDog,     // D-Dog's paw over the enemy its next attack order takes, while LB is held (er/Dog.h)
+			kQuiet,   // (v18) Quiet's reticle over the enemy her next Fire takes, while LB is held or the binoculars are up (er/Quiet.h)
 			kCount,
 		};
 		void Set(Owner a_owner, std::vector<Marker> a_markers);

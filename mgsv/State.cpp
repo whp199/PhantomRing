@@ -132,6 +132,25 @@ namespace phantom::guest::state
 	void SetMenuOpen(bool a_open) { g_menuOpen.store(a_open, std::memory_order_relaxed); }
 	bool MenuOpen() { return g_menuOpen.load(std::memory_order_relaxed); }
 
+	namespace
+	{
+		std::mutex g_leaveLock;
+		BuddyLeave g_leave;
+	}
+
+	void NoteBuddyLeave(int a_type, std::uint64_t a_ms)
+	{
+		const bool       menu = MenuOpen();
+		std::scoped_lock lock(g_leaveLock);
+		g_leave = { g_leave.seq + 1, a_type, a_ms, menu };
+	}
+
+	BuddyLeave LastBuddyLeave()
+	{
+		std::scoped_lock lock(g_leaveLock);
+		return g_leave;
+	}
+
 	void QueueCommand(const std::string& a_command)
 	{
 		std::scoped_lock lock(g_lock);

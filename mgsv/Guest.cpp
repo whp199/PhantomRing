@@ -15,6 +15,7 @@
 #include "Config.h"
 #include "Death.h"
 #include "Dog.h"
+#include "Quiet.h"
 #include "Dive.h"
 #include "Follow.h"
 #include "FultonAnchor.h"
@@ -274,6 +275,10 @@ namespace phantom::guest
 			// D-Walker's location object: the treadmill's native move and the lead alongside Snake (Walker.h)
 			if (cmd == "walker" || cmd.starts_with("walker ")) {
 				return walker::Command(std::string(cmd.substr(std::min<std::size_t>(cmd.size(), 7)))) + "\n";
+			}
+			if (cmd == "quiet" || cmd.starts_with("quiet ")) {
+				// !quiet [...]: Quiet ([Quiet], Quiet.h, docs/research/quiet.md)
+				return quiet::Command(std::string(cmd.substr(std::min<std::size_t>(cmd.size(), 6)))) + "\n";
 			}
 			if (cmd == "dog" || cmd.starts_with("dog ")) {
 				// !dog [...]: D-Dog ([Dog], Dog.h, docs/research/ddog.md)
@@ -575,6 +580,7 @@ namespace phantom::guest
 		follow::Install();
 		horse::Init();  // [Buddy] HorseTreadmill (Horse.cpp): logs on or off
 		dog::Install();  // D-Dog's observe-only detours ([Dog], Dog.cpp): byte-checked
+		quiet::Install();  // Quiet's observe-only detours ([Quiet], Quiet.cpp): byte-checked
 		blast::Install();
 		throwing::Install();
 		placed::Init();

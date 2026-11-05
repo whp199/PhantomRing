@@ -259,6 +259,27 @@ keeps View from Elden Ring (no map with the drink: live, View then X ~250 ms lat
 X, `menu false`, no map). **Keyboard** (`input kbm on`): Tab held 0.6 s then Space -> `flask: View + X ...`, healed 90 HP, `2 left`;
 Tab + 2 -> the next quick item. The switch's corner line names an emptied flask "(empty -- rest at a grace)" (live it said
 "Flask of Cerulean Tears (1)" for the drunk-out flask: its empty twin's entry counts 1; `quickitem::CycleText`, tested).
+**0.9.0: an iDroid closed within the hold stays closed** (player 2026-11-04 15:09:51, the pad published to MGSV sampled at
+200 Hz: B ~1 s after the iDroid opened closed it 150 ms before the hold's 1.2 s Start ended; back in kSnake the rest of that Start
+reached MGSV 3 ms after the close and opened it again). The hold's Start now ends as soon as MGSV's menu is up (`kGuestMenu`). Any
+MGSV menu seen while it is due counts as the hold's: a popup or the pause menu that comes up while MGSV is still too busy to take the
+Start also ends it, and that hold then opens nothing (hold View again; `TestChord` pins it -- in the player's session popups came
+only during the guest's boot). A hold whose menu never opens still sends its full 1.2 s (the guest's retries open the iDroid of a
+busy Snake). Live 2026-11-04 (both games, the virtual pad, the published pad sampled every 2 ms): View 1.1 s, then B 0.35 / 0.7 /
+0.95 s after the iDroid opened (the last with 120 ms of the hold left, the player's case) and once with View still held: one Start
+edge to MGSV each, the iDroid closed after 715 / 849 / 1049 / 748 ms and stayed closed; open, RB, down to Buddy Support, Start:
+closed; View + Start, and View then Start 600 ms later: Tarnished mode and back, no Start to MGSV; a View tap: the map; View held
+with the binoculars up: `pad: MGSV didn't open the iDroid on Start -- Snake is busy (binoculars (RB))`, the iDroid 418 ms after
+the Start, the rest of the hold dropped. After four rests at Gatefront (Pass time once) with Quiet out and her orders on, walking
+away, the call menu (LB) and the binoculars: View held 1.5 s or 0.65-0.7 s and let go opened the iDroid all 9 times.
+
+**A tap Elden Ring refuses, then a hold** (the player's "View presses that reached neither game", 2026-11-04 15:03-15:05; not
+changed). A View tap reaches Elden Ring and starts MenuWatch's 1.5 s latch, inside which the pad is kOff: View held again within
+1.5 s goes to Elden Ring as it is (no `View held` line, no iDroid), and each such press starts the latch again. With the map
+opening that is a second map (live at Gatefront, soldiers calm: tap -> map, B, View held 1 s 0.5 s later -> the map again, `HUD hid
+inside its menu`). With soldiers after Snake Elden Ring refuses its map (live, three soldiers on Snake: the tap -> the latch, no UI
+state change, no map), and the hold inside the latch then reaches neither game; a hold 2.5 s later opened the iDroid. Wait 1.5 s
+after a tap, or hold View from the start.
 
 **Start, View and Tarnished mode** (`er/Chord.h` `PadGate`, pure, `tests/test_host_chord.inc`; roadmap 1.1). Everything
 Snake can't do yet -- a flask, the Spirit Calling Bell, Margit's Shackle, Torrent's whistle, jumps, ladders, an NPC's
@@ -300,6 +321,10 @@ Tarnished went through is Snake's too: the HP bar's net change between the two t
   first, View 300 ms later: Snake back, no menu; View alone 700 ms: the iDroid, Start closed it. The guest stops its iDroid
   retries when the hold is cut (`IDroidRequest` `kCut`: the host's Start up within 600 ms of the hold -- the ER agent's open
   edge case of an aiming Snake whose retry opened the iDroid as Tarnished mode began; unit-tested).
+  The close watch (`kCloseWatchMs`, 2.5 s) ends at the next hold and when the cut chord is let go before it fired with MGSV's
+  menu not open (0.9.0 review; reachable only with `idroid_open_ms` <= `chord_window_ms`): a late Start had cut a hold MGSV was too
+  busy to open, both were let go, View was held again, and the close tap shut the iDroid the player had just asked for. With the
+  defaults (1000 > 700) a Start 650 ms after View is a plain chord (live 2026-11-04: Tarnished mode, no Start to MGSV).
 - When the unmasked pad (Tarnished mode) carries Start/View other than the real ones, Elden Ring gets packet numbers of our
   own range (0x20000000+), moved whenever the real packet or what it may see changes (it only re-reads a pad whose packet
   number changed).
@@ -1685,6 +1710,184 @@ after: 8 of 8 files equal by sha256):
 - Not live: the guest's own dog (its run, leap and bite; `kBuddyEngaged` from it), `bosses = stagger`, Snake's CQC grab taking over
   the dog's hold, a real Elden Ring dog (Stormveil has warhawks: `4210xxxx`), the ER 2.7.1.0 exe (no new address, nothing to check).
 
+### Quiet in Elden Ring (`er/Quiet.*`, `er/QuietLogic.*`, `[Quiet]`, protocol v18 `kHostQuietLayer` / `buddyPost*` / `kActorQuietTarget` / `kActorQuietThreat` / `kGEvQuietShot`; round E1-E2 2026-11-04)
+
+The host half of docs/research/quiet.md (§3.2-3.8). MGSV runs Quiet (her kneel, her aim and her shot at an inert stand-in soldier MGSV's
+binoculars marked: the guest, `mgsv/Quiet.cpp`); the host decides where she is in Elden Ring, whom she shoots, and what her round does.
+**On by default since 0.9.0** (the integration with both games, below): `[Quiet] enabled`, `posts`, `spot`, `indicator`, `order_text`
+are true; **`[Quiet] orders` (new in 0.9.0) is false**: her pick (`kActorQuietTarget`), its reticle and the LB hint, so the guest has
+nothing to order her at and MGSV's Fire stays greyed beside her (MGSV offers Fire only from its own snipe points: quiet.md §2.10 Q4/M3).
+The layer (`kHostQuietLayer`) needs `enabled` **and** `posts` (review 0.9.0: enabled without posts had no sight point, so every pick,
+Fire and seat was refused while the guest took her orders over; logged once `quiet: [Quiet] enabled without posts -- the layer stays
+off`); `quiet on|off` sets both. With the layer off she is 0.8.0's Quiet, the guest doesn't borrow her, and a `kGEvQuietShot` is only
+logged. `pr er "quiet all on"` (orders too) / `"quiet orders on|off"` / `"quiet all off"` for a session (not saved).
+
+- **Her post** (`quiet::PostSearch`, `EvaluatePost`; the design's rule, §3.2): Cover while a hostile is within 60 m of Snake (rings 25 /
+  35 / 45 / 55 m x 24 bearings, the camera's forward half first; it stops after the forward half when anything passed there), Near when
+  calm (8 / 12 / 16 m), none while Snake runs (over 3 m/s for 2 s with no hostile near: unseen, as MGSV's cloaked Quiet). A candidate:
+  the ground filter's floor from 70 m above, a 4-ray footprint at +-0.5 m within 0.3 m, 1.6 m headroom, -3..+25 m over Snake (Near
+  -2..+8), <= 60 m in 3D, drawable (`|dh| <= d tan(fovY / 2) - 2`, fovY Elden Ring's camera -- MGSV's 35.6 deg with the real guest,
+  quiet.md M1 Q8), no hostile within 15 m, no character within 3 m, and from her one sight point (feet + 0.9 m) a clear line to Snake's
+  chest and to >= 1 hostile's chest (Near: to the view's aim point). Score 3 x seen - 0.05 |d - 35| + 0.1 x min(height, the drawable
+  bound). A new search when she has none, the mode changed, Snake moved 25 m (Near 20) from the last search's centre, her post lost
+  Snake for 2 s, a hostile came within 8 m of her, or the enemy at the view's centre can't be seen from her post while LB / the
+  binoculars are up ("Quiet: moving to get a shot"); her current post is judged again on the new search's scene and kept unless a
+  candidate scores 20 % better (one that fails now is replaced). Nothing passed: Cover retries the Near rings, then she keeps her post
+  while it still sees Snake, else none (unseen); after such a search the next waits 6 s or 8 m of Snake (live: indoors at Rampart Tower
+  the rule had searched 56 times in 50 s). Published as `buddyPost` (MGSV world through the anchor, as the actor table) +
+  `buddyPostYaw` (toward the hostiles she sees) + `buddyPostSeq`; `kHostQuietLayer` with `[Quiet] enabled`.
+- **Drawing her** (`Quiet::Place`, `er/Buddy.cpp`, `er/RenderScene.cpp` GroundBuddy): at a post or the grace seat her draws are moved
+  whole by `T = post - anchor(buddyPos)` every frame (no ground ray, no +-1.5 m clamp: `[Quiet] lift_max` 30 m); hidden (none of her
+  draws) while cloaked (`kBuddyCloaked`), on the move, or the rest hides her; before her first post (just deployed) MGSV's own place on
+  Elden Ring's ground by the far-ground rule (a ground-filter ray from 20 m above to 40 m below; no floor: hidden, never floating). A
+  change of post in view is her cloak (`quiet::Fader`): a 300 ms fade (`RenderSnapshot::buddyAlpha` on her draws' dither), the new post
+  published, the guest's echo (`kBuddyAtPost` + `buddyPostSeq`; drawn anyway after 1 s without one: the translation absorbs where MGSV
+  keeps her), a 300 ms fade in. Out of view: at once. A one-frame gap in the guest's state is no dismissal (her post is kept 1 s).
+- **The pick** (`quiet::Pick`, `kActorQuietTarget`): hostile by both team reads (D-Dog's `StrictHostile`; a PlayerIns NPC -- White Mask
+  Varre, a spirit -- is never even read), alive, rendered, never a boss (`Cqc::IsBoss`; `[Quiet] bosses` = off only), never one CQC or a
+  Fulton balloon has, never a sleeper with the Guilty Butterfly, within the Actors radius of Snake and 100 m of her post, seen from her
+  sight point (the shot's own ray) and from the camera, within 10 deg of the view's centre (6 through the binoculars), marked ones first;
+  4 Hz while LB / the binoculars, 1 Hz otherwise, D-Dog's 500 ms latch. Checked again at the Actors boundary (hostile, alive, not a boss).
+  Cover me's threat pick (`kActorQuietThreat`) only while MGSV's cover bit is on. The reticle (`RenderMarkers` owner `kQuiet`, a ring at
+  his chest, white / Quiet's teal once `kBuddyQuietMarked`) while LB or the binoculars; the LB hint "Quiet: mark an enemy with your
+  binoculars to order Fire" while MGSV holds no mark.
+- **Her round** (`kGEvQuietShot` Hit, `quiet::ShotEffect`): the handle must still be a living hostile non-boss, and the line from her
+  post's sight point to his chest clear (Elden Ring decides whether it lands; blocked: "Quiet: no clear shot", no damage). The rifle from
+  the hit's attack id: 290 Wicked Butterfly = MGSV's share x his reference life, 292 Sinful = the same + a knockdown (CQC's throw poise),
+  291 Guilty = the sleep darts' build-up (1.1 x his resistance), never lethal; no Elden Ring sound (`quiet`). Through Combat's bullet
+  route from his side toward her post, `landOrHp` (MGSV's round hit: a missed bullet still deals it). One effect per Hit (1 s dedupe).
+  Refused / Lost (MGSV) say "Quiet: no target -- look at an enemy through your binoculars" / "Quiet: no shot (MGSV)" (docs/COMBAT.md 7c).
+- **Spotting**: twice a second, at most 4 rays, the pick's hard rules within 60 m of her post with her line of sight -> D-Dog's
+  provisional marks (10 s) and "Quiet: Enemy spotted (N nearby)" at most every 8 s. **Orders' texts** (`BuddyOrders`, `[Quiet]
+  order_text`): "Quiet: Fire (kill enemy) -- the enemy you marked" (tranq with the Guilty Butterfly), "Take aim -- she fires when you do",
+  "Cover me -- not in Elden Ring yet", "Shoot this -- not in Elden Ring yet", "Quiet"; the LB how-to.
+- **Tarnished mode**: no searches, no pick, no spotting; her post frozen, hidden past 60 m. **At a grace** (`Host::AtGrace`): no
+  searches or picks; she is the grace's (below), and when Snake leaves she gets up from the seat as her post (no pop), her post rule
+  moving her on with the fade.
+- **Console**: `quiet [status | on | off | all on|off | pick | test boss | post [now|none] | shoot [0xHANDLE] [lethal|tranq|heavy] |
+  survey [label] | record on|off | set <key> <v>]`. `quiet pick` is U14's dry run (every character within 80 m and why he is or isn't
+  her pick, the PlayerIns ones included; no order, no shot, no mark); `quiet test boss` treats everyone as a boss; `quiet shoot` applies a
+  Hit as the event would (U6); `quiet survey` evaluates every candidate of both modes with every ray written to
+  `PhantomRingQuietRays-N.json` next to the DLL (tests/fixtures/quiet/quiet_rays_*.json; `quiet record on` writes each search's).
+
+**Live, E2 (2026-11-04, Elden Ring 1.17.2 with fake_mgsv `--buddy quiet --no-walk`, `!autofire off` first, `!quiet post on` / `seat
+on`; the exclusive virtual pad; `combat set hurt_mult 0` throughout, 1 at the end; five launches 09:14-10:25, the save restored after
+each, all 8 files sha256-equal every time):**
+- **U1, a ray's cost**: 1.8-2.2 us a ray in the seat search, 2.0-4.2 us in the post searches (`(N rays in X us)` on every search line);
+  a whole Cover search 104-402 rays in 0.4-1.6 ms of rays, spread at 30 a frame (~0.12 ms a frame).
+- **U13, the design's rule** (`quiet survey`, every ray kept as a fixture): Gatefront Cover 13 of 96 passed (25 m: 7, 35: 3, 45: 2,
+  55: 1; best 35 m @240 deg, +4.6 m, sees 3 of 7 hostiles), Near 24 of 72; The First Step Cover 17 of 96 (25: 5, 35: 5, 45: 4, 55: 3;
+  best 35 m @330 deg, +0.3 m, sees 2), Near 37 of 72. Recounted offline at MGSV's own 35.6 deg FOV: Cover unchanged, Near 11 / 23. No
+  tuning needed: the rings, the 25 m cap (moot under the drawable rule) and the zero-candidate path stand. Indoors (Rampart Tower) 0 pass:
+  she stays unseen or keeps the grace seat as her post. The live search took the forward half's best (Gatefront 25 m @60 deg, +2.3 m,
+  among the trees under the cliff: frame, the debug cross at her feet on the ground).
+- **U14, the pick's refusals** (The First Step's grace, no approach): White Mask Varre 7.0 deg off the centre (inside the cone) "a
+  PlayerIns (an NPC phantom, a spirit, a player): never a candidate"; the grace's hidden team-0 `npc 10000000` 0.5 deg off "not hostile
+  (never a candidate)"; the Tree Sentinel `32510010` (2889 HP, team 7, 73 m) "a boss (never)"; with LB held facing Varre no reticle, the
+  corner "Quiet: moving to get a shot" for a hostile behind him she couldn't see (frame). At Gatefront the grace's team-0 one and the
+  2169 / 2655 HP `46000010` / `42200010` the same.
+- **Each rifle on a regular hostile soldier** (Gatefront, team 48, 219 HP, `!quiet shot pick full` on the host's pick): Sinful (292,
+  share 1.4615) -> "heavy: damage 320, poise 120 lv 4" -> the bullet landed (219 -> 175), topped up -> dead; Guilty (291) -> "sleep +249
+  (resist 226, 2 rungs)", 219 -> 218 -> asleep (the next pick: "asleep (the Guilty Butterfly)"); Wicked (290, 0.9615) on that sleeper ->
+  "lethal: damage 211" -> the bullet didn't land within 300 ms, the HP route dealt it -> 7 / 219 left (MGSV's share: 0.96 of a life).
+- **A boss refused** (the pick only, no arena): `quiet test boss` -> every candidate "a boss (never)", and a Hit sent straight at a handle
+  -> "refused: a boss ... nothing done" (warn). Never a non-hostile pick in any session's log.
+- **Her post change in view** (Stormveil's courtyard, her post 30 m ahead, `quiet post none` then the post rule): crops of 140 px round
+  her post: solid at +0.30 s, dithered at +0.66 / +0.79, gone at +0.97 / +1.10 (the new post published, the echo pending), dithered at
+  +1.22, solid from +1.35 -- no frame with a jump. Spotting there: "Quiet: Enemy spotted", 2 provisional marks drawn over two soldiers.
+- **Found live and fixed in the round**: the seat she rested at vanished in the frame Snake left the grace (now her post); a search every
+  1.5 s with no post (now backed off); a post kept on its own stale score while it no longer saw Snake (now judged again); one-frame gaps
+  in the guest's state reset her post (now kept 1 s).
+- **D-Dog and D-Walker unchanged**: `!buddy dog` -> Quiet's layer stops ("not out"), D-Dog placed from the guest pose on the ground
+  (frame), its kill bite on a team-48 soldier through the host (`dog: bit ... -> kill: damage 4380`); `!buddy walker` -> placed, its order
+  text "D-Walker: Search Mode -- it marks enemies nearby".
+- **Not live in E2**: the real MGSV (below), Cover me, a post 60 m out in a crowded block (U7), the ER 2.7.1.0 exe (no new address).
+
+**0.9.0 integration with both games** (2026-11-04, real MGSV 1.0.15.4 + Elden Ring 1.17.2, the shipped inis, the exclusive virtual
+pad, `hurt_mult 0` near enemies and 1 after; saves restored from `backups/20261104-120515`, ER 8 of 8 and MGSV 7 of 7 files sha256-equal;
+MGSV's files were already equal before the restore):
+- **Posts and drawing**: deployed by `!buddy quiet` and by the iDroid's Quiet (Attack) (her HALO drop; held at her post once settled),
+  her post published and echoed at once (`quiet: post published (buddyPostSeq 1)` -> the guest `held at the host's post 1 (24.7 m off)`);
+  frames: kneeling at her post 25 m out in Stormveil's courtyard, on Gatefront's rock ledge 35 m out and +4.6 m (her feet on the rock).
+  MGSV's green buddy marker sits over her MGSV body, i.e. on MGSV's flat ground: a few metres under her at a raised post.
+- **Spotting**: provisional marks on Stormveil's and Gatefront's soldiers from her post, "Quiet: Enemy spotted (3 nearby)".
+- **U14 with both games** (The First Step, from the grace): White Mask Varre "a PlayerIns ... never a candidate", the grace's team-0
+  one "not hostile", the Tree Sentinel (32510010, 66 m) "a boss (never)"; `quiet test boss` -> every candidate "a boss (never)".
+- **Orders (opt-in)**: one try at Gatefront with `quiet orders on`: the pick (a team-48 soldier, 219 HP), the stand-in, MGSV asked to
+  take a sniping position -- it brought her beside Snake, MGSV's Fire never came live in 35 s, KeepMarkMs released the stand-in and she
+  was put back at her post. As the MGSV round found: the path works only once MGSV holds her in its sniping state. Off by default.
+- **10 minutes** around Rampart Tower (93 stops, 3 rests): 0 warnings / errors on either side, 0 MGSV alerts; drawn at her post or the
+  seat 67 times, hidden (no post indoors / on the move) 26.
+- **Review fixes** (unit-tested): an unknown rifle is never lethal (`ShotAct::kUnknownRifle`, refused; the rifle from the attack id,
+  else the event's, else the guest's buddyFlags); the far-ground rule casts from 1.5 m above her mapped place first and takes no floor
+  farther than `lift_max` (she could float up to 10 m); posts keep `post_char_clear` from the PlayerIns NPCs too (Varre: spacing only,
+  never a pick); after a rest that hid her without a seat she fades in at her post again (published again, echoed, faded) instead of
+  popping in.
+
+### Resting at a grace with the buddy (`er/GraceRest.*`, `er/GraceLogic.*`, `[Grace]`, protocol v18 `kHostAtGrace` / `graceCentre` / `graceSeat` / `graceSeatYaw` / `graceSeq`; round E1-E2 2026-11-04)
+
+docs/research/quiet.md §3.9, host half. **`[Grace] buddy_rest` on by default since 0.9.0** (it also needs `[Quiet]` enabled and posts);
+`pr er "grace on|off"` for a session.
+
+- **The observed black (U12, found live 2026-11-04)**: CSFadeImp (the CSFade singleton, verified for both tables) holds nine
+  `CS::CSFD4FadePlate`s at +0x10.. named (a DLWString at +0x70) Title, MapIn, **InGame**, Cutscene, InCutscene, Ending, Event,
+  InGameChroma, InGameBokeh. A plate: +0x20 colour from (RGBA), +0x30 colour to, +0x48 time left, +0x58 length (s); shown = to + (from
+  - to) x left / length. InGame's goes (0,0,0,0) -> (0,0,0,1) over 0.75 s at a rest, holds, back over 0.5 s; InGameBokeh blurs the grace
+  menu's background. Found by `peek` of the plates during a rest, then a luminance check: the frame's mean luminance was 0.0 in every
+  frame while InGame's alpha was >= 0.99, 2.0 / 7.1 / 15.3 at 0.7 / 0.5 / 0.27 (Rampart Tower). `GraceRest` finds the plate by RTTI and
+  name (never an index; its vtable re-checked every read), reads it every frame (four reads) and calls >= 0.99 alpha with a black colour
+  "dark"; a plate that isn't as verified (insane numbers, no InGame) = no grace rest, logged. `[Grace] rest_dark = fade` (the default
+  now); `luma` was not needed and is not built. Console `grace fade`.
+- **U12's record** (every rest while the plate reads, any buddy: `grace: U12 rest #N -- black from +A to +B ms after the press`): 14 rests
+  host-measured at Rampart Tower (8), Gatefront (4), The First Step (2): the black starts **912-935 ms** after the press when the Tarnished
+  already faces the grace, **1322-1572 ms** when he first turns to it (min 912, median 1128, max 1572); it lasts **1442-1645 ms**; the HUD
+  hides ~35 ms before it ends (2332-3169 ms). A re-rest at the same grace the same (935 ms). Pass time: one more black of 3.2-3.3 s
+  ("another black at the grace (3310 ms: Pass time?) -- Quiet stays seated"); Level Up: no black. 4 more rests probed by script in the
+  first session (black +1.53-1.57 to +2.95-3.00 s). Hence `seat_black_wait_ms` 2000 (1300 refused three turned rests live) and
+  `seat_deadline_ms` 750 (the shortest black 1442 - the guest's ~0.5 s placement with the rifle lowered, quiet.md M1 - 0.2).
+- **The gate** (`grace::Gate`): armed by `kHEvRested 0` (`Host::UpdateRest`; never a respawn) with Quiet out, the guest's
+  `kBuddyCanRest`, `buddy_rest`, `[Quiet] enabled` + `posts`, the plate readable, not Tarnished mode (`[Grace] tarnished`). Nothing
+  happens before the first dark frame; none within the wait = no seat, nothing moves (a rest that turns into a talk: unit-tested, never
+  live); on it the grace's centre (the `AEG099_060` asset within 2.5 m: 2.9-3.0 ms in Stormveil, 6.1-6.6 ms in Limgrave's open world --
+  inside the black, unseen; else 1.25 m along his facing) and the search; the seat published (`graceSeq` + 1) only while dark and before
+  the deadline; hidden from the publish until the guest echoes it (`kBuddySeated` + `graceSeqSeated`) still dark; an echo after the black
+  = hidden through this rest; an Elden Ring dialog while seated or seating = hidden while it lasts, then her post rule; a re-rest at the
+  same grace keeps her seated; left the grace (2 m, a load, a death; `g_gracePos` now follows world shifts) = up, the seat her post.
+- **The seat** (`grace::Search`): quiet.md §3.9's rule with its two fixes (the 0.25 m knee ring; the ground filter's floor) and two more
+  found live: >= 2 m from any other character (the grace's hidden team-0 one left out), and **not where the renderer's occluder fade
+  would hide her** (within [Render] occluder_radius + 0.3 m of the camera-to-Snake line in front of him: live, Rampart Tower with the
+  camera turned 90 deg, a seat 3.1 m in front of the camera passed the screen rules and was drawn at 15 % -- invisible). 36 rays a frame.
+- **Live** (the fake guest seats her at once, so the echo came 14-50 ms after the publish in every rest; frames every ~0.08 s from the
+  press): **9 seats at 3 graces, each echoed inside the black, 0 late echoes, 0 pop-ins** -- Rampart Tower x6 (one of them, the camera
+  turned 90 deg, drawn at 15 % by the occluder fade: the rule above, added after it), Gatefront x2, The First Step x1, plus a re-rest
+  kept; at +2.7-3.8 s she is beside Snake (screen x 0.60-0.61; 0.40 for the turned camera), clear of the menu, on the floor (frames
+  `r1`, `r5`, `r8`, `s3r3`, `s4r1`). The seat search: the first candidate in order passed in 8 of 9 (24 rays, 43-54 us); with the camera
+  turned 90 deg after the occluder fix all 64 were looked at, 14 passed, 336 rays, published 117 ms into the black, seated left of Snake
+  at screen x 0.40 (frame). U11: 90 deg and 180 deg both gave a visible seat. Through Pass time and the Level Up screen she stayed (frames).
+  Leaving: she stays at the seat as her post, never vanishing (frames `s3_leave`: +1.1 / +2.5 / +4.9 s after he left). Tarnished mode
+  (U9): "rest #8 -- no seat (Tarnished mode)". The study's three surveys (tests/fixtures/quiet/survey_*.json) pick exactly the study's
+  seats; the live recordings `grace_rays_*.json` replay ray for ray.
+- **Not live**: U10 (stairs, scaffolding, a cave): only Rampart Tower, Gatefront and The First Step are rested at without a talk on this
+  save; a talk rest (forbidden: unit-tested); a death's respawn (it never arms: unit-tested); the real MGSV's kneel at the seat.
+- **0.9.0 integration with both games**: the real MGSV's Quiet takes ~3 s from her order to settle into her rest (a turn, a hop, the
+  crouch with her rifle upright): with the black ~1.5 s she hopped beside the grace in view 1.5 s into the menu (frames, Rampart Tower
+  and Gatefront). The guest now echoes the seat only once she has settled, and **an echo after the black fades her in** over 300 ms
+  (`grace::Gate` kShown with `ShownLate`, `SeatAlpha`; `[Grace] seat_late_echo_ms` 6000: no echo by then = hidden through the rest).
+  **9 rests with the final build at all three graces** (Gatefront 3 -- one after a 32 m world shift and one with the Tarnished turning
+  to the grace first, black at +1545 ms --, The First Step 2 -- one with the camera turned 90 deg: a visible seat behind Snake's shoulder,
+  screen x 0.56 --, Rampart Tower 4): black from +916-1545 ms for 1419-1701 ms, the seat published 0 ms into it, the echo 3269-4145 ms
+  after the publish, faded in about 1-2 s after the menu came up, crouched with her rifle upright beside the grace right of Snake and
+  clear of the menu (frames `r4`, `r5`, `r6`, `r7`, `r8`, `r9b`); through Pass time ("another black at the grace (3364 ms) -- Quiet stays
+  seated") and Level Up (opened, backed out) she stayed; walking away she stayed at the seat (her post) in view and was moved on out of
+  view (the guest keeps her rest pose, below). 0 rests without a seat, 0 hidden ones.
+- **Pass time gave Snake the pad inside the grace menu** (since 0.7.0's `[Overlay] er_bars`; live at Rampart Tower: B went to MGSV, its
+  weapon wheel opened, nothing closed the menu): after Pass time Elden Ring shows its HUD ~4 s, then the grace menu again; ErBars hid
+  the HUD again 1.5 s after the interaction ended, so the menu's own hide (UI state 7) was masked and the "sitting at a grace" rule never
+  saw it. ErBars now leaves Elden Ring's bars as they are while Snake sits at a grace (`Host::AtGrace`): live `ER interaction continues:
+  its HUD hid again 4159 ms after, Snake still at the grace` -> Pass time, Level Up and B worked with Elden Ring's pad.
+- **Console**: `grace [status | fade | on | off | record on|off | survey [all] [label] | set <key> <v>]`; `grace survey all` looks at all
+  64 candidates with the current view and writes every ray (`PhantomRingGraceRays-N.json`; `record on`: each rest's search).
+
 ### Fulton: MGSV's recovery of an Elden Ring enemy (`er/Fulton.cpp`, protocol v12 `kGEvFulton`)
 
 The guest's ActorProxy stands an MGSV soldier in for an Elden Ring character (docs/GUEST.md 20); when Snake fultons it, MGSV's
@@ -2033,6 +2236,10 @@ sym | single [filter]        named roots (base wcm player modules phys data chrc
                              gamedataman gameman fieldarea time locktgt)
                              | every FD4 singleton (also usable as s.<Name>, e.g. [s.CSFade])
 chr [n]                      characters by distance: handle, P/E/C, team, npc, hp, distance, pos
+quiet [status | on | off | all on|off | pick | test boss | post [now|none] | shoot [0x..] [lethal|tranq|heavy] | survey [label] | record on|off | set <k> <v>]
+                             Quiet in Elden Ring ("Quiet in Elden Ring" above)
+grace [status | fade | on | off | record on|off | survey [all] [label] | set <k> <v>]
+                             the grace rest with the buddy; `grace fade`: Elden Ring's InGame fade plate now
 status | cam | calib | buddy | ui | ez
 call setpos x y z | setyaw rad | ray x y z dx dy dz [filter] | kill yes
 call rayall x y z dx dy dz [filter] [layers]   every hit along the ray: point, normal, body, its layer, hknp and Elden Ring

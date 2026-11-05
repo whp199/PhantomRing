@@ -41,6 +41,30 @@ namespace phantom::er
 			}
 		}
 
+		// (v18) "a, b, c" -> a_out, each clamped to [a_min, a_max]; empty, missing or nothing parsable keeps the defaults.
+		void FloatList(const Ini& a_ini, const char* a_section, const char* a_key, std::vector<float>& a_out, float a_min, float a_max)
+		{
+			const auto text = a_ini.Get(a_section, a_key);
+			if (text.empty()) {
+				return;
+			}
+			std::vector<float> got;
+			std::stringstream  list(text);
+			std::string        item;
+			while (std::getline(list, item, ',')) {
+				char*        end = nullptr;
+				const double v = std::strtod(item.c_str(), &end);
+				if (end != item.c_str()) {
+					got.push_back(std::clamp(static_cast<float>(v), a_min, a_max));
+				}
+			}
+			if (got.empty()) {
+				Log::Warn("[{}] {} = {} has no numbers; keeping the defaults", a_section, a_key, text);
+				return;
+			}
+			a_out = std::move(got);
+		}
+
 		// "a, b, c" (decimal or 0x hex) -> a_out, replacing the defaults; empty/missing keeps them, "none" empties the list.
 		void IntList(const Ini& a_ini, const char* a_section, const char* a_key, std::vector<int>& a_out, long a_max)
 		{
@@ -835,6 +859,97 @@ namespace phantom::er
 		dg.pickLatchMs = std::clamp(static_cast<int>(ini.GetInt("Dog", "pick_latch_ms", dg.pickLatchMs)), 0, 5000);
 		dg.stepGuard = ini.GetBool("Dog", "step_guard", dg.stepGuard);
 		dg.waitPin = ini.GetBool("Dog", "wait_pin", dg.waitPin);
+
+		// [Quiet] (protocol v18, docs/research/quiet.md §5; er/Quiet.h). Negative numbers -> 0 as [Dog].
+		auto&      qt = quiet;
+		const auto qf = [&](const char* a_key, float& a_value) { a_value = std::max(0.0f, static_cast<float>(ini.GetFloat("Quiet", a_key, a_value))); };
+		const auto qi = [&](const char* a_key, int& a_value, int a_max) {
+			a_value = static_cast<int>(std::clamp<long long>(ini.GetInt("Quiet", a_key, a_value), 0, a_max));
+		};
+		qt.enabled = ini.GetBool("Quiet", "enabled", qt.enabled);
+		qt.posts = ini.GetBool("Quiet", "posts", qt.posts);
+		qt.orders = ini.GetBool("Quiet", "orders", qt.orders);
+		FloatList(ini, "Quiet", "cover_rings", qt.coverRings, 1.0f, 200.0f);
+		FloatList(ini, "Quiet", "near_rings", qt.nearRings, 1.0f, 200.0f);
+		qt.postDirs = std::clamp(static_cast<int>(ini.GetInt("Quiet", "post_dirs", qt.postDirs)), 4, 72);
+		// heights over Snake may be negative (a post below him)
+		qt.postHeightMin = std::clamp(static_cast<float>(ini.GetFloat("Quiet", "post_height_min", qt.postHeightMin)), -50.0f, 100.0f);
+		qt.postHeightMax = std::clamp(static_cast<float>(ini.GetFloat("Quiet", "post_height_max", qt.postHeightMax)), qt.postHeightMin, 100.0f);
+		qt.nearHeightMin = std::clamp(static_cast<float>(ini.GetFloat("Quiet", "near_height_min", qt.nearHeightMin)), -50.0f, 100.0f);
+		qt.nearHeightMax = std::clamp(static_cast<float>(ini.GetFloat("Quiet", "near_height_max", qt.nearHeightMax)), qt.nearHeightMin, 100.0f);
+		qt.postDrawable = ini.GetBool("Quiet", "post_drawable", qt.postDrawable);
+		qf("post_height_score", qt.postHeightScore);
+		qf("sight_height", qt.sightHeight);
+		qf("post_max_3d", qt.postMax3d);
+		qf("post_enemy_clear", qt.postEnemyClear);
+		qf("post_char_clear", qt.postCharClear);
+		qi("post_rays_per_frame", qt.postRaysPerFrame, 1000);
+		qf("post_research_snake", qt.postResearchSnake);
+		qf("near_research_snake", qt.nearResearchSnake);
+		qf("move_hide_speed", qt.moveHideSpeed);
+		qi("fade_ms", qt.fadeMs, 5000);
+		qf("far_ground_up", qt.farGroundUp);
+		qf("far_ground_down", qt.farGroundDown);
+		qf("lift_max", qt.liftMax);
+		qf("target_range", qt.targetRange);
+		qt.targetConeDeg = std::clamp(static_cast<float>(ini.GetFloat("Quiet", "target_cone_deg", qt.targetConeDeg)), 0.5f, 90.0f);
+		qt.targetConeBinocularsDeg = std::clamp(static_cast<float>(ini.GetFloat("Quiet", "target_cone_binoculars_deg", qt.targetConeBinocularsDeg)), 0.5f, 90.0f);
+		qt.targetMarkedFirst = ini.GetBool("Quiet", "target_marked_first", qt.targetMarkedFirst);
+		qt.bosses = ini.Get("Quiet", "bosses", qt.bosses);
+		if (qt.bosses != "off") {
+			Log::Warn("[Quiet] bosses = {} is not off (the only choice in v1); using off", qt.bosses);
+			qt.bosses = "off";
+		}
+		qi("pick_latch_ms", qt.pickLatchMs, 5000);
+		qt.spot = ini.GetBool("Quiet", "spot", qt.spot);
+		qf("spot_range", qt.spotRange);
+		qi("spot_every_ms", qt.spotEveryMs, 60000);
+		qf("spot_linger", qt.spotLinger);
+		qf("spot_text_every", qt.spotTextEvery);
+		qf("lethal_share_mult", qt.lethalShareMult);
+		qf("lethal_fallback", qt.lethalFallback);
+		qt.heavyPoise = ini.GetBool("Quiet", "heavy_poise", qt.heavyPoise);
+		qf("tranq_sleep", qt.tranqSleep);
+		qt.shotNoise = ini.GetBool("Quiet", "shot_noise", qt.shotNoise);
+		qf("cover_threat_range", qt.coverThreatRange);
+		qt.indicator = ini.GetBool("Quiet", "indicator", qt.indicator);
+		qt.orderText = ini.GetBool("Quiet", "order_text", qt.orderText);
+		qt.cloak = ini.Get("Quiet", "cloak", qt.cloak);
+		if (qt.cloak != "hide" && qt.cloak != "shimmer") {
+			Log::Warn("[Quiet] cloak = {} is not hide|shimmer; using hide", qt.cloak);
+			qt.cloak = "hide";
+		}
+
+		// [Grace] (protocol v18, docs/research/quiet.md §3.9, §5; er/GraceRest.h)
+		auto&      gr = grace;
+		const auto gf = [&](const char* a_key, float& a_value, float a_max) {
+			a_value = std::clamp(static_cast<float>(ini.GetFloat("Grace", a_key, a_value)), 0.0f, a_max);
+		};
+		const auto gi = [&](const char* a_key, int& a_value) {
+			a_value = static_cast<int>(std::clamp<long long>(ini.GetInt("Grace", a_key, a_value), 0, 10000));
+		};
+		gr.buddyRest = ini.GetBool("Grace", "buddy_rest", gr.buddyRest);
+		FloatList(ini, "Grace", "seat_rings", gr.seatRings, 0.5f, 10.0f);
+		gr.seatDirs = std::clamp(static_cast<int>(ini.GetInt("Grace", "seat_dirs", gr.seatDirs)), 4, 72);
+		gf("seat_screen_x", gr.seatScreenX, 1.0f);
+		gf("seat_menu_x", gr.seatMenuX, 1.0f);
+		gf("seat_step", gr.seatStep, 5.0f);
+		gf("seat_slope_ny", gr.seatSlopeNy, 1.0f);
+		gf("seat_spread", gr.seatSpread, 5.0f);
+		gf("seat_headroom", gr.seatHeadroom, 5.0f);
+		gf("seat_snake_clear", gr.seatSnakeClear, 10.0f);
+		gf("seat_char_clear", gr.seatCharClear, 10.0f);
+		gr.restDark = ini.Get("Grace", "rest_dark", gr.restDark);
+		if (gr.restDark != "none" && gr.restDark != "fade" && gr.restDark != "luma") {
+			// Never a timer by mistake: the default (fade, the observed black) or nothing.
+			Log::Warn("[Grace] rest_dark = {} is not none|fade|luma; using {}", gr.restDark, GraceConfig{}.restDark);
+			gr.restDark = GraceConfig{}.restDark;
+		}
+		gi("seat_black_wait_ms", gr.seatBlackWaitMs);
+		gi("seat_deadline_ms", gr.seatDeadlineMs);
+		gi("seat_late_echo_ms", gr.seatLateEchoMs);
+		gi("seat_reload_ready_ms", gr.seatReloadReadyMs);
+		gr.tarnished = ini.GetBool("Grace", "tarnished", gr.tarnished);
 		return found;
 	}
 }

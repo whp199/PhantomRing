@@ -48,6 +48,76 @@ namespace phantom::guest
 		bool operator==(const DogConfig&) const = default;
 	};
 
+	// [Quiet] Quiet as a sniper buddy in Elden Ring, and her rest at a Site of Grace (docs/research/quiet.md §3.1-3.9, §5; protocol v18
+	// kHostQuietLayer / kHostAtGrace and HostState's grace and post fields, buddyFlags kBuddyCloaked / kBuddySeated / kBuddyAtPost /
+	// Quiet's weapon / kBuddyQuietCover / kBuddyCanRest / kBuddyQuietMarked, kGEvQuietShot). Everything acts only while the host's
+	// [Quiet] layer is on (HostState kHostQuietLayer) -- the borrow too: without the layer she would be 0.8.0's Quiet (review 0.9.0).
+	// MGSV's save is never written either way (the borrow is memory only, only while the save guards are complete, §3.1).
+	enum class QuietBorrow : std::uint8_t
+	{
+		kOff,     // never: she deploys only if the save has her
+		kMemory,  // a Quiet the save has had (gone, recruited but not yet deployable, sickbay / dying / dead)
+		kAlways,  // also never recruited and killed (the player's choice for the shipped default, 2026-11-04; each save state gated by Q14)
+	};
+	enum class QuietHeight : std::uint8_t
+	{
+		kGround,  // MirrorHeight: MGSV's ground under the post | StandInHeight: the stand-in on MGSV's ground (D-Dog's)
+		kMapped,  // MirrorHeight: the post's height mapped into MGSV (Q8)
+		kEnemy,   // StandInHeight: the stand-in at the Elden Ring enemy's height (Q4's elevated case)
+	};
+	enum class QuietSitPose : std::uint8_t
+	{
+		kKneel,  // v1: her kneeling standby, rifle lowered (if Q2 finds a way)
+		kWatch,  // v1b: kneeling on watch, facing out from the grace, the rifle pointed away from Snake (the player accepted it, 2026-11-04)
+		kSeat,   // v2: a true seated pose (her helicopter cabin's cross-legged wait, Q3), once a way to play it is found
+	};
+	enum class QuietSitPlacement : std::uint8_t
+	{
+		kObject,  // through her location object
+		kWarp,    // a warp command
+		kReload,  // a block reload at the seat (~1 s gone; only if Q18 and U12 make it fit)
+	};
+
+	struct QuietConfig
+	{
+		// (round M2, 2026-11-04) The defaults are the design's (quiet.md §5) as M1 settled them live; everything below acts only while the
+		// host's [Quiet] layer is on (HostState kHostQuietLayer), the borrow included (it waits for the layer: review 0.9.0). The borrow
+		// is the player's choice for every save (open question 1): Borrow = always and BorrowListInIdroid = true -- memory only, only
+		// while MGSV's saves are guarded; each save state passed one live round trip (quiet.md Q14).
+		bool               enabled{ true };                         // the layer; acts only while the host sets kHostQuietLayer
+		QuietBorrow        borrow{ QuietBorrow::kAlways };          // the player's answer (2026-11-04): everyone, any save
+		bool               borrowListInIdroid{ true };              // borrow at boot so MGSV's BUDDY SUPPORT lists her
+		bool               mirror{ true };                          // hold her MGSV body at the host's post (branch M, Q1)
+		std::vector<float> mirrorRegion{ 45.0f, 60.0f, 60.0f, 60.0f, 60.0f, 60.0f, 60.0f, 40.0f };  // m by bearing 0, 45, ..., 315 (Q7)
+		QuietHeight        mirrorHeight{ QuietHeight::kGround };    // kGround (Q8: MGSV drops her to its ground)
+		float              postTolerance{ 3.0f };                   // m: re-placed when her MGSV place drifts farther from the mirror
+		bool               treadmill{ true };                       // shift her with Snake's jumps while at a post or seated
+		bool               orders{ true };                          // the player's 1-3 go to the host's pick (kActorQuietTarget)
+		bool               markProxy{ true };                       // a stand-in for the host's pick while the binoculars are up
+		QuietHeight        standInHeight{ QuietHeight::kEnemy };    // kEnemy | kGround
+		bool               keepMarks{ true };                       // no periodic ClearMarkers while a Quiet stand-in is dedicated (Q4)
+		bool               standInOnBearing{ false };               // after Ordered, the stand-in onto a clear MGSV line from her (Q5: not built)
+		std::uint32_t      keepMarkMs{ 20000 };                     // the stand-in kept after the last binocular look
+		bool               fireOnlyOnOrders{ true };                // EnableFire false whenever no stand-in of hers is out (Q6, Q17)
+		std::uint32_t      realizeTimeoutMs{ 1500 };                // the stand-in realized and placed within this, or kQuietRefused
+		std::uint32_t      pickWaitMs{ 1500 };                      // an order waits this long for a pick
+		std::uint32_t      hitTimeoutMs{ 8000 };                    // Fire: order -> hit (live 3.1 s), else kQuietLost
+		std::uint32_t      aimHoldMs{ 20000 };                      // Take aim: held until her hit
+		bool               releaseAfterHit{ true };                 // release the stand-in after her hit
+		bool               cover{ false };                          // Cover me on the host's threat pick (opt-in until Q16/Q17)
+		bool               takeOverTalk{ true };                    // command 7 taken over while the layer is on
+		std::uint32_t      coverEveryMs{ 8000 };                    // Cover me: one shot at most this often
+		bool               restAtGrace{ true };                     // kBuddyCanRest: seat her at the host's grace seat
+		QuietSitPose       sitPose{ QuietSitPose::kKneel };         // kKneel: Q2 found her rifle lowered (MoveToPosition, aim off)
+		QuietSitPlacement  sitPlacement{ QuietSitPlacement::kObject };  // kObject (Q1: one frame)
+		float              rigidRadius{ 1.2f };                     // m: her rigid draws (the rifle)
+		bool               hideMgsvMarkers{ true };                 // MGSV's marker hues left out while a stand-in / order job runs
+		bool               strikeMgsvPosts{ true };                 // QUIET SCOUT / ATTACK greyed out while she is out with the host's layer on
+		bool               noDying{ true };                         // EnableDying false while she is out
+
+		bool operator==(const QuietConfig&) const = default;
+	};
+
 	struct Config
 	{
 		// [Guest]
@@ -354,6 +424,7 @@ namespace phantom::guest
 		float         cqcRange{ 1.4f };               // m, kGEvCqc b (the host's own [Cqc] range decides)
 
 		DogConfig dog;  // [Dog] (protocol v17, Dog.cpp)
+		QuietConfig quiet;  // [Quiet] (protocol v18, Quiet.cpp; acts while the host's layer is on)
 
 		// [Lua]
 		std::wstring luaOverride{ L"phantomring.lua" };

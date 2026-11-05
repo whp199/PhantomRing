@@ -10,6 +10,7 @@
 #include "Config.h"
 #include "Death.h"
 #include "Dog.h"
+#include "Quiet.h"
 #include "Dive.h"
 #include "Follow.h"
 #include "FultonAnchor.h"
@@ -550,6 +551,8 @@ namespace phantom::guest::frame
 						}
 					} else if (a_lua.buddyActive == state::kBuddyTypeDog) {
 						dog::Shift({ shift.x, 0.0f, shift.z }, "fulton anchor");  // [Dog] Treadmill (Dog.cpp); else MGSV brings it back
+					} else if (a_lua.buddyActive == state::kBuddyTypeQuiet) {
+						quiet::Shift({ shift.x, 0.0f, shift.z }, "fulton anchor");  // [Quiet] Treadmill (Quiet.cpp)
 					}
 				}
 				Log::Info("fulton: Snake {} {:.2f},{:.2f},{:.2f} ({}; {:.1f} m)", ok ? "placed at" : "NOT placed at", p->pos.x, p->pos.y, p->pos.z, p->why,
@@ -697,6 +700,10 @@ namespace phantom::guest::frame
 				// D-Dog ignores SetPosition (live 2026-10-14): moved by its own location object at the next frame ([Dog] Treadmill, Dog.cpp),
 				// the one Snake's own placement shows in; else left to MGSV, which brings it back to Snake by itself (a ~6 m jump in Elden Ring).
 				dog::Shift(d.shift, "treadmill");
+			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.buddyActive == state::kBuddyTypeQuiet) {
+				// Quiet ignores SetPosition: moved by her own location object at the next frame ([Quiet] Treadmill, Quiet.cpp); else left where
+				// MGSV keeps her (a ~6 m jump in Elden Ring, as in 0.8.0).
+				quiet::Shift(d.shift, "treadmill");
 			} else if (c.treadmillMovesBuddy && a_lua.buddyId != kNullId && a_lua.buddyPosValid && a_lua.ridden != a_lua.buddyId &&
 			           a_lua.buddyActive != state::kBuddyTypeDog && a_lua.buddyActive != state::kBuddyTypeQuiet) {
 				// (D-Dog and Quiet ignore SetPosition -- live 2026-10-14, D-Dog stayed put -- and its Vector3 form sends D-Walker to the
@@ -899,6 +906,19 @@ namespace phantom::guest::frame
 				.home = climb::Home(),
 				.yaw = yaw });
 		}
+		{
+			// Quiet (Quiet.h): her location object, held at the host's post (the mirror) or the grace seat, moved with the treadmill.
+			const bool onFoot = !((lua.flags & state::kLVehicle) || v.vehicleId != kNullId || lua.ridden != kNullId);
+			quiet::FrameIn qin{ .ready = ready && onFoot && !state::Staged() && !state::Parked() && !fulton::Anchored(),
+				.dt = static_cast<float>(std::clamp(dt, 0.0, 0.1)),
+				.nowMs = ::GetTickCount64(),
+				.root = root,
+				.velocity = g_odo.Velocity(),
+				.camPos = { a_sample.pos[0], a_sample.pos[1], a_sample.pos[2] },
+				.yaw = yaw };
+			std::copy_n(g_odo.Odo().begin(), 3, qin.odo);
+			quiet::Update(lua, qin);
+		}
 		// v15: Elden Ring's ladders and ledges with MGSV's own moves (Climb.h): staged at real MGSV geometry, the odometer still
 		const auto moves = climb::Update(a_sample, root, yaw, lua, ready, dt);
 		if (moves.placed) {
@@ -1066,7 +1086,8 @@ namespace phantom::guest::frame
 		// D-Walker's own location object when it is known (this frame's: GetPosition is Lua's, up to a tick late -- led alongside
 		// Snake, that is a few dozen centimetres), else GetPosition.
 		const bool dogOut = lua.buddyActive == state::kBuddyTypeDog;
-		const auto walkerFeet = dogOut ? dog::Position() : walker::Position();
+		const bool quietOut = lua.buddyActive == state::kBuddyTypeQuiet;
+		const auto walkerFeet = dogOut ? dog::Position() : quietOut ? quiet::Position() : walker::Position();
 		const Vec3 buddyAt = walkerFeet && lua.buddyPosValid ? *walkerFeet : lua.buddyPos;
 		Vec3       buddyRaw = buddyAt;
 		if (lua.buddyPosValid && luaFresh) {
@@ -1105,6 +1126,13 @@ namespace phantom::guest::frame
 		if (lua.buddyActive == state::kBuddyTypeDog) {
 			bf |= dog::BuddyStyleBits();  // (v17) its style, every frame: the host picks for it before any order (review 0.8.0)
 		}
+		if (quietOut && lua.buddyId != kNullId) {
+			// (v18) Quiet: cloaked / seated / at her post / her weapon / Cover me / can rest / her stand-in marked / an order engaged, and the
+			// echoes of the post and the rest she holds (Quiet.h).
+			bf |= quiet::BuddyBits();
+			s.buddyPostSeq = quiet::PostSeqEcho();
+			s.graceSeqSeated = quiet::GraceSeqEcho();
+		}
 		if (lua.buddyPosValid) {
 			const Vec3 d = lua.buddyPos - g_buddyLast;
 			if (!g_buddyLastValid) {
@@ -1124,11 +1152,19 @@ namespace phantom::guest::frame
 		if (lua.buddyActive == state::kBuddyTypeDog) {
 			dog::TraceFrame(g_frame, root, s.odo, s.buddyPos, buddyRaw, walkerFeet && lua.buddyPosValid, s.flags, bf);
 		}
+		if (quietOut) {
+			quiet::TraceFrame(g_frame, root, s.buddyPos, bf);
+		}
 		// Where the buddy really is in MGSV (its draws are told apart by it), not the place published while Snake is staged for a climb.
 		capture::NoteBuddy((bf & proto::kBuddyPosValid) != 0, lua.buddyPosValid ? &buddyAt.x : s.buddyPos);
 		s.buddyObjectId = lua.buddyId;
 		s.buddyAmmo = v.buddyGearAmmo[0];
 		s.buddyYaw = lua.buddyYawValid ? lua.buddyYaw : g_buddyYaw;
+		if (quietOut) {
+			if (const auto y = quiet::Yaw()) {
+				s.buddyYaw = *y;  // (quiet.md §3.2) her real heading: her skin's root, not the Tick's motion heading
+			}
+		}
 		{
 			std::scoped_lock lock(g_publishLock);
 			link::PublishState(s);

@@ -1259,6 +1259,10 @@ static void TestProgression(const std::string& a_dir)
 #include "Buddy.h"
 #include "test_host_dog.inc"  // D-Dog in Elden Ring (er/DogLogic.h)
 #include "test_host_projectiles.inc"
+#include <map>
+#include "test_host_json.inc"   // (v18) a JSON reader for tests/fixtures/quiet/
+#include "test_host_grace.inc"  // (v18) the grace rest with the buddy (er/GraceLogic.h)
+#include "test_host_quiet.inc"  // (v18) Quiet in Elden Ring (er/QuietLogic.h)
 
 int main(int argc, char** argv)
 {
@@ -1288,6 +1292,21 @@ int main(int argc, char** argv)
 	TestDamageLadder();
 	TestNativeDamage();
 	TestProjectiles();
+	// (v18) The fixtures sit next to er/ (argv[1] is er/PhantomRingHost.ini): tests/fixtures/quiet/.
+	jsontest::g_fixtures = argc >= 2 ? std::filesystem::path(argv[1]).parent_path().parent_path() / "tests" / "fixtures" / "quiet"
+	                                 : std::filesystem::path("../tests/fixtures/quiet");
+	TestGraceFade();
+	TestGraceGate();
+	TestGraceCentre();
+	TestGraceSeatRules();
+	TestGraceSurveys();
+	TestGraceRecorded();
+	TestQuietPostRules();
+	TestQuietModes();
+	TestQuietPick();
+	TestQuietShot();
+	TestQuietPerches();
+	TestQuietRecorded();
 	TestParams(argc >= 3 ? argv[2] : "er_params");
 	TestProgression(argc >= 3 ? argv[2] : "er_params");
 	if (argc >= 2) {

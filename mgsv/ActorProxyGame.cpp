@@ -17,6 +17,7 @@
 #include "Addresses.h"
 #include "Config.h"
 #include "Dog.h"
+#include "Quiet.h"
 #include "Hold.h"
 #include "Hook.h"
 #include "Link.h"
@@ -133,7 +134,12 @@ namespace phantom::guest::proxy
 		// runs once one has been out (g_dogRan) and gives D-Dog's Attack up if it can't hold the phase.
 		std::uint64_t                   g_dedicated{ 0 };
 		bool                            g_dedPuppet{ true };
-		bool                            g_dogRan{ false };
+		bool                            g_dogRan{ false };     // a dedicated soldier was out for the active buddy since its guard began
+		bool                            g_dedEverRan{ false }; // ... for any buddy this session: the phase lock keeps running
+		int                             g_dedBuddy{ 0 };       // the buddy (BuddyType) the dedicated soldier is for (2 D-Dog, 3 Quiet)
+		plan::Height                    g_dedHeight{ plan::Height::kGround };
+		std::uint32_t                   g_ranFor{ 0 };         // buddies (1 << BuddyType) whose first dedicated soldier has had its fresh guard
+		int                             g_guardBuddy{ -1 };    // the active buddy type the guard belongs to (Lua thread)
 		Dedicated                       g_dedState;
 		std::atomic<bool>               g_dedHeld{ false };  // D-Dog's attack holds its soldier (HoldDedicated; game thread)
 		plan::SlipObserver              g_slipObs;           // Elden Ring's walls, seen in the characters around Snake (game thread)
@@ -337,6 +343,7 @@ namespace phantom::guest::proxy
 			s.tableLagMs = c.proxyTableLagMs;
 			// Flattened only for full proxies: the Fulton-only path (live with the real host) keeps the enemy's height.
 			s.height = c.proxies ? plan::ParseHeight(c.proxyHeight, plan::Height::kGround) : plan::Height::kEnemy;
+			s.dedicatedHeight = g_dedHeight;
 			return s;
 		}
 
@@ -593,6 +600,7 @@ namespace phantom::guest::proxy
 				ded.atValid = at.has_value();
 				ded.placed = rt.frame == g_frame;
 				g_dogRan = true;
+				g_dedEverRan = true;
 			}
 		}
 		g_dedState = ded;
@@ -654,7 +662,7 @@ namespace phantom::guest::proxy
 		void PhaseLock(std::uint64_t a_nowMs, const std::function<std::string(const std::string&)>& a_call)
 		{
 			const auto& c = Cfg();
-			if (!c.proxyPhaseLock || !(c.proxies || g_fullRan || g_dogRan) || a_nowMs - g_phaseAt < 500) {
+			if (!c.proxyPhaseLock || !(c.proxies || g_fullRan || g_dogRan || g_dedEverRan) || a_nowMs - g_phaseAt < 500) {
 				return;
 			}
 			g_phaseAt = a_nowMs;
@@ -699,9 +707,18 @@ namespace phantom::guest::proxy
 				}
 			}
 			if (step.giveUp && g_dogRan) {
-				// D-Dog's soldier was out this session: the dog can't attack here without MGSV's alert -- Attack off, his soldier released.
-				dog::DisableAttack(std::format("MGSV's alert phase still {} after {:.0f} s of phase lock with the dog's soldier out", phase, c.proxyAlertGiveUpSec));
+				// A dedicated soldier was out for the active buddy under this guard: that buddy can't take orders here without MGSV's
+				// alert -- its orders off (D-Dog's Attack, Quiet's orders), the soldier released. Never another buddy's (review of the
+				// Quiet design, §3.5: Quiet's stand-ins used to spend D-Dog's guard).
+				const auto why = std::format("MGSV's alert phase still {} after {:.0f} s of phase lock with the {}'s soldier out", phase, c.proxyAlertGiveUpSec,
+					g_guardBuddy == state::kBuddyTypeQuiet ? "Quiet stand-in" : "dog");
+				if (g_guardBuddy == state::kBuddyTypeQuiet) {
+					quiet::DisableOrders(why);
+				} else {
+					dog::DisableAttack(why);
+				}
 				g_dedicated = 0;
+				g_dedBuddy = 0;
 			}
 			if (step.giveUp && c.proxies) {
 				// LuaStep stops before this lock once nothing runs proxies any more: it only keeps going with [Fulton] Method = proxy.
@@ -715,6 +732,35 @@ namespace phantom::guest::proxy
 
 	void LuaStep(std::uint64_t a_nowMs, const std::function<std::string(const std::string&)>& a_call)
 	{
+		// The phase guard is the active buddy's (Quiet / D-Dog, docs/research/quiet.md §3.5): every change of the active buddy type
+		// starts a fresh one, and a soldier dedicated for the buddy that left is released (a switch to D-Dog right after a binocular
+		// look must not leave Quiet's stand-in holding the slot).
+		if (const auto lua = state::Lua(); lua.InGame() && lua.buddyActive >= 0) {
+			bool rearm = false;
+			{
+				std::scoped_lock lock(g_lock);
+				// NONE (0) for a moment (a block reload re-creating the buddy, a dismissal) is no other buddy: the guard and the soldier stay
+				// until another buddy is out (live M1: a Reload of Quiet released her stand-in).
+				if (lua.buddyActive > 0 && g_guardBuddy > 0 && lua.buddyActive != g_guardBuddy) {
+					rearm = true;
+					if (g_dedicated && g_dedBuddy != lua.buddyActive) {
+						Log::Info("proxy: Elden Ring character {:#x}'s soldier released (the active buddy changed {} -> {})", g_dedicated, g_guardBuddy, lua.buddyActive);
+						g_dedicated = 0;
+						g_dedBuddy = 0;
+						g_dedState = {};
+						g_dedHeld.store(false, std::memory_order_relaxed);
+					}
+				}
+				if (lua.buddyActive > 0) {
+					g_guardBuddy = lua.buddyActive;
+				}
+			}
+			if (rearm) {
+				RearmPhaseGuard("the active buddy changed");
+				std::scoped_lock lock(g_lock);
+				g_dogRan = false;  // no soldier out for the new buddy yet under its guard
+			}
+		}
 		if (Cfg().proxies != g_fullWasOn) {
 			// Full proxies (back) on (`!proxy on` after a give-up or a `!proxy off`): a fresh phase guard, so a later alert that
 			// MGSV can't calm gives up again, a phase still up sweeps at once, and `!proxy` stops saying it gave up.
@@ -940,20 +986,33 @@ namespace phantom::guest::proxy
 		}
 	}
 
-	void Dedicate(std::uint64_t a_handle, bool a_puppet)
+	void Dedicate(std::uint64_t a_handle, bool a_puppet, int a_buddyType, plan::Height a_height)
 	{
 		std::scoped_lock lock(g_lock);
 		if (g_dedicated != a_handle) {
-			Log::Info("proxy: Elden Ring character {:#x} gets a soldier of his own for D-Dog's order ({})", a_handle, a_puppet ? "puppet" : "restrict-notice only");
+			Log::Info("proxy: Elden Ring character {:#x} gets a soldier of his own for {} ({}, {})", a_handle,
+				a_buddyType == state::kBuddyTypeQuiet ? "Quiet's order (her stand-in)" : "D-Dog's order", a_puppet ? "puppet" : "restrict-notice only",
+				a_height == plan::Height::kGround ? "on the sandbox ground" : "at the enemy's height");
 		}
 		g_dedicated = a_handle;
 		g_dedPuppet = a_puppet;
-		if (Cfg().proxyPhaseLock && !g_dogRan && !Cfg().proxies) {
-			// A fresh guard for the dog's first soldier (a give-up of the full proxies' earlier this session says nothing about him).
+		g_dedBuddy = a_buddyType;
+		g_dedHeight = a_height;
+		const std::uint32_t bit = 1u << (a_buddyType & 31);
+		if (Cfg().proxyPhaseLock && !(g_ranFor & bit) && !Cfg().proxies) {
+			// A fresh guard for each buddy's first soldier (a give-up of the full proxies' or another buddy's earlier this session says
+			// nothing about him).
+			g_ranFor |= bit;
 			g_phase.Reset();
 			g_lastPhase = 0;
 			g_phaseAt = 0;
 		}
+	}
+
+	int DedicatedBuddy()
+	{
+		std::scoped_lock lock(g_lock);
+		return g_dedicated ? g_dedBuddy : 0;
 	}
 
 	void RearmPhaseGuard(const char* a_why)
@@ -989,6 +1048,7 @@ namespace phantom::guest::proxy
 			Log::Info("proxy: Elden Ring character {:#x}'s soldier released ({})", g_dedicated, a_why);
 		}
 		g_dedicated = 0;
+		g_dedBuddy = 0;
 		g_dedState = {};
 	}
 

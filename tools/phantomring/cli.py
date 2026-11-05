@@ -66,6 +66,11 @@ def status_text(link: proto.Link, rates: dict | None = None) -> str:
 		out.append(f"host      frame {hs.frame} flags {proto.flag_names(hs.flags, HostFlags)} tod {hs.timeOfDayHours:.2f}h "
 			f"hp {hs.erHpFrac:.2f} world {hs.erWorldId:#010x} camMax {hs.cameraMaxDistance:.1f} m groundY "
 			f"{'n/a' if math.isnan(hs.groundY) else f'{hs.groundY:.2f}'} fall {hs.fallSpeed:.1f}")
+		if hs.graceSeq or hs.buddyPostSeq:  # v18: the grace rest and Quiet's post (none: both seqs 0)
+			fin = lambda a: math.isfinite(a[0])
+			out.append(f"          grace #{hs.graceSeq} centre {v3(hs.graceCentre) if fin(hs.graceCentre) else 'none'} seat "
+				f"{v3(hs.graceSeat) if fin(hs.graceSeat) else 'none'} yaw {math.degrees(hs.graceSeatYaw):.1f} deg  post #{hs.buddyPostSeq} "
+				f"{v3(hs.buddyPost) if fin(hs.buddyPost) else 'none (on the move)'} yaw {math.degrees(hs.buddyPostYaw):.1f} deg")
 	else:
 		out.append("host      no HostState published")
 	gs = link.guest_state()
@@ -80,6 +85,8 @@ def status_text(link: proto.Link, rates: dict | None = None) -> str:
 		out.append(f"          buddy {buddy} ({gs.buddyType}) flags {proto.flag_names(gs.buddyFlags, proto.GuestBuddyFlags)} "
 			f"object {'none' if gs.buddyObjectId == 0xFFFF else f'{gs.buddyObjectId:#x}'} ammo {gs.buddyAmmo} pos {v3(gs.buddyPos)} "
 			f"yaw {math.degrees(gs.buddyYaw):.1f} deg  vehicle {vehicle}{'  RIDING' if gs.flags & GuestFlags.OnVehicle else ''}")
+		if gs.buddyPostSeq or gs.graceSeqSeated:  # v18: what the guest holds of the host's post / grace seat
+			out.append(f"          buddy held at post #{gs.buddyPostSeq}, seated for rest #{gs.graceSeqSeated}")
 	else:
 		out.append("guest     no GuestState published")
 	pad = link.pad_state()

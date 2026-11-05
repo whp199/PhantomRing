@@ -263,6 +263,147 @@ static void TestChord()
 		r.Step(true, true, M::kSnake, 1500);
 		CHECK(r.chords == 0 && r.erStart && r.firstErStart == down && r.toGuest == 1);
 	}
+	// (0.9.0, player session 2026-11-04 15:09:51, padwatch.log) The iDroid reopened by itself: View held, the hold at 1 s (MGSV's
+	// Start held until +1.2 s), MGSV's menu open 17 ms later; B closed it ~1 s after that, 150 ms before the hold was over -- back
+	// in kSnake the hold's Start reached MGSV again (0x2010 with B, 3 ms after the close) and reopened it. Now the rest of the hold
+	// is dropped once the menu opened on it. Both ways: View let go in the menu, or still held when it closed (no map then either).
+	for (const bool viewHeldOver : { false, true }) {
+		GateRun r;
+		r.params.idroidOpenMs = 1000;            // the default, as live
+		r.Step(false, true, M::kSnake, 1015);    // View down (15:09:50.948); the hold at 1 s (51.948), MGSV's Start until 53.148
+		CHECK(r.toGuest == 1 && r.guestStart && r.guestStartMs == 15);
+		r.Clear();
+		r.Step(false, true, M::kGuestMenu, 300);  // 51.965: MGSV's menu (MGSV gets no Start in it, as before)
+		r.Step(false, viewHeldOver, M::kGuestMenu, 735);  // B at 52.920 is MGSV's: the gate never sees it
+		CHECK(r.guestStartMs == 0 && r.presses == 0 && r.cancels == 0 && r.closes == 0);
+		r.Step(false, viewHeldOver, M::kSnake, 150);  // 52.998: the menu closed while the hold had 150 ms to go
+		CHECK(!r.sawGuestStart && r.guestStartMs == 0);
+		r.Step(false, false, M::kSnake, 500);
+		CHECK(!r.sawGuestStart && r.toGuest == 0 && r.presses == 0 && !r.sawErStart && !r.sawErView && !r.gate.Holding());
+		r.Step(false, true, M::kSnake, 1100);    // the next View hold opens the iDroid as before
+		CHECK(r.toGuest == 1 && r.guestStart && r.guestStartMs == 100);
+		r.Step(false, false, M::kSnake, 1500);   // ...its menu never opening this time (MGSV busy): Start held its full 1.2 s
+		CHECK(!r.guestStart && r.guestStartMs == 1200 && r.presses == 0 && !r.sawErView);
+	}
+	{  // a hold whose menu never opens (MGSV busy: aiming, binoculars, a dive): MGSV gets Start for the hold's full 1.2 s, as before;
+	   // here the hold at View's release (held 600 ms, between view_hold_ms and idroid_open_ms)
+		GateRun r;
+		r.params.idroidOpenMs = 1000;
+		r.Step(false, true, M::kSnake, 600);
+		r.Step(false, false, M::kSnake, 1600);
+		CHECK(r.toGuest == 1 && r.guestStartMs == 1200 && !r.sawErView && r.presses == 0);
+	}
+	{  // ...busy at first, then MGSV's menu opens 450 ms into the hold (the guest's own press again): the hold's other 750 ms are
+	   // dropped; the menu closed early never reopens
+		GateRun r;
+		r.params.idroidOpenMs = 1000;
+		r.Step(false, true, M::kSnake, 600);
+		r.Step(false, false, M::kSnake, 450);
+		CHECK(r.toGuest == 1 && r.guestStart && r.guestStartMs == 450);
+		r.Step(false, false, M::kGuestMenu, 300);
+		r.Step(false, false, M::kSnake, 1000);
+		CHECK(r.guestStartMs == 450 && !r.guestStart && r.presses == 0 && !r.sawErView);
+	}
+	{  // the menu opened on the hold, then the late Start (within chord_window_ms of View): still the chord -- the hold cut, one
+	   // close tap, the real Start kept from MGSV; closed in time, MGSV gets no Start back in kSnake
+		GateRun r;
+		r.Step(false, true, M::kSnake, 435);     // idroid_open_ms 0: the hold at view_hold_ms (400 ms)
+		r.Step(false, true, M::kGuestMenu, 115);
+		r.Clear();
+		r.Step(true, true, M::kGuestMenu, 250);
+		CHECK(r.cancels == 1 && r.closes == 1 && r.guestStartMs == 120 && r.guestRealStartMs == 0 && r.maskStart);
+		r.Step(true, true, M::kSnake, 800);
+		CHECK(r.chords == 1 && r.guestStartMs == 120 && r.presses == 0 && !r.sawErStart && !r.sawErView);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(r.guestStartMs == 120 && r.presses == 0 && !r.gate.Holding());
+	}
+	// (0.9.0 review) The rule is "an MGSV menu seen while the hold's Start is due is its menu", whatever menu it is. Pinned:
+	{  // a hold MGSV was too busy for (View let go at 600 ms), a popup 300 ms in for 100 ms: MGSV got 300 ms of Start and gets none
+	   // after it, so the iDroid does not open (before: the rest of the hold went out again and opened it). The next hold is as usual.
+		GateRun r;
+		r.params.idroidOpenMs = 1000;
+		r.Step(false, true, M::kSnake, 600);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(r.toGuest == 1 && r.guestStart && r.guestStartMs == 300);
+		r.Step(false, false, M::kGuestMenu, 100);
+		r.Step(false, false, M::kSnake, 1000);
+		CHECK(!r.guestStart && r.guestStartMs == 300 && r.presses == 0 && !r.sawErView && !r.sawErStart && r.closes == 0);
+		r.Clear();
+		r.Step(false, true, M::kSnake, 600);
+		r.Step(false, false, M::kSnake, 1500);
+		CHECK(r.toGuest == 1 && r.guestStartMs == 1200 && r.presses == 0 && !r.sawErView);
+	}
+	{  // ...the hold's menu flickering (kGuestMenu, kSnake for two polls, kGuestMenu again): no Start after its first poll
+		GateRun r;
+		r.params.idroidOpenMs = 1000;
+		r.Step(false, true, M::kSnake, 1015);
+		CHECK(r.toGuest == 1 && r.guestStartMs == 15);
+		r.Step(false, true, M::kGuestMenu, 30);
+		r.Step(false, true, M::kSnake, 10);
+		r.Step(false, false, M::kGuestMenu, 300);
+		r.Step(false, false, M::kSnake, 1000);
+		CHECK(!r.guestStart && r.guestStartMs == 15 && r.presses == 0 && !r.sawErView && !r.sawErStart && !r.gate.Holding());
+	}
+	{  // ...or going on to an Elden Ring menu or a load (kGuestMenu, kOff, kSnake): no Start back either
+		GateRun r;
+		r.params.idroidOpenMs = 1000;
+		r.Step(false, true, M::kSnake, 1015);
+		r.Step(false, false, M::kGuestMenu, 200);
+		r.Step(false, false, M::kOff, 100);
+		r.Step(false, false, M::kSnake, 1000);
+		CHECK(!r.guestStart && r.guestStartMs == 15 && r.presses == 0 && !r.sawErView && !r.sawErStart);
+	}
+	// (0.9.0 review, idroid_open_ms <= chord_window_ms only) A cut hold's close watch (kCloseWatchMs) ends with the next hold, and when
+	// the cut chord is let go unfired: an MGSV menu after that is not the cut hold's, and gets no close tap.
+	{  // a late Start cut a hold MGSV was too busy to open, both let go before the chord fired; View held again at 900 ms, its
+	   // hold at 1300 opens the iDroid at 1340 -- the player's: no close tap
+		GateRun r;
+		r.Step(false, true, M::kSnake, 500);      // the hold at 400 ms; MGSV busy (no menu)
+		r.Step(true, true, M::kSnake, 200);       // Start 500 ms after View: the chord, the hold cut
+		CHECK(r.cancels == 1 && r.chords == 0);
+		r.Step(false, false, M::kSnake, 200);     // both let go at 700: no chord
+		r.Clear();
+		r.Step(false, true, M::kSnake, 440);
+		CHECK(r.toGuest == 1 && r.guestStartMs == 40);
+		r.Step(false, true, M::kGuestMenu, 1000);
+		r.Step(false, false, M::kGuestMenu, 1500);
+		CHECK(r.closes == 0 && r.chords == 0 && r.cancels == 0 && r.guestStartMs == 40);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(r.presses == 0 && !r.sawErView && !r.sawErStart && !r.gate.Holding());
+	}
+	{  // ...the same, then an MGSV popup 300 ms after the release (no hold): no close tap into it
+		GateRun r;
+		r.Step(false, true, M::kSnake, 500);
+		r.Step(true, true, M::kSnake, 200);
+		r.Step(false, false, M::kSnake, 300);
+		r.Clear();
+		r.Step(false, false, M::kGuestMenu, 1500);
+		CHECK(r.closes == 0 && r.guestStartMs == 0);
+	}
+	{  // ...Start still held from the cut chord, View let go and held again: the new hold's menu is the player's, no close tap
+		GateRun r;
+		r.Step(false, true, M::kSnake, 500);
+		r.Step(true, true, M::kSnake, 100);       // the cut
+		r.Step(true, false, M::kSnake, 100);
+		r.Clear();
+		r.Step(true, true, M::kSnake, 440);       // View again: its hold at 400 ms (no chord: Start is the cut chord's)
+		CHECK(r.toGuest == 1 && r.guestStartMs == 40 && r.chords == 0);
+		r.Step(true, true, M::kGuestMenu, 600);
+		CHECK(r.closes == 0 && r.guestStartMs == 40 && r.chords == 0);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(r.presses == 0 && !r.sawErStart && !r.sawErView);
+	}
+	{  // ...but the cut hold's own menu, both let go before its close tap: the tap still goes and closes it
+		GateRun r;
+		r.Step(false, true, M::kSnake, 435);
+		r.Step(false, true, M::kGuestMenu, 115);
+		r.Step(true, true, M::kGuestMenu, 50);    // the late Start: the cut
+		r.Clear();
+		r.Step(false, false, M::kGuestMenu, 200);
+		CHECK(r.closes == 1 && r.guestStartMs >= 115 && r.guestStartMs <= 125 && r.chords == 0);
+		r.Step(false, false, M::kSnake, 300);
+		CHECK(r.presses == 0 && !r.sawErStart && !r.sawErView);
+	}
 }
 
 // The test virtual pad (er/VirtualPad.h, console `input virtualpad on|exclusive|shared|off`): exclusive hides every real pad

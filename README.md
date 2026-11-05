@@ -333,11 +333,47 @@ enemies:
   `PhantomRingGuest.ini` (the treadmill, the attack orders, the shown speed, Wait in Elden Ring's terms); with the host's `[Dog] enabled
   = false` (or `tools/pr er "dog all off"` for one session) the call menu's orders are MGSV's own, as in 0.7.0.
 
+**Quiet** (new in 0.9.0, run live with both games, **on by default**; nothing of it runs while she isn't out). She is a sniper
+buddy: she holds a post of her own in Elden Ring, spots enemies, and rests with Snake at the grace.
+- **Getting her.** iDroid > Missions > Buddy Support > **Quiet (Attack)**: pick a sniping point on MGSV's map, A (GMP in memory
+  only); she drops in and then takes her post in Elden Ring. If your save has her, she deploys as she is. If it doesn't -- she left
+  after "A Quiet Exit" (most finished saves), she was recruited but isn't deployable yet, or you never recruited her (or killed her) --
+  PhantomRing **borrows her for the session**: she is listed in Buddy Support from the start, **in memory only**: MGSV never saves
+  under PhantomRing, and her bits are put back (checked byte by byte) when MGSV or Elden Ring closes. `[Quiet] Borrow` in
+  `PhantomRingGuest.ini`: `always` (the default, any save), `memory` (only a Quiet your save has had), `off`. All four save states
+  passed a live round trip (your own "gone" save; the other three simulated in memory); a Quiet in sickbay or dying is not borrowed.
+  Her bond is your save's (0 if she left), so Take aim / Cover me may be missing from the call menu on some saves. The borrow waits
+  for Elden Ring's Quiet layer (`[Quiet] enabled` in `PhantomRingHost.ini`): without it she would be 0.8.0's Quiet.
+- **Her post.** With enemies within 60 m she takes ground 25-55 m from Snake with a clear line to him and to them; when it is calm,
+  8-16 m. While Snake travels with no enemy near she is cloaked and unseen, as MGSV's Quiet is, and appears at her next post when he
+  stops; a post change you can see is her cloak's short fade. Indoors and in tight places there is often no post: she stays unseen.
+  While she is out, Quiet (Scout) / (Attack) are greyed (her post is Elden Ring's); Dismiss Quiet works as usual.
+- **Spotting.** From her post she marks hostiles she can see within 60 m (red marks, "Quiet: Enemy spotted (3 nearby)"): never a
+  boss, a neutral character or a spirit summon.
+- **Her orders are opt-in in 0.9.0.** MGSV's own Quiet offers Fire only while she snipes from one of MGSV's sniping points: she goes
+  there cloaked 10-20 s after you mark an enemy, and not every time (live: 1 of 1 tries in this round, 4 of 10 in the MGSV test, left her
+  beside Snake with Fire greyed). So by default the call menu's Fire / Take aim stay greyed beside her, Cover me says "not in Elden Ring
+  yet" and the talk entry only shows "Quiet". To try them: `[Quiet] orders = true` in `PhantomRingHost.ini` (or `tools/pr er "quiet
+  orders on"` for a session). Look at an enemy through the binoculars (RB): a ring shows the one she would take, white until MGSV's
+  Fire is live, then teal; hold LB, Fire (up-right), let the stick go, click. Her round lands only if Elden Ring's line from her post
+  is clear: Wicked Butterfly kills an ordinary soldier, Guilty Butterfly puts him to sleep, Sinful Butterfly hits hard and knocks him
+  down. "no target" = no enemy picked; "no shot (MGSV)" = MGSV wouldn't take the shot. **Never a friend** (a merchant, a quest
+  character, a spirit summon, a neutral one) **and never a boss**: the pick refuses them and the round checks again.
+- Elden Ring's enemies don't attack her. In Tarnished mode she holds her post and stays out of the fight.
+
+**Resting with Quiet.** Rest at a grace (Y) with Quiet out: she comes to the grace while the screen is black, and about a second
+after the grace menu is up she appears (her cloak's fade) crouched beside the grace with her rifle held upright, about 2 m from the
+light, beside Snake and clear of the menu. She stays through the menu, Pass time and Level Up. When Snake walks away she stays at that
+spot (it is her post) until her post rule moves her on (faded in view), keeping her relaxed crouch at her posts until she is next
+unseen (Snake on the move); then she aims again. No rest in Tarnished mode, nor when a grace starts a talk (no black screen, so
+nothing moves), nor with the Quiet layer off. Switches: `[Grace] buddy_rest` in `PhantomRingHost.ini`, `[Quiet] RestAtGrace` in
+`PhantomRingGuest.ini`; `[Quiet] enabled = false` (or `tools/pr er "quiet off"` for a session) makes her 0.8.0's Quiet again.
+
 **Changing or dismissing the buddy** (MGSV's own menu): hold View for the iDroid, RB to **Missions** > **Buddy Support**: pick
-**D-Horse**, **D-Dog** or **D-Walker** and confirm the drop point (A; GMP is spent in memory only, MGSV never saves), or **Dismiss**
+**D-Horse**, **D-Dog**, **D-Walker** or **Quiet (Attack)** and confirm the drop point (A; GMP is spent in memory only, MGSV never saves), or **Dismiss**
 the one that is out. MGSV sends the old one away (a dismissed D-Horse leaves under a Fulton balloon, in Elden Ring's sky too) and
 the new one arrives in 10-30 s; the corner says "Buddy: D-Dog is out" / "D-Walker dismissed -- no buddy now". With no buddy out
-nothing is drawn or placed. D-Dog: [Ordering D-Dog](#how-to-play) above (before 0.8.0 he only followed Snake). Quiet is untested. The next
+nothing is drawn or placed. D-Dog: [Ordering D-Dog](#how-to-play) above (before 0.8.0 he only followed Snake); Quiet: above. The next
 launch deploys the ini's buddy again (`[Buddy] Type`).
 
 **D-Horse instead of D-Walker** (optional): set `[Buddy] Type = horse` in `PhantomRingGuest.ini` (in MGSV's folder) before
@@ -632,7 +668,18 @@ The 2026-10-14 features, their switches, how to test them and what live passes A
   drawn on top of it for a moment. "D-Dog: Found enemy" is PhantomRing's line (MGSV's own announcement isn't used). Not tried live:
   `[Dog] bosses = stagger`, a real Elden Ring dog as the target. Turn it off with `[Dog] enabled = false` in `PhantomRingHost.ini`.
 - D-Horse: galloping in Limgrave's broken ground often ends at a wall or off a cliff (three fall deaths around Agheel Lake in
-  pass B); the road east from Gatefront is a good 300 m run. Quiet is untested.
+  pass B); the road east from Gatefront is a good 300 m run.
+- Quiet (0.9.0): her **orders are opt-in** (above: MGSV offers Fire only once she snipes from one of its own sniping points, which she
+  reaches cloaked 10-20 s after the binocular look, not every time); Cover me and Shoot this are not in Elden Ring yet. At a grace
+  she appears ~1-2 s after the menu comes up (MGSV takes ~3 s to settle her into her rest; she is faded in once settled rather than
+  shown mid-hop). After a rest she keeps her relaxed crouch at her posts until she is next unseen. MGSV's green marker over her sits
+  on MGSV's flat ground, so at a post up on a ledge it shows a few metres under her. Indoors (Rampart Tower) she is mostly unseen
+  (no post passes). MGSV's own "Quiet: On the move" line shows when she relocates. Not tried live: a rest at a stairs, scaffold or
+  cave grace, a rest that turns into a talk (safe by construction: no black screen, no seat).
+- Buddies (0.9.0): a buddy MGSV takes out of the fight by itself within 30 s of an iDroid visit (20 s for D-Walker and D-Horse)
+  is taken for a dismissal and isn't called back -- e.g. D-Dog hit by the Support Fire you just called (the play-test: the strike
+  17 s after the iDroid closed, D-Dog gone 11 s later). Deploy it again from the iDroid. Dismissals themselves are told by MGSV's
+  own leave order; the time window is only the fallback, to be narrowed to D-Horse in a later release.
 - At a ladder's top, walking into the hole drops Snake down the shaft (press Y on "Descend" instead).
 - `[Puppet] motion = root_motion` (Elden Ring's own movement for the hidden Tarnished) is there to try
   (`tools/pr er "puppet motion root_motion"`); `kinematic` stays the default: neither is clearly better yet.
@@ -723,6 +770,24 @@ run the offline tests above first, and keep to the project's rules:
 | 7 | Windows players ([docs/WINDOWS.md](docs/WINDOWS.md)) | built, tested under Wine; not yet run on Windows |
 | 8 | Seamless Co-op | planned |
 | -- | D-Dog as a real battle buddy (spotting, Bark, Wait, the attack orders and Get it on Elden Ring's enemies with MGSV's own bite) | done, live (0.8.0), on by default: [Ordering D-Dog](#how-to-play), [docs/research/ddog.md](docs/research/ddog.md) |
+| -- | Quiet as a sniper buddy (any save; her posts, spotting, resting with Snake at a grace; Fire / Take aim on Elden Ring's enemies) | done, live (0.9.0), on by default except her orders (opt-in: MGSV offers Fire only from its own sniping points): [Quiet](#how-to-play), [docs/research/quiet.md](docs/research/quiet.md) |
+
+## What's new in 0.9.0
+
+The player's ask, "let's start on adding Quiet ... have her rest with us at Grace sites", run live with both games ([Quiet](#how-to-play)):
+- **Quiet on any save**, by default: if your save doesn't have her (she left after "A Quiet Exit", or you never got her), she is
+  borrowed for the session in memory and listed in the iDroid's Buddy Support. MGSV's save is never written (checked byte by byte).
+- **She holds a sniper's post in Elden Ring**: 25-55 m off with a line to Snake and the enemies when they are near, 8-16 m when it is
+  calm, cloaked and unseen while Snake travels, faded in at her next post when he stops. No more 6 m jumps every few seconds.
+- **She spots** hostile enemies she can see from her post (red marks, "Quiet: Enemy spotted").
+- **She rests with you at a Site of Grace**: crouched beside the grace with her rifle held upright, through the menu, Pass time and
+  Level Up; when you walk away she stays at the spot until her post rule moves her on.
+- **Her Fire / Take aim on Elden Ring's enemies** is built and works when MGSV lets her fire, but MGSV offers Fire only from its own
+  sniping points: **opt-in** (`[Quiet] orders = true` in `PhantomRingHost.ini`) until that is solved.
+- Fixed: after the grace's **Pass time**, Snake had the pad inside the grace menu (B went to MGSV, nothing closed the menu) since
+  0.7.0's Elden Ring bars; Quiet's orders no longer pause D-Walker's following; the iDroid no longer reopens by itself when you
+  close it within a second of opening it; a buddy you send away with DISMISS (Quiet from a far post) is no longer called back.
+- Protocol v18: both plugins must come from this release.
 
 ## What's new in 0.8.0
 
@@ -805,6 +870,31 @@ From the feedback on the video ("Snake can't jump", "it switches back to the Tar
 - Protocol v15: both plugins must come from this release.
 
 ## Changes
+
+**0.9.0-alpha (2026-11-04).** Quiet as a sniper buddy and the grace rest (protocol v18: `kHostQuietLayer`, `kHostAtGrace`, HostState's
+grace and post fields with the guest's echoes, `kBuddyCloaked` / `kBuddySeated` / `kBuddyAtPost` / Quiet's weapon / `kBuddyQuietCover` /
+`kBuddyCanRest` / `kBuddyQuietMarked`, `kActorQuietTarget` / `kActorQuietThreat`, `kGEvQuietShot`; [What's new in
+0.9.0](#whats-new-in-090); docs/research/quiet.md): the borrow on any save (memory only, by her save bits, put back with a raw byte
+diff), her location object held at the host's post (the mirror, pulled into MGSV's free apron), posts from Elden Ring's terrain,
+spotting, the grace rest inside Elden Ring's observed black (its InGame fade plate), her orders on the host's pick with MGSV's own
+shot (opt-in). Fixes of the round's code review: an unknown rifle is never lethal (refused; her dash attacks are no order's round);
+the layer needs posts (enabled without posts swallowed every Fire); her "can't" ends the order at once; EnableFire / EnableDying
+sent again after a sandbox load and only counted when MGSV took them; a get-up never sent to a later Quiet; nothing placed while
+Snake climbs, rides, plays the Tarnished or hangs on the Fulton anchor; her own treadmill shift no longer read as a dash (300 ms
+hidden at every jump); the borrow waits for the host's layer and comes back when Elden Ring does; her rifle kept by its mesh moving
+with her (not by distance alone); the console's data races; the far-ground rule takes the floor nearest her and none beyond
+lift_max (she floated up to 10 m); the seat's fallback keeps the character and reach rules; NPC phantoms (Varre) kept at a distance
+by posts and seats; no pop-in after a rest that didn't seat her; graceSeq's contract. Found in the integration run and fixed: the
+iDroid's Quiet (Scout) / (Attack) were greyed from the boot, so no one could deploy her (now only while she is out); MGSV's Quiet
+settles into her rest ~3 s after her order (she hopped beside the grace in view): she is echoed once settled and faded in; her get-up
+order made her dash cloaked in view (she now keeps her rest at her posts until she is unseen); a treadmill jump read through the
+host's lagging post moved her 6 m and back (the holder waits 250 ms after a jump); Pass time at a grace gave Snake the pad inside the
+grace menu (Elden Ring's bars stay Elden Ring's at a grace). Found in the player's play-test and fixed: the iDroid closed within 1.2 s
+of opening reopened by itself (the rest of the View hold's Start reached MGSV again; any MGSV menu now ends that Start); DISMISS
+QUIET from her far post (12.8 s to go) was called back (the guest goes by MGSV's own `leave` order to the buddy from the iDroid; the
+old window, now 20-30 s per buddy, is only the fallback); a cut iDroid hold's close tap could shut the next hold's iDroid
+(`idroid_open_ms` <= `chord_window_ms` only). Defaults: `[Quiet] enabled`, `posts`, `spot`, `indicator`, `order_text`
+and `[Grace] buddy_rest` on; `[Quiet] orders` (new) off; the guest's `Borrow = always`, `BorrowListInIdroid = true`.
 
 **0.8.0-alpha (2026-11-04).** D-Dog as a battle buddy (protocol v17: `kActorDogTarget`, `kBuddyEngaged`, `kGEvDogAttack`,
 `kHostDogLayer`, D-Dog's style in buddyFlags; [What's new in 0.8.0](#whats-new-in-080)): the dog moved with MGSV's treadmill, and

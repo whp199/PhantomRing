@@ -113,6 +113,15 @@ static void TestShippedIni(const wchar_t* a_path)
 	// [Dog] (protocol v17; on since the guest's live pass M3, 2026-11-03; Announce is parsed only)
 	CHECK(shipped.dog == d.dog && d.dog.enabled && d.dog.treadmill && d.dog.attack && d.dog.keepDrawsNearProxy && !d.dog.announce &&
 	      d.dog.targetPuppet && d.dog.whistleBack && d.dog.realizeTimeoutMs == 1500 && d.dog.reachTimeoutMs == 12000 && d.dog.busyMaxMs == 10000);
+	// [Quiet] (round M2): the design's defaults as M1 settled them live; the borrow on for every save (the player's answer to open
+	// question 1, 2026-11-04: Borrow = always, BorrowListInIdroid = true), Cover me not built (off), SitPose kneel (Q2)
+	using phantom::guest::QuietBorrow;
+	const std::vector<float> kRegion{ 45.0f, 60.0f, 60.0f, 60.0f, 60.0f, 60.0f, 60.0f, 40.0f };  // Q7, live M1
+	CHECK(shipped.quiet == d.quiet && d.quiet.enabled && d.quiet.borrow == QuietBorrow::kAlways && d.quiet.borrowListInIdroid && d.quiet.treadmill &&
+	      d.quiet.orders && d.quiet.markProxy && d.quiet.keepMarks && !d.quiet.cover && d.quiet.restAtGrace && d.quiet.takeOverTalk &&
+	      d.quiet.fireOnlyOnOrders && d.quiet.hideMgsvMarkers && d.quiet.strikeMgsvPosts && d.quiet.noDying && d.quiet.mirror && !d.quiet.standInOnBearing &&
+	      d.quiet.mirrorRegion == kRegion &&
+	      d.quiet.sitPose == phantom::guest::QuietSitPose::kKneel && d.quiet.hitTimeoutMs == 8000);
 
 	// And a non-default file parses into what it says.
 	const std::wstring custom = L"test_guest_custom.ini";
@@ -128,6 +137,7 @@ static void TestShippedIni(const wchar_t* a_path)
 	CHECK(c.tranqWeapons.size() == 2 && c.tranqWeapons[0] == 0x10 && c.tranqWeapons[1] == 17);
 	CHECK(c.jumpButton == 0x0040 && c.jumpPassWith == 0x0300 && !c.jumpPassAiming && c.jumpLift == 1.5f);  // L3, LB/RB, no LT, lift capped
 	CHECK(c.dog == d.dog);  // no [Dog] section: the defaults
+	CHECK(c.quiet == d.quiet);  // no [Quiet] section: the defaults
 
 	// [Dog] (protocol v17 scaffolding): values and clamps
 	f = _wfopen(custom.c_str(), L"wb");
@@ -139,6 +149,28 @@ static void TestShippedIni(const wchar_t* a_path)
 	dc.Load(custom);
 	CHECK(dc.dog.enabled && dc.dog.treadmill && dc.dog.leash == 1.0f && dc.dog.attack && !dc.dog.targetPuppet && dc.dog.realizeTimeoutMs == 100 &&
 	      dc.dog.busyMaxMs == 6000 && dc.dog.announce && dc.dog.reachTimeoutMs == d.dog.reachTimeoutMs && dc.dog.keepDrawsNearProxy == d.dog.keepDrawsNearProxy);
+
+	// [Quiet] (protocol v18 scaffolding): values, the words, MirrorRegion's forms, clamps
+	f = _wfopen(custom.c_str(), L"wb");
+	std::fputs("[Quiet]\nEnabled = true\nBorrow = Always\nBorrowListInIdroid = true\nMirrorRegion = 10, 12, 14, 16, 18, 20, 22, 500\n"
+	           "MirrorHeight = mapped\nStandInHeight = ground\nSitPose = kneel\nSitPlacement = reload\nPostTolerance = -2\nHitTimeoutMs = 9000\n"
+	           "RestAtGrace = true\nOrders = false\n",
+		f);
+	std::fclose(f);
+	Config qc;
+	qc.Load(custom);
+	using phantom::guest::QuietBorrow;
+	using phantom::guest::QuietHeight;
+	CHECK(qc.quiet.enabled && qc.quiet.borrow == QuietBorrow::kAlways && qc.quiet.borrowListInIdroid && qc.quiet.mirrorRegion.size() == 8 &&
+	      qc.quiet.mirrorRegion[7] == 200.0f && qc.quiet.mirrorHeight == QuietHeight::kMapped && qc.quiet.standInHeight == QuietHeight::kGround &&
+	      qc.quiet.sitPose == phantom::guest::QuietSitPose::kKneel && qc.quiet.sitPlacement == phantom::guest::QuietSitPlacement::kReload &&
+	      qc.quiet.postTolerance == 0.0f && qc.quiet.hitTimeoutMs == 9000 && qc.quiet.restAtGrace && !qc.quiet.orders);
+	f = _wfopen(custom.c_str(), L"wb");
+	std::fputs("[Quiet]\nBorrow = sometimes\nMirrorRegion = 10, 12\nSitPose = lie\n", f);  // unknown words: the defaults
+	std::fclose(f);
+	Config qb;
+	qb.Load(custom);
+	CHECK(qb.quiet == d.quiet);  // unknown words and a 2-bearing region keep the defaults
 }
 
 // The real guest link (mgsv/Link.cpp) against a live host on a_where -- fake_er.py or the real host

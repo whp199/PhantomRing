@@ -2,8 +2,10 @@
 # publish the Windows zip and the Linux tarball as a GitHub pre-release.
 #
 # The toolchain is a pinned Fedora container: MinGW-w64 GCC (the code needs C++23 std::format/std::expected: GCC >= 13),
-# wine for the tests that run the Windows binaries, Xvfb so wine has a display. Reproduce a run locally:
-#   cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake -DCMAKE_BUILD_TYPE=Release
+# wine for the tests that run the Windows binaries, Xvfb so wine has a display, and Lua 5.1.5's sources (lua.org's tarball,
+# sha256-pinned) for check_guest's test_guest_pump. Reproduce a run locally:
+#   cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake -DCMAKE_BUILD_TYPE=Release \
+#     -DPHANTOM_LUA51_SRC=<lua-5.1.5>/src
 #   cmake --build build
 #   export WINEPREFIX=$(mktemp -d) PHANTOMRING_WINEPREFIX=$WINEPREFIX
 #   python3 tools/phantomring/test_launcher.py && python3 tools/phantomring/test_fakes.py && python3 tools/phantomring/test_replay.py
@@ -11,7 +13,7 @@
 #   xvfb-run -a python3 tools/phantomring/test_layout.py && xvfb-run -a python3 tools/phantomring/test_plugins.py
 #   python3 tools/phantomring/test_release.py
 # Skipped here because they need the games or their data: tests/verify_er_addresses.cpp, mgsv/verify_addresses.py,
-# check_host's regulation-backed rows (no build/er_params), check_guest's test_guest_pump (Lua 5.1.5 sources).
+# check_host's regulation-backed rows (no build/er_params).
 
 name: CI
 
@@ -77,17 +79,35 @@ jobs:
           python3 --version
           test -f extern/minhook/src/hook.c
 
+      - name: Lua 5.1.5 sources (check_guest's test_guest_pump)
+        run: |
+          # MGSV's Lua: the pump test runs mgsv/Pump.cpp against a real 5.1.5 VM. Pinned to the sha256 lua.org publishes for
+          # it (https://www.lua.org/ftp/), checked before anything is unpacked; outside the checkout, which stays clean.
+          mkdir -p /tmp/lua51 && cd /tmp/lua51
+          for try in 1 2 3; do
+            python3 -I -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' \
+              https://www.lua.org/ftp/lua-5.1.5.tar.gz lua-5.1.5.tar.gz && break
+            sleep 10
+          done
+          echo "2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333  lua-5.1.5.tar.gz" | sha256sum -c -
+          cmake -E tar xzf lua-5.1.5.tar.gz
+          test -f lua-5.1.5/src/lapi.c
+
       - name: Configure
         run: |
           lua=$(command -v lua5.1 || command -v lua-5.1 || command -v lua51 || true)
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-w64-x86_64.cmake -DCMAKE_BUILD_TYPE=Release \
-            -DPHANTOM_WINEPREFIX="$WINEPREFIX" ${lua:+-DPHANTOM_LUA51="$lua"}
+            -DPHANTOM_WINEPREFIX="$WINEPREFIX" ${lua:+-DPHANTOM_LUA51="$lua"} \
+            -DPHANTOM_LUA51_SRC=/tmp/lua51/lua-5.1.5/src
 
       - name: Build
         run: |
           cmake --build build
           cat build/generated/phantomring_version.h
+          # check_guest skips the pump test quietly when it isn't built: CI never built it before, and from 0.7.0 until 0.9.0
+          # it didn't even link without anyone noticing.
+          test -f build/test_guest_pump.exe || { echo "test_guest_pump was not built (PHANTOM_LUA51_SRC)"; exit 1; }
 
       - name: Wine prefix
         run: |

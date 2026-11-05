@@ -135,6 +135,18 @@ namespace phantom::guest::state
 	void SetMenuOpen(bool a_open);
 	bool MenuOpen();
 
+	// MGSV's buddy system ordered the buddy that is out to leave (its message `leave`, BuddyLogic.h): the iDroid sent it away. Noted by
+	// the buddies' message-handler detours (any thread) with whether an MGSV menu was open then; Pump.cpp's AdoptBuddy takes it.
+	struct BuddyLeave
+	{
+		std::uint32_t seq{ 0 };     // bumps with every leave order (0 = none since the DLL loaded)
+		int           type{ -1 };   // BuddyType of the buddy told to leave
+		std::uint64_t ms{ 0 };      // GetTickCount64 when its handler took it
+		bool          menu{ false };  // MenuOpen() at that moment
+	};
+	void       NoteBuddyLeave(int a_type, std::uint64_t a_ms);
+	BuddyLeave LastBuddyLeave();
+
 	// Frame -> pump: Lua commands for the next Tick ("warp x y z yaw;owarp id x y z yaw").
 	void        QueueCommand(const std::string& a_command);
 	std::string TakeCommands();

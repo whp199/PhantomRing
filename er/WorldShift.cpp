@@ -4,11 +4,13 @@
 #include "Explosion.h"
 #include "Fulton.h"
 #include "Game.h"
+#include "GraceRest.h"
 #include "Host.h"
 #include "Log.h"
 #include "Decoys.h"
 #include "Mines.h"
 #include "Puppet.h"
+#include "Quiet.h"
 #include "Rounds.h"
 #include "Tasks.h"
 #include "Throw.h"
@@ -63,6 +65,8 @@ namespace phantom::er::WorldShift
 			Explosion::OnWorldShift(*d);
 			Fulton::OnWorldShift(*d);
 			Host::OnWorldShift(*d);
+			Quiet::OnWorldShift(*d);      // (v18) her post, the search in flight, the fade's places
+			GraceRest::OnWorldShift(*d);  // (v18) the grace's centre and the seat
 		}
 
 		void OnEnd(float)

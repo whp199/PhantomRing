@@ -1,0 +1,2340 @@
+{
+ "label": "firststep",
+ "S": [
+  -4.2327,
+  2.6502,
+  0.4313
+ ],
+ "enemies": [
+  {
+   "npc": 60600010,
+   "team": 6,
+   "hp": 55,
+   "p": [
+    -29.67,
+    -9.76,
+    26.24
+   ]
+  },
+  {
+   "npc": 60600010,
+   "team": 6,
+   "hp": 55,
+   "p": [
+    -32.76,
+    -10.1,
+    26.63
+   ]
+  },
+  {
+   "npc": 60010010,
+   "team": 6,
+   "hp": 27,
+   "p": [
+    -44.5,
+    6.39,
+    -28.69
+   ]
+  },
+  {
+   "npc": 60010010,
+   "team": 6,
+   "hp": 27,
+   "p": [
+    -43.87,
+    6.87,
+    -30.78
+   ]
+  },
+  {
+   "npc": 60600010,
+   "team": 6,
+   "hp": 55,
+   "p": [
+    -22.81,
+    -7.29,
+    52.36
+   ]
+  }
+ ],
+ "spots": [
+  {
+   "r": 20,
+   "deg": 0,
+   "x": 15.77,
+   "z": 0.43,
+   "gy": -2.46,
+   "dy": -5.11,
+   "ny": 0.93,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 52.8
+  },
+  {
+   "r": 20,
+   "deg": 15,
+   "x": 15.09,
+   "z": 5.61,
+   "gy": -3.71,
+   "dy": -6.36,
+   "ny": 0.81,
+   "layer": "0x39",
+   "cover_above": -0.16,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 49.7
+  },
+  {
+   "r": 20,
+   "deg": 30,
+   "x": 13.09,
+   "z": 10.43,
+   "gy": -6.02,
+   "dy": -8.67,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.07,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 45.7
+  },
+  {
+   "r": 20,
+   "deg": 45,
+   "x": 9.91,
+   "z": 14.57,
+   "gy": -7.22,
+   "dy": -9.87,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.07,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 41.3
+  },
+  {
+   "r": 20,
+   "deg": 60,
+   "x": 5.77,
+   "z": 17.75,
+   "gy": -7.85,
+   "dy": -10.5,
+   "ny": 0.97,
+   "layer": "0x39",
+   "cover_above": -0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 36.5
+  },
+  {
+   "r": 20,
+   "deg": 75,
+   "x": 0.94,
+   "z": 19.75,
+   "gy": -7.9,
+   "dy": -10.55,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": -0.04,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 31.3
+  },
+  {
+   "r": 20,
+   "deg": 90,
+   "x": -4.23,
+   "z": 20.43,
+   "gy": -7.89,
+   "dy": -10.54,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": 0.05,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 26.2
+  },
+  {
+   "r": 20,
+   "deg": 105,
+   "x": -9.41,
+   "z": 19.75,
+   "gy": -7.51,
+   "dy": -10.17,
+   "ny": 0.97,
+   "layer": "0x39",
+   "cover_above": -0.05,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 21.4
+  },
+  {
+   "r": 20,
+   "deg": 120,
+   "x": -14.23,
+   "z": 17.75,
+   "gy": -7.29,
+   "dy": -9.94,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.14,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 17.8
+  },
+  {
+   "r": 20,
+   "deg": 135,
+   "x": -18.37,
+   "z": 14.57,
+   "gy": -6.0,
+   "dy": -8.65,
+   "ny": 0.9,
+   "layer": "0x39",
+   "cover_above": -0.06,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 16.7
+  },
+  {
+   "r": 20,
+   "deg": 150,
+   "x": -21.55,
+   "z": 10.43,
+   "gy": -5.63,
+   "dy": -8.28,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.05,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 18.2
+  },
+  {
+   "r": 20,
+   "deg": 165,
+   "x": -23.55,
+   "z": 5.61,
+   "gy": -4.99,
+   "dy": -7.64,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 22.0
+  },
+  {
+   "r": 20,
+   "deg": 180,
+   "x": -24.23,
+   "z": 0.43,
+   "gy": -3.5,
+   "dy": -6.15,
+   "ny": 0.81,
+   "layer": "0x39",
+   "cover_above": -0.19,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 27.1
+  },
+  {
+   "r": 20,
+   "deg": 195,
+   "x": -23.55,
+   "z": -4.75,
+   "gy": 0.4,
+   "dy": -2.25,
+   "ny": 0.79,
+   "layer": "0x39",
+   "cover_above": -0.11,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 32.4
+  },
+  {
+   "r": 20,
+   "deg": 210,
+   "x": -21.55,
+   "z": -9.57,
+   "gy": 2.99,
+   "dy": 0.34,
+   "ny": 0.77,
+   "layer": "0x39",
+   "cover_above": -0.08,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 30.1
+  },
+  {
+   "r": 20,
+   "deg": 225,
+   "x": -18.37,
+   "z": -13.71,
+   "gy": 3.07,
+   "dy": 0.42,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.41,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 30.3
+  },
+  {
+   "r": 20,
+   "deg": 240,
+   "x": -14.23,
+   "z": -16.89,
+   "gy": 3.47,
+   "dy": 0.82,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.1,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 32.6
+  },
+  {
+   "r": 20,
+   "deg": 255,
+   "x": -9.41,
+   "z": -18.89,
+   "gy": 3.49,
+   "dy": 0.84,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.03,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60010010
+   ],
+   "nearest_enemy": 36.5
+  },
+  {
+   "r": 20,
+   "deg": 270,
+   "x": -4.23,
+   "z": -19.57,
+   "gy": 3.54,
+   "dy": 0.89,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 41.3
+  },
+  {
+   "r": 20,
+   "deg": 285,
+   "x": 0.94,
+   "z": -18.89,
+   "gy": 3.38,
+   "dy": 0.73,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 46.5
+  },
+  {
+   "r": 20,
+   "deg": 300,
+   "x": 5.77,
+   "z": -16.89,
+   "gy": 2.99,
+   "dy": 0.34,
+   "ny": 0.97,
+   "layer": "0x39",
+   "cover_above": -0.03,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 51.7
+  },
+  {
+   "r": 20,
+   "deg": 315,
+   "x": 9.91,
+   "z": -13.71,
+   "gy": 2.13,
+   "dy": -0.52,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 56.6
+  },
+  {
+   "r": 20,
+   "deg": 330,
+   "x": 13.09,
+   "z": -9.57,
+   "gy": 2.18,
+   "dy": -0.47,
+   "ny": 0.93,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 57.0
+  },
+  {
+   "r": 20,
+   "deg": 345,
+   "x": 15.09,
+   "z": -4.75,
+   "gy": -0.74,
+   "dy": -3.39,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 55.2
+  },
+  {
+   "r": 30,
+   "deg": 0,
+   "x": 25.77,
+   "z": 0.43,
+   "gy": -2.37,
+   "dy": -5.02,
+   "ny": 0.94,
+   "layer": "0x39",
+   "cover_above": 0.03,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 61.6
+  },
+  {
+   "r": 30,
+   "deg": 15,
+   "x": 24.75,
+   "z": 8.2,
+   "gy": -5.08,
+   "dy": -7.73,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.02,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 57.5
+  },
+  {
+   "r": 30,
+   "deg": 30,
+   "x": 21.75,
+   "z": 15.43,
+   "gy": -7.23,
+   "dy": -9.88,
+   "ny": 0.97,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 52.6
+  },
+  {
+   "r": 30,
+   "deg": 45,
+   "x": 16.98,
+   "z": 21.64,
+   "gy": -8.52,
+   "dy": -11.17,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": -0.11,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 46.9
+  },
+  {
+   "r": 30,
+   "deg": 60,
+   "x": 10.77,
+   "z": 26.41,
+   "gy": -9.16,
+   "dy": -11.81,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 40.4
+  },
+  {
+   "r": 30,
+   "deg": 75,
+   "x": 3.53,
+   "z": 29.41,
+   "gy": -9.54,
+   "dy": -12.19,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 33.4
+  },
+  {
+   "r": 30,
+   "deg": 90,
+   "x": -4.23,
+   "z": 30.43,
+   "gy": -9.34,
+   "dy": -11.99,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.03,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 25.8
+  },
+  {
+   "r": 30,
+   "deg": 105,
+   "x": -12.0,
+   "z": 29.41,
+   "gy": -9.12,
+   "dy": -11.78,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.04,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 18.0
+  },
+  {
+   "r": 30,
+   "deg": 120,
+   "x": -19.23,
+   "z": 26.41,
+   "gy": -9.05,
+   "dy": -11.7,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 10.5
+  },
+  {
+   "r": 30,
+   "deg": 135,
+   "x": -25.45,
+   "z": 21.64,
+   "gy": -8.78,
+   "dy": -11.43,
+   "ny": 0.97,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 6.3
+  },
+  {
+   "r": 30,
+   "deg": 150,
+   "x": -30.21,
+   "z": 15.43,
+   "gy": -8.2,
+   "dy": -10.85,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 10.9
+  },
+  {
+   "r": 30,
+   "deg": 165,
+   "x": -33.21,
+   "z": 8.2,
+   "gy": -7.09,
+   "dy": -9.74,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 18.6
+  },
+  {
+   "r": 30,
+   "deg": 180,
+   "x": -34.23,
+   "z": 0.43,
+   "gy": -5.2,
+   "dy": -7.85,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": 0.06,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 26.6
+  },
+  {
+   "r": 30,
+   "deg": 195,
+   "x": -33.21,
+   "z": -7.33,
+   "gy": 1.71,
+   "dy": -0.94,
+   "ny": 0.87,
+   "layer": "0x39",
+   "cover_above": -0.1,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 24.6
+  },
+  {
+   "r": 30,
+   "deg": 210,
+   "x": -30.21,
+   "z": -14.57,
+   "gy": 2.67,
+   "dy": 0.02,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.04,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 20.4
+  },
+  {
+   "r": 30,
+   "deg": 225,
+   "x": -25.45,
+   "z": -20.78,
+   "gy": 3.2,
+   "dy": 0.55,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 20.9
+  },
+  {
+   "r": 30,
+   "deg": 240,
+   "x": -19.23,
+   "z": -25.55,
+   "gy": 3.7,
+   "dy": 1.05,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60010010
+   ],
+   "nearest_enemy": 25.4
+  },
+  {
+   "r": 30,
+   "deg": 255,
+   "x": -12.0,
+   "z": -28.55,
+   "gy": 4.13,
+   "dy": 1.48,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.04,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 32.1
+  },
+  {
+   "r": 30,
+   "deg": 270,
+   "x": -4.23,
+   "z": -29.57,
+   "gy": 4.44,
+   "dy": 1.79,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.03,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60010010
+   ],
+   "nearest_enemy": 39.7
+  },
+  {
+   "r": 30,
+   "deg": 285,
+   "x": 3.53,
+   "z": -28.55,
+   "gy": 17.59,
+   "dy": 14.94,
+   "ny": 0.1,
+   "layer": "0x39",
+   "cover_above": 2.45,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 3,
+   "seen": [
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 48.7
+  },
+  {
+   "r": 30,
+   "deg": 300,
+   "x": 10.77,
+   "z": -25.55,
+   "gy": 20.45,
+   "dy": 17.8,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 3,
+   "seen": [
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 56.5
+  },
+  {
+   "r": 30,
+   "deg": 315,
+   "x": 16.98,
+   "z": -20.78,
+   "gy": 3.68,
+   "dy": 1.03,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.0,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60010010
+   ],
+   "nearest_enemy": 61.7
+  },
+  {
+   "r": 30,
+   "deg": 330,
+   "x": 21.75,
+   "z": -14.57,
+   "gy": 2.21,
+   "dy": -0.44,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 66.7
+  },
+  {
+   "r": 30,
+   "deg": 345,
+   "x": 24.75,
+   "z": -7.33,
+   "gy": 2.25,
+   "dy": -0.4,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.05,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60010010
+   ],
+   "nearest_enemy": 65.1
+  },
+  {
+   "r": 40,
+   "deg": 0,
+   "x": 35.77,
+   "z": 0.43,
+   "gy": -2.2,
+   "dy": -4.85,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 70.7
+  },
+  {
+   "r": 40,
+   "deg": 15,
+   "x": 34.4,
+   "z": 10.78,
+   "gy": -5.17,
+   "dy": -7.82,
+   "ny": 0.72,
+   "layer": "0x39",
+   "cover_above": -0.07,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 66.1
+  },
+  {
+   "r": 40,
+   "deg": 30,
+   "x": 30.41,
+   "z": 20.43,
+   "gy": -8.21,
+   "dy": -10.86,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": -0.03,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 60.4
+  },
+  {
+   "r": 40,
+   "deg": 45,
+   "x": 24.05,
+   "z": 28.72,
+   "gy": -9.25,
+   "dy": -11.9,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 52.5
+  },
+  {
+   "r": 40,
+   "deg": 60,
+   "x": 15.77,
+   "z": 35.07,
+   "gy": -9.53,
+   "dy": -12.18,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 42.3
+  },
+  {
+   "r": 40,
+   "deg": 75,
+   "x": 6.12,
+   "z": 39.07,
+   "gy": -9.74,
+   "dy": -12.39,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 31.9
+  },
+  {
+   "r": 40,
+   "deg": 90,
+   "x": -4.23,
+   "z": 40.43,
+   "gy": -9.66,
+   "dy": -12.31,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 4,
+   "seen": [
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 22.2
+  },
+  {
+   "r": 40,
+   "deg": 105,
+   "x": -14.59,
+   "z": 39.07,
+   "gy": -9.29,
+   "dy": -11.95,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 15.8
+  },
+  {
+   "r": 40,
+   "deg": 120,
+   "x": -24.23,
+   "z": 35.07,
+   "gy": -9.41,
+   "dy": -12.06,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 10.4
+  },
+  {
+   "r": 40,
+   "deg": 135,
+   "x": -32.52,
+   "z": 28.72,
+   "gy": -10.1,
+   "dy": -12.75,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 2.1
+  },
+  {
+   "r": 40,
+   "deg": 150,
+   "x": -38.87,
+   "z": 20.43,
+   "gy": -10.36,
+   "dy": -13.01,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": 0.03,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 8.7
+  },
+  {
+   "r": 40,
+   "deg": 165,
+   "x": -42.87,
+   "z": 10.78,
+   "gy": -9.44,
+   "dy": -12.09,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.08,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 18.8
+  },
+  {
+   "r": 40,
+   "deg": 180,
+   "x": -44.23,
+   "z": 0.43,
+   "gy": -6.3,
+   "dy": -8.95,
+   "ny": 0.91,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 28.9
+  },
+  {
+   "r": 40,
+   "deg": 195,
+   "x": -42.87,
+   "z": -9.92,
+   "gy": -3.5,
+   "dy": -6.15,
+   "ny": 0.94,
+   "layer": "0x39",
+   "cover_above": -0.06,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 21.3
+  },
+  {
+   "r": 40,
+   "deg": 210,
+   "x": -38.87,
+   "z": -19.57,
+   "gy": 3.44,
+   "dy": 0.78,
+   "ny": 0.46,
+   "layer": "0x39",
+   "cover_above": -0.19,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 11.1
+  },
+  {
+   "r": 40,
+   "deg": 225,
+   "x": -32.52,
+   "z": -27.85,
+   "gy": 3.78,
+   "dy": 1.13,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.08,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 12.1
+  },
+  {
+   "r": 40,
+   "deg": 240,
+   "x": -24.23,
+   "z": -34.21,
+   "gy": 5.14,
+   "dy": 2.49,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.05,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 20.0
+  },
+  {
+   "r": 40,
+   "deg": 255,
+   "x": -14.59,
+   "z": -38.21,
+   "gy": 4.96,
+   "dy": 2.3,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 30.3
+  },
+  {
+   "r": 40,
+   "deg": 270,
+   "x": -4.23,
+   "z": -39.57,
+   "gy": 5.95,
+   "dy": 3.29,
+   "ny": 0.92,
+   "layer": "0x39",
+   "cover_above": -0.2,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 40.6
+  },
+  {
+   "r": 40,
+   "deg": 285,
+   "x": 6.12,
+   "z": -38.21,
+   "gy": 31.52,
+   "dy": 28.87,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 56.2
+  },
+  {
+   "r": 40,
+   "deg": 300,
+   "x": 15.77,
+   "z": -34.21,
+   "gy": 20.45,
+   "dy": 17.8,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 61.3
+  },
+  {
+   "r": 40,
+   "deg": 315,
+   "x": 24.05,
+   "z": -27.85,
+   "gy": 4.44,
+   "dy": 1.79,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 68.0
+  },
+  {
+   "r": 40,
+   "deg": 330,
+   "x": 30.41,
+   "z": -19.57,
+   "gy": 3.32,
+   "dy": 0.67,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 75.2
+  },
+  {
+   "r": 40,
+   "deg": 345,
+   "x": 34.4,
+   "z": -9.92,
+   "gy": 0.86,
+   "dy": -1.79,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": 0.07,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 74.3
+  },
+  {
+   "r": 50,
+   "deg": 0,
+   "x": 45.77,
+   "z": 0.43,
+   "gy": -2.61,
+   "dy": -5.26,
+   "ny": 0.97,
+   "layer": "0x39",
+   "cover_above": 0.03,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 80.0
+  },
+  {
+   "r": 50,
+   "deg": 15,
+   "x": 44.06,
+   "z": 13.37,
+   "gy": -4.92,
+   "dy": -7.57,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.03,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 75.0
+  },
+  {
+   "r": 50,
+   "deg": 30,
+   "x": 39.07,
+   "z": 25.43,
+   "gy": -8.79,
+   "dy": -11.44,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.08,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 67.5
+  },
+  {
+   "r": 50,
+   "deg": 45,
+   "x": 31.12,
+   "z": 35.79,
+   "gy": -9.37,
+   "dy": -12.02,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 56.5
+  },
+  {
+   "r": 50,
+   "deg": 60,
+   "x": 20.77,
+   "z": 43.73,
+   "gy": -9.49,
+   "dy": -12.14,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 44.5
+  },
+  {
+   "r": 50,
+   "deg": 75,
+   "x": 8.71,
+   "z": 48.73,
+   "gy": -9.37,
+   "dy": -12.02,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 31.8
+  },
+  {
+   "r": 50,
+   "deg": 90,
+   "x": -4.23,
+   "z": 50.43,
+   "gy": -8.64,
+   "dy": -11.29,
+   "ny": 0.99,
+   "layer": "0x38",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 18.7
+  },
+  {
+   "r": 50,
+   "deg": 105,
+   "x": -17.17,
+   "z": 48.73,
+   "gy": -8.24,
+   "dy": -10.89,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 6.8
+  },
+  {
+   "r": 50,
+   "deg": 120,
+   "x": -29.23,
+   "z": 43.73,
+   "gy": -8.99,
+   "dy": -11.65,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 10.9
+  },
+  {
+   "r": 50,
+   "deg": 135,
+   "x": -39.59,
+   "z": 35.79,
+   "gy": -10.31,
+   "dy": -12.96,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 4,
+   "seen": [
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 11.4
+  },
+  {
+   "r": 50,
+   "deg": 150,
+   "x": -47.53,
+   "z": 25.43,
+   "gy": -11.68,
+   "dy": -14.33,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 4,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 14.9
+  },
+  {
+   "r": 50,
+   "deg": 165,
+   "x": -52.53,
+   "z": 13.37,
+   "gy": -11.96,
+   "dy": -14.62,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 23.9
+  },
+  {
+   "r": 50,
+   "deg": 180,
+   "x": -54.23,
+   "z": 0.43,
+   "gy": -11.52,
+   "dy": -14.17,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 33.9
+  },
+  {
+   "r": 50,
+   "deg": 195,
+   "x": -52.53,
+   "z": -12.51,
+   "gy": -9.47,
+   "dy": -12.12,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.08,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 24.0
+  },
+  {
+   "r": 50,
+   "deg": 210,
+   "x": -47.53,
+   "z": -24.57,
+   "gy": 4.46,
+   "dy": 1.81,
+   "ny": 0.93,
+   "layer": "0x39",
+   "cover_above": -0.05,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 5.5
+  },
+  {
+   "r": 50,
+   "deg": 225,
+   "x": -39.59,
+   "z": -34.92,
+   "gy": 5.18,
+   "dy": 2.53,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.03,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 6.2
+  },
+  {
+   "r": 50,
+   "deg": 240,
+   "x": -29.23,
+   "z": -42.87,
+   "gy": 6.15,
+   "dy": 3.5,
+   "ny": 0.9,
+   "layer": "0x39",
+   "cover_above": -0.19,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 19.0
+  },
+  {
+   "r": 50,
+   "deg": 255,
+   "x": -17.17,
+   "z": -47.86,
+   "gy": 6.47,
+   "dy": 3.82,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 31.7
+  },
+  {
+   "r": 50,
+   "deg": 270,
+   "x": -4.23,
+   "z": -49.57,
+   "gy": 6.22,
+   "dy": 3.57,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 43.9
+  },
+  {
+   "r": 50,
+   "deg": 285,
+   "x": 8.71,
+   "z": -47.86,
+   "gy": 31.52,
+   "dy": 28.87,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 60.5
+  },
+  {
+   "r": 50,
+   "deg": 300,
+   "x": 20.77,
+   "z": -42.87,
+   "gy": 20.45,
+   "dy": 17.8,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 67.1
+  },
+  {
+   "r": 50,
+   "deg": 315,
+   "x": 31.12,
+   "z": -34.92,
+   "gy": 5.17,
+   "dy": 2.52,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 75.1
+  },
+  {
+   "r": 50,
+   "deg": 330,
+   "x": 39.07,
+   "z": -24.57,
+   "gy": 4.49,
+   "dy": 1.83,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.07,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 83.2
+  },
+  {
+   "r": 50,
+   "deg": 345,
+   "x": 44.06,
+   "z": -12.51,
+   "gy": 0.72,
+   "dy": -1.93,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": 0.03,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 84.0
+  },
+  {
+   "r": 60,
+   "deg": 0,
+   "x": 55.77,
+   "z": 0.43,
+   "gy": -1.41,
+   "dy": -4.06,
+   "ny": 0.94,
+   "layer": "0x39",
+   "cover_above": -0.06,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 89.6
+  },
+  {
+   "r": 60,
+   "deg": 15,
+   "x": 53.72,
+   "z": 15.96,
+   "gy": -6.82,
+   "dy": -9.47,
+   "ny": 0.97,
+   "layer": "0x39",
+   "cover_above": 0.03,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 84.1
+  },
+  {
+   "r": 60,
+   "deg": 30,
+   "x": 47.73,
+   "z": 30.43,
+   "gy": -9.03,
+   "dy": -11.68,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.04,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 73.9
+  },
+  {
+   "r": 60,
+   "deg": 45,
+   "x": 38.19,
+   "z": 42.86,
+   "gy": -9.46,
+   "dy": -12.11,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 61.8
+  },
+  {
+   "r": 60,
+   "deg": 60,
+   "x": 25.77,
+   "z": 52.39,
+   "gy": -8.83,
+   "dy": -11.48,
+   "ny": 0.99,
+   "layer": "0x38",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 48.6
+  },
+  {
+   "r": 60,
+   "deg": 75,
+   "x": 11.3,
+   "z": 58.39,
+   "gy": -7.74,
+   "dy": -10.39,
+   "ny": 0.99,
+   "layer": "0x38",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 3,
+   "seen": [
+    60600010,
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 34.6
+  },
+  {
+   "r": 60,
+   "deg": 90,
+   "x": -4.23,
+   "z": 60.43,
+   "gy": -6.07,
+   "dy": -8.72,
+   "ny": 0.94,
+   "layer": "0x39",
+   "cover_above": -0.31,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 4,
+   "seen": [
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 20.3
+  },
+  {
+   "r": 60,
+   "deg": 105,
+   "x": -19.76,
+   "z": 58.39,
+   "gy": -6.65,
+   "dy": -9.3,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": -0.11,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 6.8
+  },
+  {
+   "r": 60,
+   "deg": 120,
+   "x": -34.23,
+   "z": 52.39,
+   "gy": -7.95,
+   "dy": -10.6,
+   "ny": 0.98,
+   "layer": "0x38",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 11.4
+  },
+  {
+   "r": 60,
+   "deg": 135,
+   "x": -46.66,
+   "z": 42.86,
+   "gy": -10.0,
+   "dy": -12.65,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.01,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 4,
+   "seen": [
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 21.4
+  },
+  {
+   "r": 60,
+   "deg": 150,
+   "x": -56.19,
+   "z": 30.43,
+   "gy": -11.99,
+   "dy": -14.64,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.04,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 4,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 23.8
+  },
+  {
+   "r": 60,
+   "deg": 165,
+   "x": -62.19,
+   "z": 15.96,
+   "gy": -13.84,
+   "dy": -16.49,
+   "ny": 0.77,
+   "layer": "0x39",
+   "cover_above": -0.14,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 5,
+   "seen": [
+    60600010,
+    60600010,
+    60010010,
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 31.5
+  },
+  {
+   "r": 60,
+   "deg": 180,
+   "x": -64.23,
+   "z": 0.43,
+   "gy": -14.75,
+   "dy": -17.4,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 41.0
+  },
+  {
+   "r": 60,
+   "deg": 195,
+   "x": -62.19,
+   "z": -15.1,
+   "gy": -11.24,
+   "dy": -13.89,
+   "ny": 0.95,
+   "layer": "0x39",
+   "cover_above": -0.08,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60600010,
+    60600010
+   ],
+   "nearest_enemy": 28.4
+  },
+  {
+   "r": 60,
+   "deg": 210,
+   "x": -56.19,
+   "z": -29.57,
+   "gy": -12.95,
+   "dy": -15.6,
+   "ny": 0.98,
+   "layer": "0x39",
+   "cover_above": -0.05,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 22.6
+  },
+  {
+   "r": 60,
+   "deg": 225,
+   "x": -46.66,
+   "z": -42.0,
+   "gy": -20.52,
+   "dy": -23.18,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.07,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 29.7
+  },
+  {
+   "r": 60,
+   "deg": 240,
+   "x": -34.23,
+   "z": -51.53,
+   "gy": -17.58,
+   "dy": -20.23,
+   "ny": 0.19,
+   "layer": "0x38",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 33.5
+  },
+  {
+   "r": 60,
+   "deg": 255,
+   "x": -19.76,
+   "z": -57.52,
+   "gy": 7.52,
+   "dy": 4.87,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.03,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 36.0
+  },
+  {
+   "r": 60,
+   "deg": 270,
+   "x": -4.23,
+   "z": -59.57,
+   "gy": 7.41,
+   "dy": 4.76,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": 0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60010010
+   ],
+   "nearest_enemy": 49.0
+  },
+  {
+   "r": 60,
+   "deg": 285,
+   "x": 11.3,
+   "z": -57.52,
+   "gy": 20.45,
+   "dy": 17.8,
+   "ny": 1.0,
+   "layer": "0x39",
+   "cover_above": 0.0,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 62.8
+  },
+  {
+   "r": 60,
+   "deg": 300,
+   "x": 25.77,
+   "z": -51.53,
+   "gy": 20.6,
+   "dy": 17.95,
+   "ny": 0.25,
+   "layer": "0x39",
+   "cover_above": -0.02,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 73.9
+  },
+  {
+   "r": 60,
+   "deg": 315,
+   "x": 38.19,
+   "z": -42.0,
+   "gy": 5.82,
+   "dy": 3.17,
+   "ny": 0.99,
+   "layer": "0x39",
+   "cover_above": -0.05,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 0,
+   "seen": [],
+   "nearest_enemy": 82.8
+  },
+  {
+   "r": 60,
+   "deg": 330,
+   "x": 47.73,
+   "z": -29.57,
+   "gy": 6.39,
+   "dy": 3.74,
+   "ny": 0.96,
+   "layer": "0x39",
+   "cover_above": -0.08,
+   "headroom": true,
+   "sees_snake": true,
+   "sees_enemies": 1,
+   "seen": [
+    60600010
+   ],
+   "nearest_enemy": 91.6
+  },
+  {
+   "r": 60,
+   "deg": 345,
+   "x": 53.72,
+   "z": -15.1,
+   "gy": 2.29,
+   "dy": -0.36,
+   "ny": 0.77,
+   "layer": "0x39",
+   "cover_above": -0.44,
+   "headroom": true,
+   "sees_snake": false,
+   "sees_enemies": 2,
+   "seen": [
+    60010010,
+    60600010
+   ],
+   "nearest_enemy": 93.9
+  }
+ ],
+ "rays": 1080,
+ "secs": 18.035924196243286
+}

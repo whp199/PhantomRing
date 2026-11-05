@@ -141,7 +141,7 @@ namespace phantom::guest::proxy::plan
 			}
 			if (clear) {
 				s.proxy = true;
-				s.pos = ProxyFeet(t->pos, a_centre.y, t->dedicated ? Height::kGround : a_s.height);
+				s.pos = ProxyFeet(t->pos, a_centre.y, t->dedicated ? a_s.dedicatedHeight : a_s.height);
 				s.real = t->pos;
 				s.yaw = t->yaw;
 			} else {

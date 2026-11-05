@@ -1,9 +1,12 @@
 #include "Follow.h"
 
 #include "Addresses.h"
+#include "BuddyLogic.h"
 #include "Config.h"
 #include "Death.h"
 #include "Dog.h"
+#include "FollowLogic.h"
+#include "Quiet.h"
 #include "Hook.h"
 #include "Link.h"
 #include "Log.h"
@@ -50,6 +53,7 @@ namespace phantom::guest::follow
 		bool                          g_horseSite{ false };      // command 17's case is the horse whistle analysed
 		thread_local bool             t_ourCommand{ false };
 		std::atomic<bool>             g_playerHold{ false };
+		plan::HoldOwner               g_holdOwner;  // the buddy the hold was given to (Update, Lua thread): another one clears it
 		std::atomic<int>              g_playerLast{ -1 };
 		std::atomic<std::uint64_t>    g_playerCommands{ 0 };
 		// How we send the walker ([Buddy] FollowMethod). MGSV's whistle (command 20) also puts D-Walker back into Normal
@@ -424,6 +428,11 @@ namespace phantom::guest::follow
 				ReadBytes(reinterpret_cast<std::uintptr_t>(a_message), &id, sizeof(id));
 			}
 			Learn(a_controller, id);
+			if (id == buddy::plan::kMsgLeave && a_controller && *reinterpret_cast<const std::uint16_t*>(a_controller + 8) == addr::kWalkerBuddyType) {
+				// MGSV's buddy system sends D-Walker away (the iDroid's DISMISS / CHANGE EQUIPMENT / another buddy; BuddyLogic.h); enemy
+				// walker gears share this handler, the buddy's controller is type 0x2C
+				state::NoteBuddyLeave(state::kBuddyTypeWalker, ::GetTickCount64());
+			}
 			// Only whistles we issued: the player's own (LB call menu) keep MGSV's meaning, come to Snake (and Normal Mode).
 			bool ours = false;
 			if (id == addr::kWhistleMessage && g_ours.load(std::memory_order_acquire) > 0) {
@@ -465,21 +474,21 @@ namespace phantom::guest::follow
 				// The whistle and "Normal Mode" (21: disengage from the current mode) both leave the walker in Normal Mode, the
 				// mode our whistles don't change: following resumes. Any other command (a mode, another buddy's) holds it.
 				// D-Horse's whistle resumes it the same way; its "Stay back" (18) holds it.
-				// D-Dog's own commands (8-16) say nothing about the walker's or the horse's following: live 2026-11-04, the dog's orders
-				// left a D-Walker deployed afterwards standing 36 m away until the player whistled it.
-				const bool dogCommand = a_command >= 8 && a_command <= 16;
-				const bool hold = dogCommand ? g_playerHold.load(std::memory_order_acquire)
-				                             : a_command != addr::kBuddyWhistle && a_command != addr::kBuddyNormalMode &&
-				                                   a_command != addr::kBuddyHorseWhistle && a_command != 19 && Cfg().buddyFollowRespectCommands;
-				if (dogCommand) {
-					Log::Info("follow: the player's buddy command {} (arg {}) -- D-Dog's", a_command, a_arg);
+				// D-Dog's own commands (8-16) and Quiet's (1-7) say nothing about the walker's or the horse's following: live 2026-11-04,
+				// the dog's orders left a D-Walker deployed afterwards standing 36 m away until the player whistled it, and Quiet's 25.4 m
+				// (FollowLogic.h).
+				const int  owner = plan::CommandBuddy(a_command);
+				const bool otherBuddy = owner == state::kBuddyTypeDog || owner == state::kBuddyTypeQuiet;
+				const bool hold = plan::HoldAfterCommand(g_playerHold.load(std::memory_order_acquire), a_command, Cfg().buddyFollowRespectCommands);
+				if (otherBuddy) {
+					Log::Info("follow: the player's buddy command {} (arg {}) -- {}'s", a_command, a_arg, owner == state::kBuddyTypeDog ? "D-Dog" : "Quiet");
 				} else if (hold != g_playerHold.exchange(hold, std::memory_order_acq_rel)) {
 					Log::Info("follow: the player's buddy command {} (arg {}) -> {}", a_command, a_arg,
 						hold ? "auto-follow paused until the player whistles" : "auto-follow resumed");
 				} else {
 					Log::Info("follow: the player's buddy command {} (arg {})", a_command, a_arg);
 				}
-				if (hold && !dogCommand) {
+				if (hold && !otherBuddy) {
 					std::scoped_lock lock(g_lock);
 					g_record = 0;  // its destination is the player's now: no steering
 				}
@@ -490,11 +499,13 @@ namespace phantom::guest::follow
 				e.a = static_cast<std::uint32_t>(a_command);
 				e.b = a_command >= 20 ? 4u : a_command >= 17 ? 1u : a_command >= 8 ? 2u : 3u;  // BuddyType by command range (18.3)
 				// (v17) pad[0] = DogStyle + 1 for D-Dog's attack orders (b == 2): the style its equipment gives commands 11-15 (the dog
-				// system's +0xD4, Dog.cpp); 0 = unknown or not an attack
-				e.pad[0] = e.b == 2u ? dog::OrderStylePad(a_command) : 0u;
+				// system's +0xD4, Dog.cpp); 0 = unknown or not an attack. (v18) Quiet's (b == 3): QuietWeapon + 1 for commands 1-3 (her rifle,
+				// Quiet.cpp); 0 = unknown or not an order.
+				e.pad[0] = e.b == 2u ? dog::OrderStylePad(a_command) : e.b == 3u ? quiet::OrderWeaponPad(a_command) : 0u;
 				// D-Dog's attack orders go to the Elden Ring enemy the host picks ([Dog] Attack, Dog.cpp): MGSV's own target (whatever its
-				// view centre held) is never ordered; the dog job orders the dog at that enemy's soldier itself.
-				const bool taken = e.b == 2u && dog::OnPlayerCommand(a_command, a_arg);
+				// view centre held) is never ordered; the dog job orders the dog at that enemy's soldier itself. Quiet's Fire / Take aim the
+				// same ([Quiet] Orders, Quiet.cpp), and her Cover me / talk are taken over while the host's Quiet layer is on.
+				const bool taken = (e.b == 2u && dog::OnPlayerCommand(a_command, a_arg)) || (e.b == 3u && quiet::OnPlayerCommand(a_command, a_arg));
 				link::PushEvent(e);
 				if (taken) {
 					return;
@@ -704,6 +715,10 @@ namespace phantom::guest::follow
 				g_leadOkMs.store(now);
 			}
 		} storeLeadOk{ leadOk, a_nowMs };
+		// A hold belongs to the buddy it was given to (live 2026-11-04: Quiet's orders held a D-Walker deployed after her until a whistle).
+		if (const auto view = state::Lua(); view.InGame() && g_holdOwner.OnBuddyType(view.buddyActive) && g_playerHold.exchange(false, std::memory_order_acq_rel)) {
+			Log::Info("follow: the active buddy changed (now type {}) -> the player's hold is cleared, auto-follow resumed", view.buddyActive);
+		}
 		if (a_ready && c.buddy == "horse") {
 			HorseUpdate(a_nowMs);
 			return;

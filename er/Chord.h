@@ -7,8 +7,11 @@
 // Modes (the game thread picks one each frame, InputBridge::SetPadMode):
 //  - kSnake: Snake plays and no menu owns the pad. View tapped = Elden Ring's map (passed on at the release as a 120 ms
 //    press), View held [Input] view_hold_ms = MGSV's iDroid (MGSV gets Start held guest_idroid_start_ms, Elden Ring
-//    nothing); Start = Elden Ring's menu, passed on [Input] start_wait_ms after it went down, or at its release if that
-//    comes first (a tap).
+//    nothing -- or until MGSV's menu opens on it (kGuestMenu): the rest of that Start is dropped, so a menu closed sooner
+//    never reopens. Any MGSV menu seen meanwhile counts as the hold's: a popup or the pause menu that comes up while MGSV is
+//    still too busy to open the iDroid ends the hold too, and the iDroid then never opens -- hold View again; a menu that
+//    flickers, or goes on to an Elden Ring menu, gets no Start after it either); Start = Elden Ring's menu, passed on [Input]
+//    start_wait_ms after it went down, or at its release if that comes first (a tap).
 //  - kTarnished: the player plays the Tarnished (Tarnished mode) and no Elden Ring menu, cutscene or hidden HUD is up:
 //    Start and View both work like Start above (no iDroid: MGSV is parked).
 //  - kGuestMenu: MGSV's own menu has the pad: Elden Ring gets neither, nothing is counted.
@@ -126,8 +129,9 @@ namespace phantom::er
 		Button        start_, view_;
 		bool          fired_{ false };
 		std::uint64_t chordSince_{ 0 };
-		std::uint64_t guestStartUntil_{ 0 };
-		std::uint64_t cancelAt_{ 0 };         // when an iDroid hold was cut for the chord (0 = none)
+		std::uint64_t guestStartUntil_{ 0 };  // an iDroid hold's Start reaches MGSV until then (0 once its menu opened)
+		std::uint64_t cancelAt_{ 0 };         // when an iDroid hold was cut for the chord (0 = none; again 0 at the next hold, or
+		                                      // when the cut chord is let go unfired with MGSV's menu not open)
 		int           closeTaps_{ 0 };         // Start taps sent to close MGSV's menu since
 		std::uint64_t lastCloseAt_{ 0 };
 		std::uint64_t guestCloseUntil_{ 0 };   // the Start tap that closes it

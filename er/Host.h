@@ -50,6 +50,8 @@ namespace phantom::er
 		bool        Tarnished();
 		std::string TarnishedCommand(std::string_view a_arg);  // console `tarnished [on|off|toggle]`
 		std::string LadderLine();  // console `ladder`: the hand-over, Snake on it, kHEvClimb
-		void        OnWorldShift(const Vec3& a_delta);  // er/WorldShift.h: the ladder's start and the climb anchor's blend move too
+		void        OnWorldShift(const Vec3& a_delta);  // er/WorldShift.h: the ladder's start, the climb anchor's blend and the grace's spot move too
+		// (v18) Sitting at a grace: from a rest until he is 2 m from where he rested, a load or a death (kHostAtGrace; er/GraceRest.h).
+		bool        AtGrace();
 	}
 }

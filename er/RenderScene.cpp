@@ -13,6 +13,7 @@
 #include "PacingProbe.h"
 #include "Projectiles.h"
 #include "Puppet.h"
+#include "Quiet.h"
 #include "WorldShift.h"
 
 #include <algorithm>
@@ -223,6 +224,79 @@ namespace phantom::er::RenderScene
 					std::scoped_lock lock(g_guardStatsLock);
 					++g_guardStats.staged;
 				}
+			}
+			// (v18) Quiet (er/Quiet.h): at her post or the grace seat her draws are moved whole to that Elden Ring point -- the translation
+			// absorbs the treadmill, the slip and wherever MGSV keeps her body; hidden (cloaked, on the move, the rest's black): none of her
+			// draws; else MGSV's place lifted onto Elden Ring's ground by the far-ground rule, up to [Quiet] lift_max (not D-Walker's +-1.5 m).
+			if (a_f.guest.buddyType == Buddy::kQuiet && Cfg().quiet.enabled && !a_s.riding) {
+				const auto pl = Quiet::Place();
+				if (pl.kind == Quiet::Placement::Kind::kHidden || (pl.kind == Quiet::Placement::Kind::kNormal && Buddy::QuietNoFloor())) {
+					std::erase_if(a_s.draws, [](const proto::DrawRecord& a_d) { return a_d.owner == proto::kOwnerBuddy; });
+					g_buddyLift = 0.0f;
+					g_buddyShift = {};
+					return;
+				}
+				const float liftMax = std::max(0.0f, Cfg().quiet.liftMax);
+				Vec3        total{};
+				if (pl.kind == Quiet::Placement::Kind::kAt) {
+					const auto& gs = a_f.guest;
+					const Vec3  relPub{ gs.buddyPos[0] - gs.rootPos[0], gs.buddyPos[1] - gs.rootPos[1], gs.buddyPos[2] - gs.rootPos[2] };
+					Vec3        rel = relPub;
+					if (!((gs.buddyFlags & proto::kBuddyPosValid) && Finite(relPub) && LengthXZ(relPub) < 400.0f)) {
+						// No published place: the median of her draws' own centres (a stray draw doesn't move it).
+						std::vector<float> xs, ys, zs;
+						for (const auto& d : a_s.draws) {
+							if (d.owner != proto::kOwnerBuddy || d.matrixCount == 0 || std::size_t(d.firstMatrix + d.matrixCount) * 12 > a_s.matrices.size()) {
+								continue;
+							}
+							const float* t = &a_s.matrices[std::size_t(d.firstMatrix) * 12];
+							xs.push_back(t[3]);
+							ys.push_back(t[7]);
+							zs.push_back(t[11]);
+						}
+						if (xs.empty()) {
+							return;
+						}
+						const auto median = [](std::vector<float>& a_v) {
+							std::nth_element(a_v.begin(), a_v.begin() + a_v.size() / 2, a_v.end());
+							return a_v[a_v.size() / 2];
+						};
+						rel = Vec3{ median(xs), median(ys), median(zs) };
+						rel = Apply(am, rel);  // (these are already through the draws' own anchor)
+						total = pl.feet - rel;
+					} else {
+						total = pl.feet - Apply(effA, rel);
+					}
+					if (!Finite(total) || std::fabs(total.y) > liftMax + 2.0f || LengthXZ(total) > 400.0f) {
+						std::erase_if(a_s.draws, [](const proto::DrawRecord& a_d) { return a_d.owner == proto::kOwnerBuddy; });
+						return;  // a place that makes no sense: not drawn rather than drawn somewhere wrong
+					}
+					a_s.buddyAlpha = std::clamp(pl.alpha, 0.0f, 1.0f);
+					g_buddyLift = 0.0f;
+					g_buddyShift = {};
+				} else {
+					const float k = std::min(1.0f, std::max(0.0f, a_dt) * 8.0f);
+					const float target = placed ? std::clamp(Buddy::DrawGroundOffset(), -liftMax, liftMax) : 0.0f;
+					g_buddyLift += (target - g_buddyLift) * k;
+					total = Vec3{ 0, g_buddyLift, 0 };
+				}
+				const float sx = total.x * am[0] + total.y * am[4] + total.z * am[8];
+				const float sz = total.x * am[2] + total.y * am[6] + total.z * am[10];
+				std::vector<std::uint8_t> moved(a_s.matrices.size() / 12, 0);
+				for (const auto& d : a_s.draws) {
+					if (d.owner != proto::kOwnerBuddy) {
+						continue;
+					}
+					for (std::uint32_t m = d.firstMatrix; m < d.firstMatrix + d.matrixCount && m < moved.size(); ++m) {
+						if (!moved[m]) {
+							moved[m] = 1;
+							a_s.matrices[std::size_t(m) * 12 + 3] += sx;
+							a_s.matrices[std::size_t(m) * 12 + 7] += total.y;
+							a_s.matrices[std::size_t(m) * 12 + 11] += sz;
+						}
+					}
+				}
+				return;
 			}
 			if (const int want = g_traceWant.exchange(0)) {
 				if (want > 0 && !g_trace) {

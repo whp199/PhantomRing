@@ -26,13 +26,17 @@ from ctypes import c_char, c_double, c_float, c_int16, c_int32, c_int64, c_uint8
 
 # ---- constants (namespace phantom::proto) ---------------------------------------------------------
 MAGIC = 0x47524850  # "PHRG"
-VERSION = 17  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
+VERSION = 18  # v2: GuestState buddy fields (0x90..0xA8); v3: HostEventType.Heal; v4: AmmoKind.Smoke; v5: Throw/Placed/PlacedGone/Detonate;
 				# v6: GuestState aimThrowPos/Vel/Kind (0xA8..0xC4) + GuestFlags.ThrowAim; v7: GuestEventType.BuddyOrder; v8: GuestFlags.InBox/BoxPoster, Fire pad[1] = damage share;
 				# v9: PLACED_AGAIN (Placed pad[0]: an announcement repeated); v10: GuestFlags.Nvg, HostEventType.Rested/Tarnished;
 				# v11: Header guestProtocol/hostRelease/guestRelease (0xE0..0x100: plugin versions, readable on a mismatch); v12: GuestEventType.Fulton
 				# v13: GuestFlags.Binoculars/Diving, GuestEventType.TimeSkip/Cqc, CqcAction, AmmoKind.Decoy, DrawOwner.Projectile; v14: GuestFlags.Jumping
 				# v15: GuestFlags.Climbing/Mantling, HostEventType.Climb/Mantle; v16: GuestFlags.SuppressorOn, FIRE_SUPPRESSED (Fire b)
 				# v17: ActorFlags.DogTarget, GuestBuddyFlags.Engaged, GuestEventType.DogAttack + DogPhase/DogStyle, BuddyOrder pad[0] = dog style + 1
+				# v18: Quiet and the grace rest (docs/research/quiet.md §4): HostFlags.QuietLayer/AtGrace, HostState grace* / buddyPost* (0x30..0x64),
+				# GuestState buddyPostSeq / graceSeqSeated (0xC4..0xCC), GuestBuddyFlags.Cloaked/Seated/AtPost/QuietCover/CanRest/QuietMarked +
+				# Quiet's weapon (bits 17-19), ActorFlags.QuietTarget/QuietThreat, GuestEventType.QuietShot + QuietPhase/QuietWeapon/QuietLostReason,
+				# BuddyOrder pad[0] = Quiet's weapon + 1 (b == 3, commands 1-3)
 DEFAULT_PATH = "/dev/shm/phantomring_v1"
 DEFAULT_MAPPING_WIN = "file:Z:\\dev\\shm\\phantomring_v1"
 
@@ -117,6 +121,8 @@ class HostFlags(enum.IntFlag):
 	PlayerDead = 1 << 4
 	Cutscene = 1 << 5
 	DogLayer = 1 << 6  # v17: the host's D-Dog layer is on: the guest takes D-Dog's attack orders (11-15) over only while it is set
+	QuietLayer = 1 << 7  # v18: the host's [Quiet] layer is on: posts, the pick, her hits; the guest holds her at posts / takes 1-3 over only then
+	AtGrace = 1 << 8  # v18: the player rests at a grace (until 2 m away, a load or a death); graceCentre / graceSeat valid when finite
 
 
 class GuestFlags(enum.IntFlag):
@@ -151,7 +157,13 @@ class GuestBuddyFlags(enum.IntFlag):
 	Ridden = 1 << 2
 	Loading = 1 << 3
 	Missing = 1 << 4
-	Engaged = 1 << 5  # v17: the buddy carries out an attack/fetch order on an ER target (DogAttack Connected .. Released)
+	Engaged = 1 << 5  # v17: the buddy carries out an attack/fetch order on an ER target (DogAttack Connected .. Released; v18 QuietShot Ordered .. Released)
+	Cloaked = 1 << 6  # v18: MGSV draws the buddy cloaked (Quiet's stealth camo): hide it
+	Seated = 1 << 7  # v18: the buddy rests at the grace seat of graceSeqSeated
+	AtPost = 1 << 16  # v18: Quiet is held at the host's post buddyPostSeq
+	QuietCover = 1 << 20  # v18: MGSV's "Cover me" is on
+	CanRest = 1 << 21  # v18: the guest seats this buddy at a grace seat ([Quiet] RestAtGrace)
+	QuietMarked = 1 << 22  # v18: MGSV holds a mark on Quiet's current stand-in (Fire / Take aim live)
 
 
 # v17: GuestState buddyFlags bits 8-15 while D-Dog is out = its DogStyle + 1 (0 = unknown / another buddy)
@@ -168,6 +180,22 @@ def buddy_dog_style(buddy_flags: int) -> int:
 	"""v17 D-Dog's style from buddyFlags (DogStyle.StyleUnknown when none is published)."""
 	v = (int(buddy_flags) & BUDDY_DOG_STYLE_MASK) >> BUDDY_DOG_STYLE_SHIFT
 	return v - 1 if 1 <= v <= 5 else 0xFF
+
+
+# v18: GuestState buddyFlags bits 17-19 while Quiet is out = her QuietWeapon + 1 (0 = unknown / another buddy)
+BUDDY_QUIET_WEAPON_SHIFT = 17
+BUDDY_QUIET_WEAPON_MASK = 0x7 << BUDDY_QUIET_WEAPON_SHIFT
+
+
+def buddy_quiet_weapon_bits(weapon: int) -> int:
+	"""v18 buddyFlags bits for Quiet's weapon (0 for an unknown one)."""
+	return (int(weapon) + 1) << BUDDY_QUIET_WEAPON_SHIFT if 0 <= int(weapon) <= 2 else 0
+
+
+def buddy_quiet_weapon(buddy_flags: int) -> int:
+	"""v18 Quiet's weapon from buddyFlags (QuietWeapon.WeaponUnknown when none is published)."""
+	v = (int(buddy_flags) & BUDDY_QUIET_WEAPON_MASK) >> BUDDY_QUIET_WEAPON_SHIFT
+	return v - 1 if 1 <= v <= 3 else 0xFF
 
 
 class PadFlags(enum.IntFlag):
@@ -193,6 +221,10 @@ class GuestEventType(enum.IntEnum):
 	# v17: D-Dog and an ER target: a = DogPhase | DogStyle << 8 | MGSV attack id << 16, b = MGSV damage share (1/10000), v0 the dog's
 	# feet, v1 unit dog -> target (MGSV world), pad[0]|pad[1]<<32 the target's ActorRecord handle (0 = none)
 	DogAttack = 15
+	# v18: Quiet and an ER target: a = QuietPhase | QuietWeapon << 8 | MGSV attack id << 16 (290/291/292), b = MGSV damage share
+	# (1/10000) or the QuietLostReason (Lost), v0 her feet, v1 unit her -> the stand-in (MGSV world), pad[0]|pad[1]<<32 the target's
+	# ActorRecord handle (0 = none)
+	QuietShot = 16
 
 
 class DogPhase(enum.IntEnum):  # v17: GuestEventType.DogAttack a & 0xFF
@@ -221,6 +253,37 @@ def dog_attack_a(phase: int, style: int, attack_id: int = 0) -> int:
 
 def dog_attack_fields(a: int) -> tuple[int, int, int]:
 	"""v17 GuestEventType.DogAttack a -> (phase, style, MGSV attack id)."""
+	return a & 0xFF, (a >> 8) & 0xFF, a >> 16
+
+
+class QuietPhase(enum.IntEnum):  # v18: GuestEventType.QuietShot a & 0xFF
+	Ordered = 0
+	Hit = 1
+	Released = 2
+	Refused = 3
+	Lost = 4
+
+
+class QuietWeapon(enum.IntEnum):  # v18: QuietShot (a >> 8) & 0xFF; BuddyOrder pad[0] - 1 (b == 3); buddyFlags bits 17-19 - 1
+	Lethal = 0  # Wicked Butterfly (ATK 290)
+	Tranq = 1  # Guilty Butterfly (ATK 291): sleep
+	Heavy = 2  # Sinful Butterfly (ATK 292): lethal, anti-materiel
+	WeaponUnknown = 0xFF
+
+
+class QuietLostReason(enum.IntEnum):  # v18: QuietShot b when the phase is Lost
+	LostMgsv = 1  # MGSV never fired: "no shot (MGSV)"
+	LostTarget = 2  # the target died or left the table first
+	LostCancelled = 3  # a rest, a load, Tarnished mode, the layer off, a dismissal or a buddy change
+
+
+def quiet_shot_a(phase: int, weapon: int, attack_id: int = 0) -> int:
+	"""v18 GuestEventType.QuietShot a."""
+	return (int(phase) & 0xFF) | (int(weapon) & 0xFF) << 8 | (int(attack_id) & 0xFFFF) << 16
+
+
+def quiet_shot_fields(a: int) -> tuple[int, int, int]:
+	"""v18 GuestEventType.QuietShot a -> (phase, weapon, MGSV attack id)."""
 	return a & 0xFF, (a >> 8) & 0xFF, a >> 16
 
 
@@ -276,6 +339,8 @@ class ActorFlags(enum.IntFlag):
 	InCombat = 1 << 3
 	Asleep = 1 << 4
 	DogTarget = 1 << 5  # v17: the host's pick for D-Dog's next attack/fetch order (at most one record)
+	QuietTarget = 1 << 6  # v18: the host's pick for Quiet's next Fire / Take aim (at most one record)
+	QuietThreat = 1 << 7  # v18: Cover me's threat pick (at most one record; may be the QuietTarget one)
 
 
 class DrawFlags(enum.IntFlag):
@@ -401,7 +466,15 @@ class HostState(Struct):
 		("erWorldId", c_uint32),
 		("groundY", c_float),
 		("fallSpeed", c_float),
-		("reserved", c_uint8 * (0x100 - 0x30)),
+		# v18: the grace rest and Quiet's post (MGSV world; NaN / 0 = none; a zero seq = none whatever the floats hold)
+		("graceCentre", c_float * 3),
+		("graceSeat", c_float * 3),
+		("graceSeatYaw", c_float),
+		("graceSeq", c_uint32),
+		("buddyPost", c_float * 3),
+		("buddyPostYaw", c_float),
+		("buddyPostSeq", c_uint32),
+		("reserved", c_uint8 * (0x100 - 0x64)),
 	]
 
 
@@ -441,7 +514,9 @@ class GuestState(Struct):
 		("aimThrowPos", c_float * 3),  # v6
 		("aimThrowVel", c_float * 3),
 		("aimThrowKind", c_uint32),
-		("reserved", c_uint8 * (0x200 - 0xC4)),
+		("buddyPostSeq", c_uint32),  # v18: the host post the buddy is held at (with GuestBuddyFlags.AtPost); 0 = none
+		("graceSeqSeated", c_uint32),  # v18: the rest whose seat the buddy holds (with GuestBuddyFlags.Seated); 0 = none
+		("reserved", c_uint8 * (0x200 - 0xCC)),
 	]
 
 
@@ -646,6 +721,7 @@ ALL_CONSTANTS = {
 	"MAX_HUD_W": "kMaxHudW", "MAX_HUD_H": "kMaxHudH", "HUD_SLOT_BYTES": "kHudSlotBytes",
 	"MAPPING_BYTES": "kMappingBytes", "HEARTBEAT_TIMEOUT_MS": "kHeartbeatTimeoutMs", "PLACED_AGAIN": "kPlacedAgain", "FIRE_SUPPRESSED": "kFireSuppressed",
 	"BUDDY_DOG_STYLE_SHIFT": "kBuddyDogStyleShift", "BUDDY_DOG_STYLE_MASK": "kBuddyDogStyleMask",
+	"BUDDY_QUIET_WEAPON_SHIFT": "kBuddyQuietWeaponShift", "BUDDY_QUIET_WEAPON_MASK": "kBuddyQuietWeaponMask",
 	"MAX_POSE_BONES": "kMaxPoseBones", "EVENT_RING_ENTRIES": "kEventRingEntries", "MAX_ACTORS": "kMaxActors",
 	"CONSOLE_TEXT_BYTES": "kConsoleTextBytes", "DRAW_TEXTURES": "kDrawTextures",
 	"REN_RING_HEAD_OFF": "kRenRingHeadOff", "REN_RING_TAIL_OFF": "kRenRingTailOff",
@@ -666,6 +742,9 @@ ALL_ENUMS = {
 	CqcAction: ("", "kCqc"),
 	DogPhase: ("", "kDog"),
 	DogStyle: ("", "kDog"),
+	QuietPhase: ("", "kQuiet"),
+	QuietWeapon: ("", "kQuiet"),
+	QuietLostReason: ("", "kQuiet"),
 	HostEventType: ("", "kHEv"),
 	HurtKind: ("", "kHurt"),
 	ActorFlags: ("", "kActor"),

@@ -81,8 +81,11 @@ namespace phantom::er::ErBars
 		// Snake's screen only: not in Elden Ring's menus, a load, a cutscene, a death, Tarnished mode. Snake on a ladder (Elden Ring
 		// climbs, the puppet held: Puppet::ClimbVisual) is still his screen, as for MGSV's HUD layer (er/Hud.cpp; review 0.7.0: the
 		// Tarnished's bars showed next to MGSV's HUD for every climb).
+		// Not while he sits at a grace either (Host::AtGrace: until he is 2 m away): Pass time brings the HUD back for ~4.7 s and then the
+		// grace menu again -- re-hidden by us after kRehideMs, the menu's own hide was masked, and Snake kept the pad inside the grace
+		// menu (live 0.9.0 integration, Rampart Tower: B went to MGSV, nothing closed the menu; the 2026-10-13 fix predates these bars).
 		const bool snake = (Puppet::Active() || Puppet::ClimbVisual()) && a_f.inGame && !a_f.menuOpen && !a_f.loading && !a_f.cutscene &&
-		                   !a_f.dead && !a_f.dying && !Puppet::Dying();
+		                   !a_f.dead && !a_f.dying && !Puppet::Dying() && !Host::AtGrace();
 		if (!fe) {
 			g_state = "no CSFeMan";
 			return;
